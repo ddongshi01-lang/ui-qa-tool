@@ -581,9 +581,9 @@
 
   var floating = make(
     "div",
-    "position:fixed;left:0;top:0;width:44px;height:44px;border-radius:999px;border:2px solid #FF8A00;box-sizing:border-box;background:#1F6BFF;background-image:url(" +
+    "position:fixed;left:0;top:0;width:44px;height:44px;border-radius:999px;border:0;box-sizing:border-box;background:transparent;background-image:url(" +
       FLOAT_ICON_DATA +
-      ");background-repeat:no-repeat;background-position:center;background-size:70% 70%;display:flex;align-items:center;justify-content:center;font:12px/1 sans-serif;box-shadow:0 10px 24px rgba(31,107,255,.35);z-index:" +
+      ");background-repeat:no-repeat;background-position:center;background-size:100% 100%;display:flex;align-items:center;justify-content:center;font:12px/1 sans-serif;box-shadow:0 10px 24px rgba(31,107,255,.35);z-index:" +
       (CONFIG.zIndexMeasure + 2) +
       ";cursor:pointer;user-select:none;opacity:1;transition:opacity 150ms ease;"
   );
@@ -624,6 +624,7 @@
     state.panelCollapsed = !!next;
     floating.title = state.panelCollapsed ? "展开视觉走查" : "收起视觉走查";
     floating.style.opacity = state.panelCollapsed ? "0.5" : "1";
+    floating.style.border = state.panelCollapsed ? "0" : "2px solid #FF8A00";
     schedule();
   }
   function clearLayer(layer) {
