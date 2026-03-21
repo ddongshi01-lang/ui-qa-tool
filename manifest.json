@@ -7,6 +7,7 @@
     "default_title": "视觉走查助手"
   },
   "permissions": ["scripting", "activeTab"],
+  "host_permissions": ["http://*/*", "https://*/*", "file://*/*"],
   "background": {
     "service_worker": "service_worker.js"
   },
