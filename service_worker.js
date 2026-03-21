@@ -1,13 +1,20 @@
 ﻿function isInjectableUrl(url) {
   if (!url || typeof url !== "string") return false;
-  return /^(https?:\/\/|file:\/\/)/i.test(url);
+  if (!/^(https?:\/\/|file:\/\/)/i.test(url)) return false;
+  // Browser-internal and web store pages are not script-injectable.
+  if (/^https?:\/\/chromewebstore\.google\.com\//i.test(url)) return false;
+  if (/^https?:\/\/microsoftedge\.microsoft\.com\/addons\//i.test(url)) return false;
+  return true;
 }
 
 chrome.action.onClicked.addListener(async (tab) => {
   if (!tab || !tab.id) return;
 
   if (!isInjectableUrl(tab.url)) {
-    console.warn("[visual-qa] Current page does not allow script injection:", tab.url);
+    console.warn(
+      "[visual-qa] Current page does not allow script injection (restricted or unsupported URL):",
+      tab.url
+    );
     return;
   }
 
