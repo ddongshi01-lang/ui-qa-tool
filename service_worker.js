@@ -20,7 +20,7 @@ chrome.action.onClicked.addListener(async (tab) => {
 
   try {
     await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
+      target: { tabId: tab.id, allFrames: true },
       files: ["visual-qa.js"],
       world: "MAIN"
     });
@@ -28,7 +28,7 @@ chrome.action.onClicked.addListener(async (tab) => {
     try {
       // If MAIN world fails (older Chrome), fallback to isolated world.
       await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
+        target: { tabId: tab.id, allFrames: true },
         files: ["visual-qa.js"]
       });
     } catch (fallbackErr) {
