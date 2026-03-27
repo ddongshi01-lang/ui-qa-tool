@@ -43,6 +43,7 @@
 
   var state = {
     hoverEl: null,
+    lastPageEl: null,
     frozenEl: null,
     isFrozen: false,
     measureMode: false,
@@ -463,7 +464,12 @@
   }
 
   function getActiveEl() {
-    return state.isFrozen ? state.frozenEl : state.hoverEl;
+    return state.isFrozen ? state.frozenEl : state.hoverEl || state.lastPageEl;
+  }
+
+  function setPageHover(el) {
+    state.hoverEl = el || null;
+    if (el) state.lastPageEl = el;
   }
 
   function getMeasureData(aEl, bEl) {
@@ -931,11 +937,11 @@
 
   function fromPoint(x, y) {
     var el = document.elementFromPoint(x, y);
-    if (!el || tooltip.contains(el) || el === highlight || el === selectA || el === selectB || el === spacingLayer || el === measureLayer) return null;
+    if (!el || tooltip.contains(el) || el === highlight || el === selectA || el === selectB || el === spacingLayer || el === measureLayer || el === floating) return null;
     return el;
   }
   function onMouseMove(e) {
-    if (state.floatDragging || state.panelCollapsed) return;
+    if (state.floatDragging) return;
     state.mouseX = e.clientX;
     state.mouseY = e.clientY;
 
@@ -947,7 +953,7 @@
     }
 
     var el = fromPoint(e.clientX, e.clientY);
-    if (el) state.hoverEl = el;
+    setPageHover(el);
 
     if (state.isFrozen && state.frozenEl && !state.measureMode) {
       state.spacingSide = nearestSide(state.frozenEl, e.clientX, e.clientY);
@@ -956,7 +962,7 @@
     }
 
     if (state.isFrozen && !state.measureMode && !state.panelPinned) positionTooltip();
-    schedule();
+    if (!state.panelCollapsed) schedule();
   }
   function onClick(e) {
     if (state.panelCollapsed) return;
@@ -1001,13 +1007,13 @@
     state.measureB = null;
     if (state.measureMode) {
       state.isFrozen = true;
-      state.frozenEl = state.hoverEl || state.frozenEl;
+      state.frozenEl = state.hoverEl || state.lastPageEl || state.frozenEl;
     }
     schedule();
   }
 
   function toggleFreeze() {
-    var el = state.hoverEl || state.frozenEl;
+    var el = state.hoverEl || state.lastPageEl || state.frozenEl;
     if (!el) return;
     state.isFrozen = !state.isFrozen;
     state.frozenEl = state.isFrozen ? el : null;
@@ -1032,31 +1038,51 @@
   }
 
   function onKeyDown(e) {
+    if (e.__visualQAHandled) return;
     var key = (e.key || "").toLowerCase();
+    if (key === CONFIG.hotkeys.exit || key === "esc") {
+      e.__visualQAHandled = true;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      destroy();
+      return;
+    }
+    if (key === CONFIG.hotkeys.togglePanel) {
+      e.__visualQAHandled = true;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      toggleCollapsed();
+      return;
+    }
+
     var active = document.activeElement;
     if (active && (active.isContentEditable || /input|textarea|select/.test((active.tagName || "").toLowerCase()))) return;
 
-    if (key === CONFIG.hotkeys.exit || key === "esc") {
-      destroy();
-    } else if (key === CONFIG.hotkeys.measure) {
+    if (key === CONFIG.hotkeys.measure) {
+      e.__visualQAHandled = true;
       toggleMeasure();
       e.preventDefault();
+      e.stopImmediatePropagation();
     } else if (key === CONFIG.hotkeys.freeze) {
+      e.__visualQAHandled = true;
       toggleFreeze();
       e.preventDefault();
+      e.stopImmediatePropagation();
     } else if (key === CONFIG.hotkeys.clear) {
+      e.__visualQAHandled = true;
       clearMeasure();
       e.preventDefault();
+      e.stopImmediatePropagation();
     } else if (key === CONFIG.hotkeys.reset) {
+      e.__visualQAHandled = true;
       clearEditedStyles();
       e.preventDefault();
+      e.stopImmediatePropagation();
     } else if (key === CONFIG.hotkeys.pin) {
+      e.__visualQAHandled = true;
       togglePin();
       e.preventDefault();
-    }
-    else if (key === CONFIG.hotkeys.togglePanel) {
-      toggleCollapsed();
-      e.preventDefault();
+      e.stopImmediatePropagation();
     }
   }
 
@@ -1079,6 +1105,7 @@
     document.removeEventListener("mousemove", onMouseMove, true);
     document.removeEventListener("mousemove", onFloatMove, true);
     document.removeEventListener("click", onClick, true);
+    window.removeEventListener("keydown", onKeyDown, true);
     document.removeEventListener("keydown", onKeyDown, true);
     document.removeEventListener("mouseup", stopDrag, true);
     document.removeEventListener("mouseup", stopFloatDrag, true);
@@ -1186,6 +1213,7 @@
   document.addEventListener("mousemove", onMouseMove, true);
   document.addEventListener("mousemove", onFloatMove, true);
   document.addEventListener("click", onClick, true);
+  window.addEventListener("keydown", onKeyDown, true);
   document.addEventListener("keydown", onKeyDown, true);
   document.addEventListener("mouseup", stopDrag, true);
   document.addEventListener("mouseup", stopFloatDrag, true);
@@ -1196,10 +1224,6 @@
   window.__visualQAInspectorFinal__ = { destroy: destroy };
   refresh();
 })();
-
-
-
-
 
 
 

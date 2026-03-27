@@ -2,7 +2,7 @@
 
 此目录包含：
 - listing-zh.md：中文上架文案与合规说明
-- privacy-policy.md：隐私政策草稿（如需提供 URL，可用此内容发布到你的站点）
+- privacy-policy.md：隐私政策文本（如需提供 URL，可用此内容发布到你的站点）
 - promo-small.png：可选小型宣传图 440x280
 - promo-marquee.png：可选大型宣传图 1400x560
 
