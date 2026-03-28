@@ -960,13 +960,8 @@
   }
 
   function fromPoint(x, y) {
-<<<<<<< HEAD
     var el = deepElementFromPoint(document, x, y);
     if (!el || tooltip.contains(el) || isOverlayElement(el)) return null;
-=======
-    var el = document.elementFromPoint(x, y);
-    if (!el || tooltip.contains(el) || el === highlight || el === selectA || el === selectB || el === spacingLayer || el === measureLayer || el === floating) return null;
->>>>>>> 63a103e4b210aca380a0da2e93aee98f8df8c8e8
     return el;
   }
   function onMouseMove(e) {
