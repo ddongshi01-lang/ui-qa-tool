@@ -485,7 +485,6 @@
   }
 
   function getActiveEl() {
-    return state.isFrozen ? state.frozenEl : state.hoverEl;
     return state.isFrozen ? state.frozenEl : state.hoverEl || state.lastPageEl;
   }
 
@@ -971,7 +970,6 @@
     return el;
   }
   function onMouseMove(e) {
-    if (state.floatDragging || state.panelCollapsed) return;
     if (state.floatDragging) return;
     state.mouseX = e.clientX;
     state.mouseY = e.clientY;
@@ -984,7 +982,6 @@
     }
 
     var el = fromPoint(e.clientX, e.clientY);
-    if (el) state.hoverEl = el;
     setPageHover(el);
 
     if (state.isFrozen && state.frozenEl && !state.measureMode) {
@@ -994,7 +991,6 @@
     }
 
     if (state.isFrozen && !state.measureMode && !state.panelPinned) positionTooltip();
-    schedule();
     if (!state.panelCollapsed) schedule();
   }
   function onClick(e) {
@@ -1040,14 +1036,12 @@
     state.measureB = null;
     if (state.measureMode) {
       state.isFrozen = true;
-      state.frozenEl = state.hoverEl || state.frozenEl;
       state.frozenEl = state.hoverEl || state.lastPageEl || state.frozenEl;
     }
     schedule();
   }
 
   function toggleFreeze() {
-    var el = state.hoverEl || state.frozenEl;
     var el = state.hoverEl || state.lastPageEl || state.frozenEl;
     if (!el) return;
     state.isFrozen = !state.isFrozen;
@@ -1093,9 +1087,6 @@
     var active = document.activeElement;
     if (active && (active.isContentEditable || /input|textarea|select/.test((active.tagName || "").toLowerCase()))) return;
 
-    if (key === CONFIG.hotkeys.exit || key === "esc") {
-      destroy();
-    } else if (key === CONFIG.hotkeys.measure) {
     if (key === CONFIG.hotkeys.measure) {
       e.__visualQAHandled = true;
       toggleMeasure();
@@ -1119,10 +1110,6 @@
     } else if (key === CONFIG.hotkeys.pin) {
       e.__visualQAHandled = true;
       togglePin();
-      e.preventDefault();
-    }
-    else if (key === CONFIG.hotkeys.togglePanel) {
-      toggleCollapsed();
       e.preventDefault();
       e.stopImmediatePropagation();
     }
@@ -1264,10 +1251,6 @@
   window.__visualQAInspectorFinal__ = { destroy: destroy };
   refresh();
 })();
-
-
-
-
 
 
 
