@@ -61,10 +61,12 @@
     panelX: null,
     panelY: null,
     panelNeedsPlacement: false,
+    panelManualPosition: false,
     dragging: false,
     dragOffsetX: 0,
     dragOffsetY: 0,
     spacingSide: "top",
+    spacingExpanded: { padding: false, margin: false },
     rafId: null,
     modifiedProps: {},
     editedProps: {},
@@ -89,6 +91,16 @@
     if (v === "normal") return "normal";
     var n = parseFloat(v);
     return isNaN(n) ? String(v) : Math.round(n * 100) / 100 + "px";
+  }
+
+  function displayLength(v) {
+    if (v == null || v === "") return "";
+    var value = String(v).trim();
+    if (!value) return "";
+    if (/^-?\d+(\.\d+)?px$/i.test(value)) {
+      return String(Math.round(parseFloat(value) * 100) / 100);
+    }
+    return value;
   }
 
   function num(v) {
@@ -257,6 +269,18 @@
       e.preventDefault();
       return;
     }
+    if (action === "toggle-padding") {
+      state.spacingExpanded.padding = !state.spacingExpanded.padding;
+      schedule();
+      e.preventDefault();
+      return;
+    }
+    if (action === "toggle-margin") {
+      state.spacingExpanded.margin = !state.spacingExpanded.margin;
+      schedule();
+      e.preventDefault();
+      return;
+    }
     var stepDir = target.getAttribute("data-step");
     if (stepDir) {
       var inputEl = target.parentElement && target.parentElement.parentElement ? target.parentElement.parentElement.querySelector("input[data-prop]") : null;
@@ -297,11 +321,42 @@
       "</div>"
     );
   }
+
+  function rowSingleLine(k, v, fullText) {
+    if (v == null || v === "") return "";
+    var titleText = fullText == null || fullText === "" ? v : fullText;
+    return (
+      '<div style="display:grid;grid-template-columns:84px minmax(0,1fr);gap:8px;min-width:0;" title="' +
+      esc(titleText) +
+      '">' +
+      '<div style="color:' +
+      CONFIG.colors.muted +
+      ';">' +
+      esc(k) +
+      "</div>" +
+      '<div style="min-width:0;color:' +
+      CONFIG.colors.text +
+      ';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' +
+      esc(v) +
+      "</div>" +
+      "</div>"
+    );
+  }
+
+  function sideLabel(side) {
+    return {
+      top: "上",
+      right: "右",
+      bottom: "下",
+      left: "左"
+    }[side] || side || "";
+  }
   function rowEditable(k, v, prop, type) {
     if (v == null || v === "") return "";
-    var safe = esc(v);
     var isColor = type === "color";
     var isStepper = !isColor;
+    var displayValue = isColor ? v : displayLength(v);
+    var safe = esc(displayValue);
     var inputStyle =
       "width:100%;box-sizing:border-box;padding:4px 12px;border-radius:8px;border:1px solid rgba(255,255,255,.15);" +
       "background:rgba(255,255,255,.06);color:" +
@@ -351,7 +406,7 @@
     );
   }
 
-  function rowBoxEditable(k, box, prefix) {
+  function boxEditorFields(box, prefix) {
     if (!box) return "";
     function cell(label, prop, value) {
       return (
@@ -365,7 +420,7 @@
         '<input type="text" data-prop="' +
         esc(prop) +
         '" value="' +
-        esc(value) +
+        esc(displayLength(value)) +
         '" style="width:100%;box-sizing:border-box;padding:4px 12px;border-radius:8px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.06);color:' +
         CONFIG.colors.text +
         ';font:12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;padding-right:34px;">' +
@@ -381,18 +436,25 @@
     }
 
     return (
+      '<div style="display:grid;grid-template-columns:repeat(2, minmax(0,1fr));gap:6px;">' +
+      cell("上", prefix + "Top", box.t + "px") +
+      cell("右", prefix + "Right", box.r + "px") +
+      cell("下", prefix + "Bottom", box.b + "px") +
+      cell("左", prefix + "Left", box.l + "px") +
+      "</div>"
+    );
+  }
+
+  function rowBoxEditable(k, box, prefix) {
+    if (!box) return "";
+    return (
       '<div style="display:grid;grid-template-columns:84px 1fr;gap:8px;align-items:start;">' +
       '<div style="color:' +
       CONFIG.colors.muted +
       ';">' +
       esc(k) +
       "</div>" +
-      '<div style="display:grid;grid-template-columns:repeat(2, minmax(0,1fr));gap:6px;">' +
-      cell("上", prefix + "Top", box.t + "px") +
-      cell("右", prefix + "Right", box.r + "px") +
-      cell("下", prefix + "Bottom", box.b + "px") +
-      cell("左", prefix + "Left", box.l + "px") +
-      "</div>" +
+      boxEditorFields(box, prefix) +
       "</div>"
     );
   }
@@ -580,8 +642,41 @@
     return el;
   }
 
-  function cleanFontFamily(v) {
-    return String(v || "").replace(/\s*,\s*/g, ", ");
+  function primaryFontFamily(v) {
+    var value = String(v || "").trim();
+    if (!value) return "";
+    var token = "";
+    var quote = "";
+    for (var i = 0; i < value.length; i++) {
+      var ch = value.charAt(i);
+      if (quote) {
+        if (ch === quote) {
+          quote = "";
+        } else {
+          token += ch;
+        }
+        continue;
+      }
+      if (ch === "'" || ch === '"') {
+        quote = ch;
+        continue;
+      }
+      if (ch === ",") break;
+      token += ch;
+    }
+    return token.trim().replace(/^['"]|['"]$/g, "");
+  }
+
+  function shouldShowBorderRadius(targetKind, el) {
+    if (targetKind === "icon-font-like") return false;
+    if (targetKind === "text-like") {
+      var tag = el && el.tagName ? el.tagName.toLowerCase() : "";
+      if (/^(button|a|label|input|textarea|select)$/i.test(tag)) return true;
+      var role = el && el.getAttribute ? (el.getAttribute("role") || "") : "";
+      if (role.toLowerCase() === "button") return true;
+      return false;
+    }
+    return true;
   }
 
   function boxValues(style, prefix) {
@@ -596,6 +691,103 @@
   function boxText(box) {
     if (!box) return "";
     return "上 " + box.t + " / 右 " + box.r + " / 下 " + box.b + " / 左 " + box.l + " px";
+  }
+
+  function isZeroBox(box) {
+    return !!(box && !box.t && !box.r && !box.b && !box.l);
+  }
+
+  function nonZeroBoxParts(box) {
+    if (!box) return [];
+    var parts = [];
+    if (box.t) parts.push("上 " + box.t);
+    if (box.r) parts.push("右 " + box.r);
+    if (box.b) parts.push("下 " + box.b);
+    if (box.l) parts.push("左 " + box.l);
+    return parts;
+  }
+
+  function compactBoxSummary(box) {
+    if (!box || isZeroBox(box)) return "0";
+    return nonZeroBoxParts(box).join(" / ");
+  }
+
+  function fullBoxSummary(box) {
+    if (!box) return "无";
+    return "上 " + box.t + " / 右 " + box.r + " / 下 " + box.b + " / 左 " + box.l;
+  }
+
+  function isContainerSpacingTarget(el, kind) {
+    if (!el || !el.tagName) return false;
+    var tag = el.tagName.toLowerCase();
+    var classText = (el.className && typeof el.className === "string" ? el.className : Array.prototype.slice.call(el.classList || []).join(" ")).toLowerCase();
+    if (/^(button|input|textarea|select)$/.test(tag)) return true;
+    if (/(button|btn|card|banner|tag|chip|badge|pill|input|field|form|wrap|container|panel)/.test(classText)) return true;
+    return kind === "container-like";
+  }
+
+  function spacingProfile(el, kind) {
+    if (!el) return "container";
+    if (kind === "icon-font-like") return "compact";
+    var rect = el.getBoundingClientRect ? el.getBoundingClientRect() : null;
+    var smallRect = rect && rect.width <= 40 && rect.height <= 40;
+    if (isContainerSpacingTarget(el, kind)) return "container";
+    if (smallRect) return "compact";
+    if (kind === "text-like") return "text";
+    return "container";
+  }
+
+  function paddingSummaryText(box) {
+    return "内边距：" + compactBoxSummary(box);
+  }
+
+  function marginSummaryText(box) {
+    return "外边距：" + compactBoxSummary(box);
+  }
+
+  function parentGapSummaryText(parentGap) {
+    if (!parentGap) return "父级间距：0";
+    return "父级间距：" + fullBoxSummary(parentGap);
+  }
+
+  function renderSpacingControl(labelText, summaryText, expanded, toggleAction, editorHtml) {
+    return (
+      '<div style="display:grid;grid-template-columns:84px 1fr;gap:8px;align-items:start;">' +
+      '<div style="color:' +
+      CONFIG.colors.muted +
+      ';">' +
+      esc(labelText) +
+      "</div>" +
+      '<div>' +
+      '<div style="display:flex;align-items:center;gap:8px;">' +
+      '<div style="flex:1;min-width:0;color:' +
+      CONFIG.colors.text +
+      ';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' +
+      esc(summaryText) +
+      '">' +
+      esc(summaryText) +
+      "</div>" +
+      '<button data-action="' +
+      esc(toggleAction) +
+      '" style="border:0;background:rgba(255,255,255,.08);color:#D8E0E8;border-radius:999px;padding:2px 8px;font:11px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;white-space:nowrap;">' +
+      (expanded ? "收起" : "展开") +
+      "</button>" +
+      "</div>" +
+      (expanded ? '<div style="margin-top:6px;">' + editorHtml + "</div>" : "") +
+      "</div>" +
+      "</div>"
+    );
+  }
+
+  function renderRelationSummary(summaryText) {
+    if (!summaryText) return "";
+    return (
+      '<div style="margin-top:2px;padding:8px 10px;border-radius:10px;background:rgba(62,213,152,.08);color:#D7EFE1;font-size:12px;line-height:1.45;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' +
+      esc(summaryText) +
+      '">' +
+      esc(summaryText) +
+      "</div>"
+    );
   }
 
   function classSummary(el) {
@@ -623,11 +815,16 @@
       state.primaryMeasure = null;
       state.modifiedProps = {};
       state.editedProps = state.modifiedProps;
+      state.spacingExpanded = { padding: false, margin: false };
       state.panelNeedsPlacement = false;
+      state.panelManualPosition = false;
       return;
     }
-    if (!state.panelPinned && prevSelected !== state.selectedA) {
+    if (!state.panelPinned && !state.panelManualPosition && prevSelected !== state.selectedA) {
       state.panelNeedsPlacement = true;
+    }
+    if (prevSelected !== state.selectedA) {
+      state.spacingExpanded = { padding: false, margin: false };
     }
     if (state.measureMode) {
       state.measureA = state.selectedA;
@@ -929,26 +1126,25 @@
 
   tooltip.innerHTML =
     '<div id="vqa-head" style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;background:linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,0));cursor:move;user-select:none;white-space:nowrap;">' +
-    '<div style="display:flex;align-items:center;gap:8px;min-width:0;flex:0 0 auto;">' +
-    '<div style="font-weight:700;color:#FFF;">视觉走查</div>' +
-    '<div style="font-size:10px;color:#8FA1B3;border:1px solid rgba(255,255,255,.2);border-radius:999px;padding:1px 6px;">' +
-    FRAME_LABEL +
-    "</div>" +
-    "</div>" +
-    '<div style="display:flex;flex-wrap:nowrap;justify-content:flex-end;gap:5px;flex:0 0 auto;">' +
-    '<button id="vqa-measure" style="border:0;white-space:nowrap;flex:0 0 auto;background:#1F6BFF;color:#FFF;border-radius:999px;padding:4px 9px;font:inherit;cursor:pointer;">辅助测距：关</button>' +
-    '<button id="vqa-pin" style="border:0;white-space:nowrap;flex:0 0 auto;background:rgba(255,255,255,.08);color:#FFF;border-radius:999px;padding:4px 9px;font:inherit;cursor:pointer;">固定</button>' +
+    '<div id="vqa-title" style="min-width:0;flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;font-weight:700;color:#FFF;">视觉走查</div>' +
+    '<div id="vqa-actions" style="display:flex;flex-wrap:nowrap;justify-content:flex-end;gap:5px;flex:0 0 auto;">' +
+    '<button id="vqa-measure" style="display:none;border:0;white-space:nowrap;flex:0 0 auto;background:#1F6BFF;color:#FFF;border-radius:999px;padding:4px 9px;font:inherit;cursor:pointer;">辅助测距</button>' +
+    '<button id="vqa-reset" data-action="reset-styles" title="重置本次修改" aria-label="重置本次修改" style="display:none;border:0;flex:0 0 auto;align-items:center;justify-content:center;width:28px;height:28px;background:rgba(255,255,255,.08);color:#FFF;border-radius:999px;padding:0;cursor:pointer;">' +
+    '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<polyline points="1 4 1 10 7 10"></polyline>' +
+    '<path d="M3.51 15a9 9 0 1 0 .49-9.5L1 10"></path>' +
+    "</svg>" +
+    "</button>" +
     "</div>" +
     "</div>" +
     '<div id="vqa-body" style="padding:12px 14px;"></div>';
 
   var body = tooltip.querySelector("#vqa-body");
   var head = tooltip.querySelector("#vqa-head");
-  var headTitleWrap = head.firstElementChild;
-  var headActionsWrap = head.lastElementChild;
+  var headTitleEl = tooltip.querySelector("#vqa-title");
+  var headActionsWrap = tooltip.querySelector("#vqa-actions");
   var btnMeasure = tooltip.querySelector("#vqa-measure");
-  var btnPin = tooltip.querySelector("#vqa-pin");
-
+  var btnReset = tooltip.querySelector("#vqa-reset");
   function updatePanelChrome() {
     if (hasSelectedEl()) {
       tooltip.style.minWidth = "290px";
@@ -958,10 +1154,9 @@
       head.style.display = "flex";
       head.style.cursor = "move";
       headActionsWrap.style.display = "flex";
-      btnMeasure.style.display = "";
-      btnPin.style.display = "";
+      btnMeasure.style.display = "none";
+      btnReset.style.display = "inline-flex";
       body.style.padding = "12px 14px";
-      headTitleWrap.querySelector("div").textContent = "视觉走查";
       return;
     }
 
@@ -972,8 +1167,10 @@
     head.style.cursor = "default";
     headActionsWrap.style.display = "none";
     btnMeasure.style.display = "none";
-    btnPin.style.display = "none";
+    btnReset.style.display = "none";
     body.style.padding = "9px 10px";
+    headTitleEl.textContent = "视觉走查";
+    headTitleEl.title = "视觉走查";
   }
 
   function setFloatingPos(x, y) {
@@ -1185,73 +1382,6 @@
     highlight.style.background = hasSelectedEl() ? "rgba(255,138,0,.14)" : "rgba(47,123,255,.14)";
   }
 
-  function renderAuxMeasureSection() {
-    if (!state.measureMode) return "";
-    if (!state.measureA && !state.measureB)
-      return '<div style="margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,.08);font-size:11px;color:#8FA1B3;">辅助测距：点击目标元素锁定 B。</div>';
-    if (state.measureA && !state.measureB)
-      return '<div style="margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,.08);font-size:11px;color:#8FA1B3;">辅助测距已就绪：点击目标元素锁定 B。</div>';
-    var m = getMeasureData(state.measureA, state.measureB);
-    return section(
-      "辅助锁定测距",
-      [
-        row("元素 A", label(state.measureA)),
-        row("元素 B", label(state.measureB)),
-        row("水平距离", m && m.horizontal !== null ? m.horizontal + "px" : "无"),
-        row("垂直距离", m && m.vertical !== null ? m.vertical + "px" : "无")
-      ],
-      "#FFB45C"
-    );
-  }
-
-  function renderPrimaryMeasureSection() {
-    var measurement = state.primaryMeasure;
-    if (!measurement) return "";
-
-    if (measurement.kind === "inner-element-gap") {
-      return section(
-        "当前测量",
-        [
-          row("类型", "A 内部子元素 -> A"),
-          row("目标", label(measurement.targetEl)),
-          row("上", measurement.distances.top != null ? measurement.distances.top + "px" : ""),
-          row("右", measurement.distances.right != null ? measurement.distances.right + "px" : ""),
-          row("下", measurement.distances.bottom != null ? measurement.distances.bottom + "px" : ""),
-          row("左", measurement.distances.left != null ? measurement.distances.left + "px" : "")
-        ],
-        "#55A8FF"
-      );
-    }
-
-    if (measurement.kind === "outer-element-gap") {
-      return section(
-        "当前测量",
-        [
-          row("类型", "A -> Hover 目标"),
-          row("目标", label(measurement.targetEl)),
-          row("上", measurement.distances.top != null ? measurement.distances.top + "px" : ""),
-          row("右", measurement.distances.right != null ? measurement.distances.right + "px" : ""),
-          row("下", measurement.distances.bottom != null ? measurement.distances.bottom + "px" : ""),
-          row("左", measurement.distances.left != null ? measurement.distances.left + "px" : "")
-        ],
-        "#FFB45C"
-      );
-    }
-
-    return section(
-      "当前测量",
-      [
-        row("类型", "A -> 父级容器"),
-        row("目标", label(measurement.targetEl)),
-        row("上", measurement.distances.top != null ? measurement.distances.top + "px" : ""),
-        row("右", measurement.distances.right != null ? measurement.distances.right + "px" : ""),
-        row("下", measurement.distances.bottom != null ? measurement.distances.bottom + "px" : ""),
-        row("左", measurement.distances.left != null ? measurement.distances.left + "px" : "")
-      ],
-      "#3ED598"
-    );
-  }
-
   function renderHoverCard(el) {
     if (!el) {
       body.innerHTML = '<div style="color:#8FA1B3;">移动到页面元素上开始走查</div>';
@@ -1285,58 +1415,55 @@
     var padding = boxValues(style, "padding");
     var margin = boxValues(style, "margin");
     var parentGap = getParentGap(el);
+    var spacingKind = spacingProfile(el, targetKind);
     var modifiedCount = Object.keys(state.modifiedProps).length;
-    var modifiedBadge = modifiedCount
-      ? '<div style="display:inline-flex;align-items:center;gap:6px;padding:3px 8px;border-radius:999px;background:rgba(255,176,32,.14);color:#FFD27D;font-size:11px;font-weight:700;">已修改 ' +
-        modifiedCount +
-        ' 项</div>'
-      : '<div style="display:inline-flex;align-items:center;gap:6px;padding:3px 8px;border-radius:999px;background:rgba(62,213,152,.12);color:#89E7B8;font-size:11px;font-weight:700;">A 已锁定</div>';
+    var parentSummary = parentGapSummaryText(parentGap);
+    var resetDisabled = !modifiedCount;
+
+    var spacingRows = [];
+    if (spacingKind === "container") {
+      spacingRows.push(renderSpacingControl("内边距", paddingSummaryText(padding), state.spacingExpanded.padding, "toggle-padding", boxEditorFields(padding, "padding")));
+    }
+    if (spacingKind === "container" || spacingKind === "text" || !isZeroBox(margin)) {
+      spacingRows.push(renderSpacingControl("外边距", marginSummaryText(margin), state.spacingExpanded.margin, "toggle-margin", boxEditorFields(margin, "margin")));
+    }
+    spacingRows.push(renderRelationSummary(parentSummary));
+
+    headTitleEl.textContent = label(el);
+    headTitleEl.title = label(el);
+    btnReset.disabled = resetDisabled;
+    btnReset.style.opacity = resetDisabled ? "0.45" : "1";
+    btnReset.style.cursor = resetDisabled ? "default" : "pointer";
+    btnReset.title = "重置本次修改";
 
     body.innerHTML =
-      '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:8px;">' +
-      '<div style="min-width:0;">' +
-      '<div style="font-weight:700;font-size:12px;color:#FFF;word-break:break-all;">' +
-      esc(label(el)) +
-      "</div>" +
-      '<div style="margin-top:4px;font-size:11px;color:#8FA1B3;">完整属性已展开，可编辑字段可直接修改。</div>' +
-      "</div>" +
-      '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;">' +
-      modifiedBadge +
-      '<button data-action="reset-styles" style="border:0;background:rgba(255,255,255,.08);color:#FFF;border-radius:999px;padding:4px 10px;font:inherit;cursor:pointer;white-space:nowrap;">重置本次修改</button>' +
-      "</div>" +
-      "</div>" +
       section(
         "尺寸",
-        [rowEditable("宽", px(style.width), "width"), rowEditable("高", px(style.height), "height")]
+        [rowEditable("宽", style.width, "width"), rowEditable("高", style.height, "height")]
       ) +
       section(
         targetKind === "icon-font-like" ? "图标字体" : "字体",
         targetKind === "text-like" || targetKind === "icon-font-like"
           ? [
-              rowEditable("字号", px(style.fontSize), "fontSize"),
-              rowEditable("行高", px(style.lineHeight), "lineHeight"),
+              rowEditable("字号", style.fontSize, "fontSize"),
+              rowEditable("行高", style.lineHeight, "lineHeight"),
               rowEditable("字重", style.fontWeight, "fontWeight"),
-              row("字族", cleanFontFamily(style.fontFamily)),
+              rowSingleLine("字体", primaryFontFamily(style.fontFamily), style.fontFamily),
               rowEditable("文字色", toHexColor(style.color), "color", "color")
             ]
           : []
       ) +
       section(
         "间距",
-        [
-          rowBoxEditable("内边距", padding, "padding"),
-          rowBoxEditable("外边距", margin, "margin"),
-          row("父级间距", parentGap ? boxText(parentGap) : ""),
-          row("当前侧", state.spacingSide)
-        ]
+        spacingRows
       ) +
       section(
         "样式",
-        [rowEditable("背景", toHexColor(style.backgroundColor), "backgroundColor", "color"), rowEditable("圆角", px(style.borderRadius), "borderRadius")]
-      ) +
-      renderPrimaryMeasureSection() +
-      renderAuxMeasureSection() +
-      '<div style="margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,255,255,.08);font-size:11px;color:#8FA1B3;">主测量默认跟随 A + 当前 hover 目标。快捷键：M 辅助测距 | F 锁定/解锁 A | C 清空辅助测距 | R 清除样式 | P 固定面板 | B 收起/展开 | ESC 退出</div>';
+        [
+          rowEditable("背景", toHexColor(style.backgroundColor), "backgroundColor", "color"),
+          shouldShowBorderRadius(targetKind, el) ? rowEditable("圆角", style.borderRadius, "borderRadius") : ""
+        ]
+      );
     logTargetDebug("render-selected-panel", el);
   }
 
@@ -1371,42 +1498,97 @@
     };
   }
 
+  function panelRectForPosition(pos, rect) {
+    return {
+      left: pos.x,
+      top: pos.y,
+      right: pos.x + rect.width,
+      bottom: pos.y + rect.height
+    };
+  }
+
+  function rectOverlapArea(a, b) {
+    if (!a || !b) return 0;
+    var w = Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left));
+    var h = Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
+    return w * h;
+  }
+
+  function rectDistance(a, b) {
+    if (!a || !b) return Number.MAX_VALUE;
+    var dx = 0;
+    var dy = 0;
+    if (a.right < b.left) dx = b.left - a.right;
+    else if (b.right < a.left) dx = a.left - b.right;
+    if (a.bottom < b.top) dy = b.top - a.bottom;
+    else if (b.bottom < a.top) dy = a.top - b.bottom;
+    return dx + dy;
+  }
+
+  function fitsWithinViewport(pos, rect) {
+    return (
+      pos.x >= 8 &&
+      pos.y >= 8 &&
+      pos.x + rect.width <= window.innerWidth - 8 &&
+      pos.y + rect.height <= window.innerHeight - 8
+    );
+  }
+
   function resolveSelectedPanelPosition(selectedEl) {
     var rect = tooltip.getBoundingClientRect();
     var targetRect = selectedEl ? selectedEl.getBoundingClientRect() : null;
+    var gap = 10;
     var candidates = [];
 
-    if (state.panelX != null && state.panelY != null) {
-      candidates.push(clampPanelPosition(state.panelX, state.panelY, rect));
+    function addCandidate(x, y, priority, pinnedToSide) {
+      var pos = clampPanelPosition(x, y, rect);
+      var panelRect = panelRectForPosition(pos, rect);
+      candidates.push({
+        pos: pos,
+        priority: priority,
+        overlap: targetRect ? rectOverlapArea(panelRect, targetRect) : 0,
+        distance: targetRect ? rectDistance(panelRect, targetRect) : 0,
+        pinnedToSide: pinnedToSide || ""
+      });
     }
 
-    candidates.push(clampPanelPosition(window.innerWidth - rect.width - 12, 12, rect));
-
-    if (targetRect) {
-      candidates.push(clampPanelPosition(targetRect.right + 16, targetRect.top, rect));
-      candidates.push(clampPanelPosition(targetRect.left - rect.width - 16, targetRect.top, rect));
-      candidates.push(clampPanelPosition(targetRect.left, targetRect.bottom + 16, rect));
-      candidates.push(clampPanelPosition(targetRect.left, targetRect.top - rect.height - 16, rect));
+    if (!targetRect) {
+      return clampPanelPosition(window.innerWidth - rect.width - 12, 12, rect);
     }
+
+    addCandidate(targetRect.right + gap, targetRect.top, 0, "right");
+    addCandidate(targetRect.left - rect.width - gap, targetRect.top, 1, "left");
+    addCandidate(targetRect.right + gap, targetRect.top, 2, "right");
+    addCandidate(targetRect.left - rect.width - gap, targetRect.top, 3, "left");
+    addCandidate(targetRect.right + gap, targetRect.bottom - rect.height, 4, "right");
+    addCandidate(targetRect.left - rect.width - gap, targetRect.bottom - rect.height, 5, "left");
+    addCandidate(targetRect.left, targetRect.top, 6, "");
+
+    candidates.sort(function (a, b) {
+      if (a.overlap !== b.overlap) return a.overlap - b.overlap;
+      if (a.priority !== b.priority) return a.priority - b.priority;
+      if (a.distance !== b.distance) return a.distance - b.distance;
+      if (a.pinnedToSide !== b.pinnedToSide) return a.pinnedToSide === "right" ? -1 : 1;
+      return 0;
+    });
 
     for (var i = 0; i < candidates.length; i++) {
-      var candidate = candidates[i];
-      var panelRect = {
-        left: candidate.x,
-        top: candidate.y,
-        right: candidate.x + rect.width,
-        bottom: candidate.y + rect.height
-      };
-      if (!rectsOverlap(panelRect, targetRect)) return candidate;
+      if (fitsWithinViewport(candidates[i].pos, rect) && candidates[i].overlap === 0) {
+        return candidates[i].pos;
+      }
     }
 
-    return candidates[0] || clampPanelPosition(12, 12, rect);
+    return candidates[0] ? candidates[0].pos : clampPanelPosition(12, 12, rect);
   }
 
   function positionSelectedPanel(selectedEl) {
     if (state.dragging) return;
 
-    if (state.panelNeedsPlacement || state.panelX == null || state.panelY == null) {
+    if (state.panelManualPosition && state.panelX != null && state.panelY != null) {
+      var manualClamped = clampPanelPosition(state.panelX, state.panelY, tooltip.getBoundingClientRect());
+      state.panelX = manualClamped.x;
+      state.panelY = manualClamped.y;
+    } else if (selectedEl) {
       var nextPos = resolveSelectedPanelPosition(selectedEl);
       state.panelX = nextPos.x;
       state.panelY = nextPos.y;
@@ -1449,10 +1631,8 @@
     }
     addPrimaryMeasureGuides(state.primaryMeasure);
     addAuxMeasureGuides();
-    btnMeasure.textContent = "辅助测距：" + (state.measureMode ? "开" : "关");
+    btnMeasure.textContent = "辅助测距";
     btnMeasure.style.background = state.measureMode ? "#FF8A00" : "#1F6BFF";
-    btnPin.textContent = state.panelPinned ? "已固定" : "固定";
-    btnPin.style.background = state.panelPinned ? "#2C8CFF" : "rgba(255,255,255,.08)";
   }
 
   function schedule() {
@@ -1562,10 +1742,11 @@
 
   function togglePin() {
     state.panelPinned = !state.panelPinned;
+    state.panelManualPosition = state.panelPinned;
     var r = tooltip.getBoundingClientRect();
     state.panelX = r.left;
     state.panelY = r.top;
-    state.panelNeedsPlacement = false;
+    state.panelNeedsPlacement = !state.panelPinned;
     schedule();
   }
 
@@ -1628,6 +1809,7 @@
   function startDrag(e) {
     state.dragging = true;
     state.panelPinned = true;
+    state.panelManualPosition = true;
     var r = tooltip.getBoundingClientRect();
     state.panelX = r.left;
     state.panelY = r.top;
@@ -1659,7 +1841,6 @@
     floating.removeEventListener("mouseenter", onFloatEnter, true);
     floating.removeEventListener("mouseleave", onFloatLeave, true);
     btnMeasure.removeEventListener("click", onMeasureClick, true);
-    btnPin.removeEventListener("click", onPinClick, true);
     [highlight, selectA, selectB, tooltip, spacingLayer, measureLayer, floating].forEach(function (el) {
       if (el && el.parentNode) el.parentNode.removeChild(el);
     });
@@ -1738,7 +1919,6 @@
   }
 
   btnMeasure.addEventListener("click", onMeasureClick, true);
-  btnPin.addEventListener("click", onPinClick, true);
   head.addEventListener("mousedown", startDrag, true);
   floating.addEventListener("mousedown", startFloatDrag, true);
   floating.addEventListener("mouseenter", onFloatEnter, true);
