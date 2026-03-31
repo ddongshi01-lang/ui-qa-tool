@@ -66,7 +66,7 @@
     dragOffsetX: 0,
     dragOffsetY: 0,
     spacingSide: "top",
-    spacingExpanded: { padding: false, margin: false },
+    spacingExpanded: { padding: false, margin: false, parentGap: false },
     rafId: null,
     modifiedProps: {},
     editedProps: {},
@@ -277,6 +277,12 @@
     }
     if (action === "toggle-margin") {
       state.spacingExpanded.margin = !state.spacingExpanded.margin;
+      schedule();
+      e.preventDefault();
+      return;
+    }
+    if (action === "toggle-parent-gap") {
+      state.spacingExpanded.parentGap = !state.spacingExpanded.parentGap;
       schedule();
       e.preventDefault();
       return;
@@ -697,24 +703,54 @@
     return !!(box && !box.t && !box.r && !box.b && !box.l);
   }
 
-  function nonZeroBoxParts(box) {
-    if (!box) return [];
-    var parts = [];
-    if (box.t) parts.push("上 " + box.t);
-    if (box.r) parts.push("右 " + box.r);
-    if (box.b) parts.push("下 " + box.b);
-    if (box.l) parts.push("左 " + box.l);
-    return parts;
-  }
-
-  function compactBoxSummary(box) {
-    if (!box || isZeroBox(box)) return "0";
-    return nonZeroBoxParts(box).join(" / ");
-  }
-
   function fullBoxSummary(box) {
     if (!box) return "无";
     return "上 " + box.t + " / 右 " + box.r + " / 下 " + box.b + " / 左 " + box.l;
+  }
+
+  function spacingValueText(v) {
+    return displayLength(v) || "0";
+  }
+
+  function formatSpacingBox(box) {
+    if (!box) {
+      return {
+        summaryText: "无",
+        detailText: "无",
+        canExpand: false
+      };
+    }
+    var t = num(box.t);
+    var r = num(box.r);
+    var b = num(box.b);
+    var l = num(box.l);
+    var detailText = fullBoxSummary({ t: t, r: r, b: b, l: l });
+    var allSame = t === r && r === b && b === l;
+    var nonZeroCount = [t, r, b, l].filter(function (v) {
+      return v !== 0;
+    }).length;
+    var summaryText;
+    if (allSame) {
+      summaryText = spacingValueText(t);
+    } else if (nonZeroCount === 1) {
+      if (t !== 0) summaryText = "上 " + spacingValueText(t);
+      else if (r !== 0) summaryText = "右 " + spacingValueText(r);
+      else if (b !== 0) summaryText = "下 " + spacingValueText(b);
+      else summaryText = "左 " + spacingValueText(l);
+    } else if (t === b && r === l) {
+      summaryText = "垂直 " + spacingValueText(t) + " / 水平 " + spacingValueText(r);
+    } else if (t === b) {
+      summaryText = "垂直 " + spacingValueText(t) + " / 水平 " + spacingValueText(r) + "," + spacingValueText(l);
+    } else if (r === l) {
+      summaryText = "垂直 " + spacingValueText(t) + "," + spacingValueText(b) + " / 水平 " + spacingValueText(r);
+    } else {
+      summaryText = detailText;
+    }
+    return {
+      summaryText: summaryText,
+      detailText: detailText,
+      canExpand: true
+    };
   }
 
   function isContainerSpacingTarget(el, kind) {
@@ -737,55 +773,102 @@
     return "container";
   }
 
-  function paddingSummaryText(box) {
-    return "内边距：" + compactBoxSummary(box);
-  }
-
-  function marginSummaryText(box) {
-    return "外边距：" + compactBoxSummary(box);
-  }
-
-  function parentGapSummaryText(parentGap) {
-    if (!parentGap) return "父级间距：0";
-    return "父级间距：" + fullBoxSummary(parentGap);
-  }
-
-  function renderSpacingControl(labelText, summaryText, expanded, toggleAction, editorHtml) {
+  function spacingPreview(kind) {
+    var accent = CONFIG.colors.padding;
+    var label = "P";
+    if (kind === "margin") {
+      accent = CONFIG.colors.margin;
+      label = "M";
+    } else if (kind === "parentGap") {
+      accent = CONFIG.colors.parentGap;
+      label = "G";
+    }
     return (
-      '<div style="display:grid;grid-template-columns:84px 1fr;gap:8px;align-items:start;">' +
-      '<div style="color:' +
-      CONFIG.colors.muted +
-      ';">' +
-      esc(labelText) +
-      "</div>" +
-      '<div>' +
-      '<div style="display:flex;align-items:center;gap:8px;">' +
-      '<div style="flex:1;min-width:0;color:' +
-      CONFIG.colors.text +
-      ';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' +
-      esc(summaryText) +
-      '">' +
-      esc(summaryText) +
-      "</div>" +
-      '<button data-action="' +
-      esc(toggleAction) +
-      '" style="border:0;background:rgba(255,255,255,.08);color:#D8E0E8;border-radius:999px;padding:2px 8px;font:11px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;white-space:nowrap;">' +
-      (expanded ? "收起" : "展开") +
-      "</button>" +
-      "</div>" +
-      (expanded ? '<div style="margin-top:6px;">' + editorHtml + "</div>" : "") +
+      '<div style="width:22px;height:22px;flex:0 0 auto;position:relative;border-radius:7px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.03);box-sizing:border-box;">' +
+      '<div style="position:absolute;left:4px;right:4px;top:4px;bottom:4px;border-radius:4px;border:1px solid ' +
+      accent +
+      ';background:rgba(255,255,255,.02);"></div>' +
+      '<div style="position:absolute;left:6px;right:6px;top:2px;height:2px;border-radius:999px;background:' +
+      accent +
+      ';opacity:.55;"></div>' +
+      '<div style="position:absolute;left:5px;right:5px;bottom:2px;height:2px;border-radius:999px;background:' +
+      accent +
+      ';opacity:.18;"></div>' +
+      '<div style="position:absolute;left:0;right:0;top:0;bottom:0;display:flex;align-items:center;justify-content:center;color:' +
+      accent +
+      ';font-size:8px;font-weight:700;line-height:1;opacity:.85;">' +
+      label +
       "</div>" +
       "</div>"
     );
   }
 
-  function renderRelationSummary(summaryText) {
-    if (!summaryText) return "";
-    return (
-      '<div style="margin-top:2px;padding:8px 10px;border-radius:10px;background:rgba(62,213,152,.08);color:#D7EFE1;font-size:12px;line-height:1.45;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' +
-      esc(summaryText) +
+  function renderSpacingCard(labelText, kind, box, expanded, toggleAction, expandedHtml) {
+    var info = formatSpacingBox(box);
+    var detailHtml =
+      expandedHtml ||
+      '<div style="color:' +
+      CONFIG.colors.muted +
+      ';font-size:11px;line-height:1.45;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' +
+      esc(info.detailText) +
       '">' +
-      esc(summaryText) +
+      esc(info.detailText) +
+      "</div>";
+    return (
+      '<div style="padding:8px 9px;border-radius:12px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.035);box-sizing:border-box;">' +
+      '<div style="display:flex;align-items:center;gap:8px;min-width:0;">' +
+      spacingPreview(kind) +
+      '<div style="flex:1;min-width:0;">' +
+      '<div style="font-size:10px;line-height:1.2;color:' +
+      CONFIG.colors.muted +
+      ';font-weight:700;letter-spacing:.02em;">' +
+      esc(labelText) +
+      "</div>" +
+      '<div style="margin-top:1px;color:' +
+      CONFIG.colors.text +
+      ';font-size:12px;line-height:1.3;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' +
+      esc(info.summaryText) +
+      '">' +
+      esc(info.summaryText) +
+      "</div>" +
+      "</div>" +
+      '<button data-action="' +
+      esc(toggleAction) +
+      '" style="flex:0 0 auto;border:1px solid rgba(255,255,255,.10);background:rgba(255,255,255,.06);color:#D8E0E8;border-radius:999px;padding:2px 8px;font:11px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;white-space:nowrap;">' +
+      (expanded ? "收起" : "展开") +
+      "</button>" +
+      "</div>" +
+      (expanded ? '<div style="margin-top:6px;padding-left:30px;">' + detailHtml + "</div>" : "") +
+      "</div>"
+    );
+  }
+
+  function renderSpacingDetailReadout(box) {
+    if (!box) {
+      return '<div style="color:' + CONFIG.colors.muted + ';font-size:11px;line-height:1.45;">无</div>';
+    }
+    function cell(label, value) {
+      return (
+        '<div style="padding:4px 6px;border-radius:8px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.03);min-width:0;">' +
+        '<div style="font-size:10px;line-height:1.2;color:' +
+        CONFIG.colors.muted +
+        ';font-weight:700;">' +
+        label +
+        "</div>" +
+        '<div style="margin-top:1px;color:' +
+        CONFIG.colors.text +
+        ';font-size:12px;line-height:1.2;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' +
+        spacingValueText(value) +
+        "</div>" +
+        "</div>"
+      );
+    }
+    return (
+      '<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;">' +
+      cell("上", box.t) +
+      cell("右", box.r) +
+      cell("下", box.b) +
+      cell("左", box.l) +
       "</div>"
     );
   }
@@ -815,7 +898,7 @@
       state.primaryMeasure = null;
       state.modifiedProps = {};
       state.editedProps = state.modifiedProps;
-      state.spacingExpanded = { padding: false, margin: false };
+      state.spacingExpanded = { padding: false, margin: false, parentGap: false };
       state.panelNeedsPlacement = false;
       state.panelManualPosition = false;
       return;
@@ -824,7 +907,7 @@
       state.panelNeedsPlacement = true;
     }
     if (prevSelected !== state.selectedA) {
-      state.spacingExpanded = { padding: false, margin: false };
+      state.spacingExpanded = { padding: false, margin: false, parentGap: false };
     }
     if (state.measureMode) {
       state.measureA = state.selectedA;
@@ -1417,17 +1500,29 @@
     var parentGap = getParentGap(el);
     var spacingKind = spacingProfile(el, targetKind);
     var modifiedCount = Object.keys(state.modifiedProps).length;
-    var parentSummary = parentGapSummaryText(parentGap);
     var resetDisabled = !modifiedCount;
 
     var spacingRows = [];
     if (spacingKind === "container") {
-      spacingRows.push(renderSpacingControl("内边距", paddingSummaryText(padding), state.spacingExpanded.padding, "toggle-padding", boxEditorFields(padding, "padding")));
+      spacingRows.push(
+        renderSpacingCard("内边距", "padding", padding, state.spacingExpanded.padding, "toggle-padding", boxEditorFields(padding, "padding"))
+      );
     }
     if (spacingKind === "container" || spacingKind === "text" || !isZeroBox(margin)) {
-      spacingRows.push(renderSpacingControl("外边距", marginSummaryText(margin), state.spacingExpanded.margin, "toggle-margin", boxEditorFields(margin, "margin")));
+      spacingRows.push(
+        renderSpacingCard("外边距", "margin", margin, state.spacingExpanded.margin, "toggle-margin", boxEditorFields(margin, "margin"))
+      );
     }
-    spacingRows.push(renderRelationSummary(parentSummary));
+    spacingRows.push(
+      renderSpacingCard(
+        "父级距离",
+        "parentGap",
+        parentGap,
+        state.spacingExpanded.parentGap,
+        "toggle-parent-gap",
+        renderSpacingDetailReadout(parentGap)
+      )
+    );
 
     headTitleEl.textContent = label(el);
     headTitleEl.title = label(el);
@@ -1940,13 +2035,6 @@
   window.__visualQAInspectorFinal__ = { destroy: destroy };
   refresh();
 })();
-
-
-
-
-
-
-
 
 
 
