@@ -72,6 +72,9 @@
 
   var IS_TOP_FRAME = window.top === window.self;
   var FRAME_LABEL = IS_TOP_FRAME ? "主页面" : "iframe";
+  var V12_VERSION = "1.2.0";
+  var BRIDGE_REQUEST_SOURCE = "visual-qa-v12-step2";
+  var BRIDGE_RESPONSE_SOURCE = "visual-qa-bridge-v12-step2";
 
   var state = {
     hoveredEl: null,
@@ -122,13 +125,144 @@
       cursorBody: "",
       cursorDoc: ""
     },
+    v12: {
+      mode: "select",
+      recordSubMode: "element",
+      drawerOpen: false,
+      draft: null,
+      draftStatus: "idle",
+      bridgeReady: false,
+      recordMenuOpen: false,
+      categoryMenuOpen: false,
+      pendingRecord: null,
+      recordTargetEl: null,
+      composerFocusPending: false,
+      noteSelectionStart: 0,
+      noteSelectionEnd: 0,
+      noticeText: "",
+      draftPersisting: false,
+      regionSelection: {
+        active: false,
+        moved: false,
+        startX: 0,
+        startY: 0,
+        currentX: 0,
+        currentY: 0
+      },
+      suppressNextClick: false
+    },
+    scrollLock: {
+      active: false,
+      x: 0,
+      y: 0,
+      bodyPosition: "",
+      bodyTop: "",
+      bodyLeft: "",
+      bodyWidth: "",
+      bodyOverflow: "",
+      docOverflow: ""
+    },
     debugRawTarget: null,
     debugNormalizedTarget: null,
     debugLastSignature: ""
   };
 
+  var bridgeRequestSeq = 0;
+  var bridgePending = {};
+
   function clamp(v, min, max) {
     return Math.max(min, Math.min(max, v));
+  }
+
+  function normalizePageKey(url) {
+    var raw = String(url || location.href || "").trim();
+    if (!raw) return "";
+    return raw.replace(/#.*$/, "");
+  }
+
+  function buildEmptyDraft(pageKey) {
+    var now = new Date().toISOString();
+    return {
+      draftId: "draft:" + pageKey,
+      pageKey: pageKey,
+      pageUrl: location.href,
+      pageTitle: document.title || "",
+      createdAt: now,
+      updatedAt: now,
+      version: V12_VERSION,
+      records: []
+    };
+  }
+
+  function onBridgeMessage(event) {
+    var data = event && event.data;
+    if (!data || event.source !== window || data.source !== BRIDGE_RESPONSE_SOURCE) return;
+    var pending = bridgePending[data.requestId];
+    if (!pending) return;
+    delete bridgePending[data.requestId];
+    if (data.payload && data.payload.ok) {
+      pending.resolve(data.payload);
+      return;
+    }
+    pending.reject(new Error(data.payload && data.payload.error ? data.payload.error : "Bridge request failed"));
+  }
+
+  function bridgeRequest(action, payload) {
+    return new Promise(function (resolve, reject) {
+      var requestId = "vqa-" + Date.now() + "-" + bridgeRequestSeq++;
+      bridgePending[requestId] = { resolve: resolve, reject: reject };
+      window.postMessage(
+        {
+          source: BRIDGE_REQUEST_SOURCE,
+          requestId: requestId,
+          action: action,
+          pageKey: payload && payload.pageKey ? payload.pageKey : "",
+          draft: payload && payload.draft ? payload.draft : null
+        },
+        "*"
+      );
+
+      window.setTimeout(function () {
+        if (!bridgePending[requestId]) return;
+        delete bridgePending[requestId];
+        reject(new Error("Bridge timeout"));
+      }, 3000);
+    });
+  }
+
+  async function loadDraftFromBridge(pageKey) {
+    var response = await bridgeRequest("load-draft", { pageKey: pageKey });
+    return response.draft || null;
+  }
+
+  async function saveDraftToBridge(pageKey, draft) {
+    var response = await bridgeRequest("save-draft", { pageKey: pageKey, draft: draft });
+    return response.draft || null;
+  }
+
+  async function clearDraftFromBridge(pageKey) {
+    await bridgeRequest("clear-draft", { pageKey: pageKey });
+  }
+
+  async function initializeV12DraftState() {
+    var pageKey = normalizePageKey(location.href);
+    if (!pageKey) return;
+    state.v12.draftStatus = "loading";
+    try {
+      var storedDraft = await loadDraftFromBridge(pageKey);
+      state.v12.draft = storedDraft || buildEmptyDraft(pageKey);
+      state.v12.bridgeReady = true;
+      state.v12.draftStatus = "ready";
+      console.debug("[visual-qa][v1.2] draft bridge ready", {
+        pageKey: pageKey,
+        recordCount: state.v12.draft.records.length
+      });
+    } catch (err) {
+      state.v12.draft = buildEmptyDraft(pageKey);
+      state.v12.bridgeReady = false;
+      state.v12.draftStatus = "error";
+      console.warn("[visual-qa][v1.2] draft bridge unavailable:", err);
+    }
   }
 
   function px(v) {
@@ -136,6 +270,280 @@
     if (v === "normal") return "normal";
     var n = parseFloat(v);
     return isNaN(n) ? String(v) : Math.round(n * 100) / 100 + "px";
+  }
+
+  function getV12RecordCount() {
+    var draft = state.v12.draft;
+    return draft && Array.isArray(draft.records) ? draft.records.length : 0;
+  }
+
+  function isSelectMode() {
+    return state.v12.mode === "select";
+  }
+
+  function isRecordMode() {
+    return state.v12.mode === "record";
+  }
+
+  function isRecordElementMode() {
+    return isRecordMode() && state.v12.recordSubMode === "element";
+  }
+
+  function isRecordRegionMode() {
+    return isRecordMode() && state.v12.recordSubMode === "region";
+  }
+
+  function getRecordSubModeLabel() {
+    return state.v12.recordSubMode === "region" ? "区域" : "元素";
+  }
+
+  function getRecordTargetEl() {
+    return state.v12.recordTargetEl || null;
+  }
+
+  function clearRecordTarget() {
+    state.v12.recordTargetEl = null;
+  }
+
+  function setRecordTarget(el) {
+    state.v12.recordTargetEl = el || null;
+  }
+
+  function shouldShowSelectedPanel() {
+    return !isRecordMode() && !state.v12.drawerOpen && hasSelectedEl();
+  }
+
+  function shouldShowHoverCard() {
+    return !isRecordMode() && !state.v12.drawerOpen;
+  }
+
+  function shouldShowHoverHighlight() {
+    return !isRecordRegionMode();
+  }
+
+  function setV12Mode(mode) {
+    if (mode !== "select" && mode !== "record") return;
+    if (mode === "record" && state.v12.mode === "record" && !state.v12.pendingRecord) {
+      state.v12.recordMenuOpen = !state.v12.recordMenuOpen;
+      schedule();
+      return;
+    }
+    state.v12.mode = mode;
+    state.v12.recordMenuOpen = mode === "record";
+    if (mode !== "record") {
+      state.v12.categoryMenuOpen = false;
+      state.v12.pendingRecord = null;
+      resetRegionSelection();
+      clearRecordTarget();
+    } else {
+      state.v12.drawerOpen = false;
+      state.v12.categoryMenuOpen = false;
+    }
+    schedule();
+  }
+
+  function toggleV12Drawer() {
+    if (state.v12.pendingRecord) {
+      showV12Notice("请先保存或取消当前记录");
+      return;
+    }
+    if (!state.v12.drawerOpen && isRecordMode()) {
+      state.v12.mode = "select";
+      state.v12.recordMenuOpen = false;
+      state.v12.categoryMenuOpen = false;
+      clearRecordTarget();
+      resetRegionSelection();
+    }
+    state.v12.drawerOpen = !state.v12.drawerOpen;
+    schedule();
+  }
+
+  function setV12RecordSubMode(subMode) {
+    if (subMode !== "element" && subMode !== "region") return;
+    state.v12.recordSubMode = subMode;
+    state.v12.recordMenuOpen = false;
+    state.v12.categoryMenuOpen = false;
+    state.v12.drawerOpen = false;
+    resetRegionSelection();
+    clearRecordTarget();
+    schedule();
+  }
+
+  var RECORD_CATEGORIES = [
+    { id: "layout", label: "布局", color: "#22c55e" },
+    { id: "font", label: "字体", color: "#3b82f6" },
+    { id: "interaction", label: "交互", color: "#ec4899" },
+    { id: "color", label: "颜色", color: "#f59e0b" },
+    { id: "other", label: "其他", color: "#94a3b8" }
+  ];
+
+  function getRecordCategory(categoryId) {
+    for (var i = 0; i < RECORD_CATEGORIES.length; i++) {
+      if (RECORD_CATEGORIES[i].id === categoryId) return RECORD_CATEGORIES[i];
+    }
+    return RECORD_CATEGORIES[0];
+  }
+
+  function resetRegionSelection() {
+    state.v12.regionSelection = {
+      active: false,
+      moved: false,
+      startX: 0,
+      startY: 0,
+      currentX: 0,
+      currentY: 0
+    };
+  }
+
+  function getRegionSelectionRect() {
+    var region = state.v12.regionSelection;
+    return {
+      left: Math.min(region.startX, region.currentX),
+      top: Math.min(region.startY, region.currentY),
+      width: Math.abs(region.currentX - region.startX),
+      height: Math.abs(region.currentY - region.startY)
+    };
+  }
+
+  function makeRecordId() {
+    return "record:" + Date.now() + ":" + Math.random().toString(36).slice(2, 8);
+  }
+
+  function dataUrlFromSvg(svg) {
+    return "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(svg);
+  }
+
+  function placeholderShotData(targetName, categoryLabel, typeLabel) {
+    var title = esc(targetName || "记录");
+    var badge = esc(categoryLabel || "布局");
+    var meta = esc(typeLabel || "记录");
+    return dataUrlFromSvg(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180" viewBox="0 0 320 180">' +
+        '<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#111827"/><stop offset="1" stop-color="#334155"/></linearGradient></defs>' +
+        '<rect width="320" height="180" rx="20" fill="url(#g)"/>' +
+        '<rect x="18" y="18" width="284" height="144" rx="16" fill="rgba(255,255,255,0.06)" stroke="rgba(255,255,255,0.18)"/>' +
+        '<text x="30" y="52" fill="#ffffff" font-size="14" font-family="Arial, sans-serif">' + meta + '</text>' +
+        '<text x="30" y="88" fill="#ffffff" font-size="22" font-weight="700" font-family="Arial, sans-serif">' + title + '</text>' +
+        '<text x="30" y="128" fill="rgba(255,255,255,0.78)" font-size="14" font-family="Arial, sans-serif">' + badge + '</text>' +
+      '</svg>'
+    );
+  }
+
+  function cloneDraft(draft) {
+    return draft ? JSON.parse(JSON.stringify(draft)) : null;
+  }
+
+  async function persistCurrentDraft() {
+    var draft = state.v12.draft;
+    if (!draft || !draft.pageKey) return;
+    var nextDraft = cloneDraft(draft);
+    state.v12.draftPersisting = true;
+    state.v12.draftStatus = "saving";
+    try {
+      var savedDraft = await saveDraftToBridge(nextDraft.pageKey, nextDraft);
+      state.v12.draft = savedDraft || nextDraft;
+      state.v12.bridgeReady = true;
+      state.v12.draftStatus = "ready";
+    } catch (err) {
+      state.v12.draft = nextDraft;
+      state.v12.draftStatus = "error";
+      console.warn("[visual-qa][v1.2] draft save failed:", err);
+    } finally {
+      state.v12.draftPersisting = false;
+      schedule();
+    }
+  }
+
+  function updateDraftMeta() {
+    var draft = state.v12.draft;
+    if (!draft) return;
+    draft.pageUrl = location.href;
+    draft.pageTitle = document.title || "";
+    draft.updatedAt = new Date().toISOString();
+  }
+
+  function createPendingRecord(type, targetName, captureRect, targetHint) {
+    var category = getRecordCategory("layout");
+    var now = new Date().toISOString();
+    return {
+      id: makeRecordId(),
+      type: type,
+      category: category.id,
+      note: "",
+      targetName: targetName,
+      pageUrl: location.href,
+      pageTitle: document.title || "",
+      createdAt: now,
+      updatedAt: now,
+      shot: {
+        thumb: placeholderShotData(targetName, category.label, type === "element" ? "元素记录" : "区域记录"),
+        export: null
+      },
+      capture: {
+        rect: captureRect,
+        scroll: {
+          x: window.scrollX || window.pageXOffset || 0,
+          y: window.scrollY || window.pageYOffset || 0
+        }
+      },
+      targetHint: targetHint || {}
+    };
+  }
+
+  function openPendingRecord(record) {
+    state.v12.pendingRecord = record;
+    state.v12.recordMenuOpen = false;
+    state.v12.categoryMenuOpen = false;
+    state.v12.drawerOpen = false;
+    state.v12.composerFocusPending = true;
+    state.v12.noteSelectionStart = record && record.note ? String(record.note).length : 0;
+    state.v12.noteSelectionEnd = state.v12.noteSelectionStart;
+    schedule();
+  }
+
+  function closePendingRecord() {
+    state.v12.pendingRecord = null;
+    state.v12.categoryMenuOpen = false;
+    state.v12.composerFocusPending = false;
+    state.v12.noteSelectionStart = 0;
+    state.v12.noteSelectionEnd = 0;
+    clearRecordTarget();
+    resetRegionSelection();
+    schedule();
+  }
+
+  function restartRegionRecordSelection() {
+    state.v12.pendingRecord = null;
+    state.v12.recordMenuOpen = false;
+    state.v12.categoryMenuOpen = false;
+    state.v12.composerFocusPending = false;
+    state.v12.noteSelectionStart = 0;
+    state.v12.noteSelectionEnd = 0;
+    clearRecordTarget();
+    resetRegionSelection();
+    schedule();
+  }
+
+  function showV12Notice(text) {
+    state.v12.noticeText = text || "";
+    schedule();
+    window.clearTimeout(showV12Notice._timerId || 0);
+    showV12Notice._timerId = window.setTimeout(function () {
+      if (state.v12.noticeText !== text) return;
+      state.v12.noticeText = "";
+      schedule();
+    }, 2200);
+  }
+
+  async function savePendingRecord() {
+    if (!state.v12.pendingRecord || !state.v12.draft) return;
+    updateDraftMeta();
+    state.v12.pendingRecord.updatedAt = new Date().toISOString();
+    if (!Array.isArray(state.v12.draft.records)) state.v12.draft.records = [];
+    state.v12.draft.records.push(cloneDraft(state.v12.pendingRecord));
+    closePendingRecord();
+    schedule();
+    await persistCurrentDraft();
   }
 
   function displayLength(v) {
@@ -1552,7 +1960,23 @@
   }
 
   function isOverlayElement(el) {
-    return !!(el && (el === tooltip || el === highlight || el === selectA || el === selectB || el === spacingLayer || el === measureLayer || el === floating));
+    return !!(
+      el &&
+      (el === tooltip ||
+        el === highlight ||
+        el === selectA ||
+        el === selectB ||
+        el === spacingLayer ||
+        el === measureLayer ||
+        el === floating ||
+        el === topbar ||
+        el === recordMenu ||
+        el === drawerStub ||
+        el === recordComposer ||
+        el === regionCaptureOverlay ||
+        el === regionSelectBox ||
+        el === v12Notice)
+    );
   }
 
   function deepElementFromPoint(root, x, y) {
@@ -2038,10 +2462,17 @@
   }
 
   function getActiveEl() {
+    if (isRecordRegionMode()) return null;
+    if (isRecordElementMode()) return getRecordTargetEl() || state.hoveredEl || state.lastPageEl;
     return getSelectedEl() || state.hoveredEl || state.lastPageEl;
   }
 
   function setPageHover(el) {
+    if (!shouldShowHoverHighlight()) {
+      state.hoveredEl = null;
+      state.hoverEl = null;
+      return;
+    }
     state.hoveredEl = el || null;
     state.hoverEl = el || null;
     if (el) state.lastPageEl = el;
@@ -2177,6 +2608,380 @@
       ";cursor:pointer;user-select:none;opacity:1;transition:opacity 150ms ease;"
   );
 
+  var topbar = make(
+    "div",
+    "position:fixed;left:50%;top:18px;transform:translateX(-50%);display:flex;align-items:center;gap:8px;padding:8px;border-radius:999px;background:#14161a;border:1px solid rgba(255,255,255,.08);box-shadow:0 18px 42px rgba(15,23,42,.22);z-index:" +
+      (CONFIG.zIndexTooltip + 2) +
+      ";color:#fff;user-select:none;"
+  );
+
+  var recordMenu = make(
+    "div",
+    "position:fixed;left:50%;top:70px;transform:translateX(-50%);min-width:180px;padding:10px;border-radius:20px;background:#16181d;border:1px solid rgba(255,255,255,.08);box-shadow:0 18px 36px rgba(15,23,42,.26);z-index:" +
+      (CONFIG.zIndexTooltip + 2) +
+      ";display:none;"
+  );
+
+  var regionCaptureOverlay = make(
+    "div",
+    "position:fixed;inset:0;display:none;pointer-events:auto;user-select:none;-webkit-user-select:none;cursor:crosshair;background:transparent;z-index:" +
+      (CONFIG.zIndexTooltip + 1) +
+      ";"
+  );
+
+  var drawerStub = make(
+    "div",
+    "position:fixed;top:0;right:0;width:332px;height:100%;border-left:1px solid rgba(255,255,255,.08);background:#101216;color:#fff;z-index:" +
+      (CONFIG.zIndexTooltip + 1) +
+      ";box-shadow:-14px 0 28px rgba(15,23,42,.18);display:none;"
+  );
+
+  var regionSelectBox = make(
+    "div",
+    "position:fixed;left:0;top:0;width:0;height:0;pointer-events:none;z-index:" +
+      (CONFIG.zIndexSelection + 1) +
+      ";border:2px solid #d946ef;background:rgba(217,70,239,.08);border-radius:20px;display:none;"
+  );
+
+  var recordComposer = make(
+    "div",
+    "position:fixed;right:28px;top:156px;width:336px;padding:16px;border-radius:24px;background:#16181d;border:1px solid rgba(255,255,255,.08);color:#fff;box-shadow:0 18px 36px rgba(15,23,42,.26);z-index:" +
+      (CONFIG.zIndexTooltip + 3) +
+      ";display:none;"
+  );
+
+  var v12Notice = make(
+    "div",
+    "position:fixed;left:50%;top:84px;transform:translateX(-50%);max-width:320px;padding:10px 14px;border-radius:14px;background:rgba(15,23,42,.92);border:1px solid rgba(255,255,255,.12);color:#fff;font:13px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;box-shadow:0 14px 30px rgba(15,23,42,.26);z-index:" +
+      (CONFIG.zIndexTooltip + 4) +
+      ";display:none;"
+  );
+
+  function modeButtonHtml(id, labelText, active, badgeText) {
+    return (
+      '<button type="button" data-v12-action="' +
+      esc(id) +
+      '" style="display:inline-flex;align-items:center;gap:8px;padding:10px 14px;border-radius:999px;border:0;background:' +
+      (active ? "#ffffff" : "transparent") +
+      ";color:" +
+      (active ? "#111827" : "rgba(255,255,255,.82)") +
+      ';font:14px/1.1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;' +
+      (active ? "font-weight:700;" : "") +
+      'cursor:pointer;white-space:nowrap;">' +
+      esc(labelText) +
+      (badgeText == null
+        ? ""
+        : '<span style="min-width:20px;height:20px;padding:0 6px;border-radius:999px;background:' +
+          (active ? "#111827" : "rgba(255,255,255,.1)") +
+          ";color:" +
+          (active ? "#fff" : "rgba(255,255,255,.9)") +
+          ';display:inline-flex;align-items:center;justify-content:center;font-size:11px;">' +
+          esc(String(badgeText)) +
+          "</span>") +
+      "</button>"
+    );
+  }
+
+  function renderTopbar() {
+    topbar.innerHTML =
+      modeButtonHtml("mode-select", "选择", isSelectMode()) +
+      modeButtonHtml("mode-record", "记录", isRecordMode(), isRecordMode() ? getRecordSubModeLabel() : null) +
+      modeButtonHtml("mode-measure", "测量", false) +
+      modeButtonHtml("toggle-drawer", "记录列表", state.v12.drawerOpen, getV12RecordCount());
+  }
+
+  function renderRecordMenu() {
+    if (!isRecordMode() || !state.v12.recordMenuOpen) {
+      recordMenu.style.display = "none";
+      return;
+    }
+
+    recordMenu.style.display = "block";
+    recordMenu.innerHTML =
+      '<button type="button" data-v12-action="record-submode-element" style="display:block;width:100%;padding:12px 14px;border:0;border-radius:14px;background:' +
+      (state.v12.recordSubMode === "element" ? "rgba(255,255,255,.08)" : "transparent") +
+      ";color:#fff;text-align:left;font:14px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;" +
+      (state.v12.recordSubMode === "element" ? "font-weight:600;" : "") +
+      'cursor:pointer;">元素</button>' +
+      '<button type="button" data-v12-action="record-submode-region" style="display:block;width:100%;margin-top:4px;padding:12px 14px;border:0;border-radius:14px;background:' +
+      (state.v12.recordSubMode === "region" ? "rgba(255,255,255,.08)" : "transparent") +
+      ";color:#fff;text-align:left;font:14px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;" +
+      (state.v12.recordSubMode === "region" ? "font-weight:600;" : "") +
+      'cursor:pointer;">区域</button>';
+  }
+
+  function renderDrawerStub() {
+    if (!state.v12.drawerOpen) {
+      drawerStub.style.display = "none";
+      return;
+    }
+
+    drawerStub.style.display = "block";
+    drawerStub.innerHTML =
+      '<div style="padding:22px 16px 16px;border-bottom:1px solid rgba(255,255,255,.08);">' +
+      '<small style="display:block;color:rgba(255,255,255,.38);font-size:11px;letter-spacing:.18em;text-transform:uppercase;margin-bottom:8px;">Record Drawer</small>' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">' +
+      '<h3 style="margin:0;font-size:22px;line-height:1.2;">本次记录 ' + esc(String(getV12RecordCount())) + "</h3>" +
+      '<button type="button" data-v12-action="toggle-drawer" style="border:1px solid rgba(255,255,255,.1);background:transparent;color:#fff;border-radius:12px;padding:8px 10px;font:12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;">收起</button>' +
+      "</div>" +
+      '<div style="margin-top:14px;color:rgba(255,255,255,.64);font-size:13px;line-height:1.8;">' +
+      "记录抽屉入口已接好，本步仅保留数量占位与开关动作。" +
+      "<br>完整列表、筛选、编辑、删除将在后续步骤接入。" +
+      "</div>" +
+      "</div>";
+  }
+
+  function renderV12Notice() {
+    if (!state.v12.noticeText) {
+      v12Notice.style.display = "none";
+      return;
+    }
+    v12Notice.style.display = "block";
+    v12Notice.textContent = state.v12.noticeText;
+  }
+
+  function shouldShowRegionCaptureOverlay() {
+    return isRecordRegionMode() && !state.v12.pendingRecord;
+  }
+
+  function renderRegionCaptureOverlay() {
+    regionCaptureOverlay.style.display = shouldShowRegionCaptureOverlay() ? "block" : "none";
+  }
+
+  function renderRegionSelection() {
+    if (!isRecordRegionMode()) {
+      regionSelectBox.style.display = "none";
+      regionSelectBox.style.width = "0";
+      regionSelectBox.style.height = "0";
+      return;
+    }
+
+    var rect = null;
+    if (state.v12.regionSelection.active && state.v12.regionSelection.moved) {
+      rect = getRegionSelectionRect();
+    } else if (
+      state.v12.pendingRecord &&
+      state.v12.pendingRecord.type === "region" &&
+      state.v12.pendingRecord.capture &&
+      state.v12.pendingRecord.capture.rect
+    ) {
+      rect = state.v12.pendingRecord.capture.rect;
+    }
+
+    if (!rect || rect.width <= 0 || rect.height <= 0) {
+      regionSelectBox.style.display = "none";
+      regionSelectBox.style.width = "0";
+      regionSelectBox.style.height = "0";
+      return;
+    }
+
+    regionSelectBox.style.display = "block";
+    regionSelectBox.style.transform = "translate(" + rect.left + "px," + rect.top + "px)";
+    regionSelectBox.style.width = rect.width + "px";
+    regionSelectBox.style.height = rect.height + "px";
+  }
+
+  function renderRecordComposer() {
+    var record = state.v12.pendingRecord;
+    if (!record) {
+      recordComposer.style.display = "none";
+      return;
+    }
+
+    var selectedCategory = getRecordCategory(record.category);
+    var menuHtml = "";
+    if (state.v12.categoryMenuOpen) {
+      menuHtml =
+        '<div style="position:absolute;top:46px;left:0;width:188px;padding:8px;border-radius:18px;background:#101216;border:1px solid rgba(255,255,255,.08);box-shadow:0 18px 32px rgba(15,23,42,.32);z-index:30;">' +
+        RECORD_CATEGORIES.map(function (item) {
+          return (
+            '<button type="button" data-v12-action="pick-category" data-category-id="' + esc(item.id) + '" style="display:flex;align-items:center;gap:12px;width:100%;padding:12px;border:0;border-radius:12px;background:' +
+            (item.id === selectedCategory.id ? "rgba(255,255,255,.06)" : "transparent") +
+            ';color:rgba(255,255,255,.88);font:14px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;text-align:left;">' +
+            '<span style="width:14px;text-align:center;color:#fff;font-weight:700;flex:0 0 auto;">' + (item.id === selectedCategory.id ? "✓" : "") + "</span>" +
+            '<span style="width:12px;height:12px;border-radius:50%;background:' + esc(item.color) + ';flex:0 0 auto;"></span>' +
+            "<span>" + esc(item.label) + "</span>" +
+            "</button>"
+          );
+        }).join("") +
+        "</div>";
+    }
+
+    recordComposer.style.display = "block";
+    recordComposer.innerHTML =
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;">' +
+      '<h4 style="margin:0;font-size:15px;font-weight:700;">新增记录</h4>' +
+      '<button type="button" data-v12-action="cancel-record" style="border:0;background:transparent;color:rgba(255,255,255,.78);font:16px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;">✕</button>' +
+      "</div>" +
+      '<div style="padding:10px 0 14px;color:rgba(255,255,255,.92);font-size:18px;line-height:1.4;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' +
+      esc(record.targetName) +
+      "</div>" +
+      '<div style="position:relative;display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">' +
+      '<button type="button" data-v12-action="toggle-category-menu" style="display:inline-flex;align-items:center;gap:8px;padding:10px 14px;border-radius:14px;background:rgba(255,255,255,.08);color:#fff;font:14px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;border:1px solid rgba(255,255,255,.08);cursor:pointer;">' +
+      '<span style="width:12px;height:12px;border-radius:50%;background:' + esc(selectedCategory.color) + ';flex:0 0 auto;"></span>' +
+      "<span>" + esc(selectedCategory.label) + "</span>" +
+      '<span style="opacity:.78;font-size:12px;">▼</span>' +
+      "</button>" +
+      menuHtml +
+      "</div>" +
+      '<textarea data-v12-action="record-note" placeholder="写下问题说明" style="width:100%;min-height:108px;padding:14px;border-radius:18px;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.05);color:rgba(255,255,255,.95);font:14px/1.8 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;resize:none;box-sizing:border-box;outline:none;">' +
+      esc(record.note || "") +
+      "</textarea>" +
+      '<div style="display:flex;gap:10px;margin-top:14px;">' +
+      '<button type="button" data-v12-action="save-record" style="flex:1;padding:12px 14px;border-radius:16px;font:14px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;border:0;background:#fff;color:#111827;font-weight:700;cursor:pointer;">保存进抽屉</button>' +
+      (record.type === "region"
+        ? '<button type="button" data-v12-action="reselect-region" style="padding:12px 14px;border-radius:16px;font:14px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;background:rgba(255,255,255,.06);color:#fff;border:1px solid rgba(255,255,255,.1);cursor:pointer;">重新框选</button>'
+        : "") +
+      '<button type="button" data-v12-action="cancel-record" style="padding:12px 14px;border-radius:16px;font:14px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;background:transparent;color:#fff;border:1px solid rgba(255,255,255,.1);cursor:pointer;">取消</button>' +
+      "</div>";
+  }
+
+  function focusRecordNoteEditor() {
+    var textarea = recordComposer.querySelector('textarea[data-v12-action="record-note"]');
+    if (!textarea) return;
+    var noteText = String((state.v12.pendingRecord && state.v12.pendingRecord.note) || "");
+    var start = Math.max(0, Math.min(state.v12.noteSelectionStart, noteText.length));
+    var end = Math.max(start, Math.min(state.v12.noteSelectionEnd, noteText.length));
+    if (document.activeElement !== textarea) {
+      textarea.focus({ preventScroll: true });
+    }
+    if (typeof textarea.setSelectionRange === "function") {
+      textarea.setSelectionRange(start, end);
+    }
+    state.v12.composerFocusPending = false;
+  }
+
+  function syncRecordComposerFocus() {
+    if (!state.v12.pendingRecord || !state.v12.composerFocusPending) return;
+    focusRecordNoteEditor();
+  }
+
+  function buildElementTargetName(el) {
+    var title = panelTitle(el);
+    return title ? title : "页面元素";
+  }
+
+  function buildElementTargetHint(el) {
+    return {
+      label: label(el),
+      className: classSummary(el),
+      tagName: el && el.tagName ? el.tagName.toLowerCase() : "",
+      text: truncateText((el && el.innerText) || "", 80)
+    };
+  }
+
+  function createElementPendingRecord(el) {
+    setRecordTarget(el);
+    var rect = el.getBoundingClientRect();
+    openPendingRecord(
+      createPendingRecord(
+        "element",
+        buildElementTargetName(el),
+        {
+          left: Math.round(rect.left),
+          top: Math.round(rect.top),
+          width: Math.round(rect.width),
+          height: Math.round(rect.height)
+        },
+        buildElementTargetHint(el)
+      )
+    );
+  }
+
+  function createRegionPendingRecord(rect) {
+    openPendingRecord(
+      createPendingRecord(
+        "region",
+        "区域记录",
+        {
+          left: Math.round(rect.left),
+          top: Math.round(rect.top),
+          width: Math.round(rect.width),
+          height: Math.round(rect.height)
+        },
+        {
+          label: "region-selection",
+          className: "",
+          tagName: "",
+          text: ""
+        }
+      )
+    );
+  }
+
+  function onV12Click(e) {
+    var target = e.target && e.target.closest ? e.target.closest("[data-v12-action]") : null;
+    if (!target) return;
+    var action = target.getAttribute("data-v12-action");
+    if (action === "mode-select") {
+      setV12Mode("select");
+    } else if (action === "mode-record") {
+      setV12Mode("record");
+    } else if (action === "mode-measure") {
+      schedule();
+    } else if (action === "toggle-drawer") {
+      toggleV12Drawer();
+    } else if (action === "record-submode-element") {
+      setV12RecordSubMode("element");
+    } else if (action === "record-submode-region") {
+      setV12RecordSubMode("region");
+    } else if (action === "toggle-category-menu") {
+      state.v12.categoryMenuOpen = !state.v12.categoryMenuOpen;
+      schedule();
+    } else if (action === "pick-category") {
+      if (state.v12.pendingRecord) {
+        state.v12.pendingRecord.category = target.getAttribute("data-category-id") || "layout";
+        state.v12.categoryMenuOpen = false;
+        var pickedCategory = getRecordCategory(state.v12.pendingRecord.category);
+        state.v12.pendingRecord.shot.thumb = placeholderShotData(
+          state.v12.pendingRecord.targetName,
+          pickedCategory.label,
+          state.v12.pendingRecord.type === "element" ? "元素记录" : "区域记录"
+        );
+        state.v12.composerFocusPending = true;
+        schedule();
+      }
+    } else if (action === "cancel-record") {
+      closePendingRecord();
+    } else if (action === "reselect-region") {
+      restartRegionRecordSelection();
+    } else if (action === "save-record") {
+      savePendingRecord();
+    }
+    e.preventDefault();
+    e.stopPropagation();
+  }
+
+  function onV12Input(e) {
+    var target = e.target;
+    if (!target || target.getAttribute("data-v12-action") !== "record-note") return;
+    if (!state.v12.pendingRecord) return;
+    state.v12.pendingRecord.note = target.value || "";
+    state.v12.noteSelectionStart = typeof target.selectionStart === "number" ? target.selectionStart : target.value.length;
+    state.v12.noteSelectionEnd = typeof target.selectionEnd === "number" ? target.selectionEnd : state.v12.noteSelectionStart;
+  }
+
+  function onRecordComposerFocusIn(e) {
+    var target = e.target;
+    if (!target || target.getAttribute("data-v12-action") !== "record-note") return;
+    state.v12.noteSelectionStart = typeof target.selectionStart === "number" ? target.selectionStart : 0;
+    state.v12.noteSelectionEnd = typeof target.selectionEnd === "number" ? target.selectionEnd : state.v12.noteSelectionStart;
+  }
+
+  function onRecordComposerKeyUp(e) {
+    var target = e.target;
+    if (!target || target.getAttribute("data-v12-action") !== "record-note") return;
+    state.v12.noteSelectionStart = typeof target.selectionStart === "number" ? target.selectionStart : 0;
+    state.v12.noteSelectionEnd = typeof target.selectionEnd === "number" ? target.selectionEnd : state.v12.noteSelectionStart;
+  }
+
+  function onRecordComposerMouseUp(e) {
+    var target = e.target;
+    if (!target || target.getAttribute("data-v12-action") !== "record-note") return;
+    state.v12.noteSelectionStart = typeof target.selectionStart === "number" ? target.selectionStart : 0;
+    state.v12.noteSelectionEnd = typeof target.selectionEnd === "number" ? target.selectionEnd : state.v12.noteSelectionStart;
+  }
+
   tooltip.innerHTML =
     '<div id="vqa-head" style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;background:' +
     PANEL_UI.headBg +
@@ -2211,7 +3016,7 @@
   var btnMeasure = tooltip.querySelector("#vqa-measure");
   var btnReset = tooltip.querySelector("#vqa-reset");
   function updatePanelChrome() {
-    if (hasSelectedEl()) {
+    if (shouldShowSelectedPanel()) {
       tooltip.style.minWidth = PANEL_UI.panelMinWidth;
       tooltip.style.maxWidth = PANEL_UI.panelMaxWidth;
       tooltip.style.borderRadius = PANEL_UI.radius;
@@ -2258,6 +3063,18 @@
     floating.style.opacity = state.panelCollapsed ? "0.5" : "1";
     floating.style.border = state.panelCollapsed ? "0" : "2px solid #FF8A00";
     schedule();
+  }
+
+  function shouldLockPageScroll() {
+    return false;
+  }
+
+  function syncPageScrollLock() {
+    state.scrollLock.active = false;
+  }
+
+  function releasePageScrollLock() {
+    state.scrollLock.active = false;
   }
   function clearLayer(layer) {
     layer.innerHTML = "";
@@ -2444,6 +3261,11 @@
     highlight.style.transform = "translate(" + r.left + "px," + r.top + "px)";
     highlight.style.width = r.width + "px";
     highlight.style.height = r.height + "px";
+    if (isRecordElementMode() && getRecordTargetEl()) {
+      highlight.style.borderColor = "#D946EF";
+      highlight.style.background = "rgba(217,70,239,.14)";
+      return;
+    }
     highlight.style.borderColor = hasSelectedEl() ? CONFIG.colors.frozen : CONFIG.colors.highlight;
     highlight.style.background = hasSelectedEl() ? "rgba(255,138,0,.14)" : "rgba(47,123,255,.14)";
   }
@@ -2567,7 +3389,8 @@
   }
 
   function renderTooltip(el) {
-    if (hasSelectedEl()) {
+    if (!shouldShowHoverCard() && !shouldShowSelectedPanel()) return;
+    if (shouldShowSelectedPanel()) {
       if (isEditingPanel()) return;
       renderSelectedPanel(getSelectedEl());
       return;
@@ -2703,8 +3526,16 @@
   }
   function refresh() {
     initFloatingPos();
+    syncPageScrollLock();
     if (state.panelCollapsed) {
       tooltip.style.display = "none";
+      topbar.style.display = "none";
+      recordMenu.style.display = "none";
+      regionCaptureOverlay.style.display = "none";
+      drawerStub.style.display = "none";
+      recordComposer.style.display = "none";
+      v12Notice.style.display = "none";
+      regionSelectBox.style.display = "none";
       highlight.style.display = "none";
       selectA.style.display = "none";
       selectB.style.display = "none";
@@ -2713,22 +3544,31 @@
       return;
     }
 
-    tooltip.style.display = "block";
-    highlight.style.display = "block";
-    spacingLayer.style.display = "block";
-    measureLayer.style.display = "block";
+    tooltip.style.display = isRecordMode() || state.v12.drawerOpen ? "none" : "block";
+    topbar.style.display = "flex";
+    highlight.style.display = shouldShowHoverHighlight() && getActiveEl() ? "block" : "none";
+    spacingLayer.style.display = isRecordMode() ? "none" : "block";
+    measureLayer.style.display = isRecordMode() ? "none" : "block";
     updatePanelChrome();
+    renderTopbar();
+    renderRecordMenu();
+    renderRegionCaptureOverlay();
+    renderDrawerStub();
+    renderRecordComposer();
+    renderV12Notice();
+    renderRegionSelection();
     var el = getActiveEl();
-    state.primaryMeasure = hasSelectedEl() ? resolvePrimaryMeasure(state.mouseX, state.mouseY, state.hoveredEl) : null;
+    state.primaryMeasure = isRecordMode() ? null : hasSelectedEl() ? resolvePrimaryMeasure(state.mouseX, state.mouseY, state.hoveredEl) : null;
     updateHighlight(el);
-    updateBox(selectA, state.measureMode && !state.primaryMeasure ? state.measureA : null);
-    updateBox(selectB, getPrimaryHoverMeasureTarget() || (state.measureMode && !state.primaryMeasure ? state.measureB : null));
+    updateBox(selectA, !isRecordMode() && state.measureMode && !state.primaryMeasure ? state.measureA : null);
+    updateBox(selectB, !isRecordMode() ? getPrimaryHoverMeasureTarget() || (state.measureMode && !state.primaryMeasure ? state.measureB : null) : null);
     if (!isEditingPanel()) renderTooltip(el);
-    if (hasSelectedEl()) {
+    if (shouldShowSelectedPanel()) {
       positionSelectedPanel(getSelectedEl());
-    } else {
+    } else if (shouldShowHoverCard()) {
       positionHoverTooltip();
     }
+    syncRecordComposerFocus();
     addPrimaryMeasureGuides(state.primaryMeasure);
     addAuxMeasureGuides();
     btnMeasure.textContent = "辅助测距";
@@ -2751,8 +3591,14 @@
   function onMouseMove(e) {
     if (state.scrub.active) return;
     if (state.floatDragging) return;
+    if (state.v12.pendingRecord) return;
     state.mouseX = e.clientX;
     state.mouseY = e.clientY;
+
+    if (shouldShowRegionCaptureOverlay()) {
+      setPageHover(null);
+      return;
+    }
 
     if (state.dragging) {
       state.panelX = clamp(e.clientX - state.dragOffsetX, 8, window.innerWidth - tooltip.offsetWidth - 8);
@@ -2763,21 +3609,98 @@
 
     var el = fromPoint(e.clientX, e.clientY);
     setPageHover(el);
-
-    if (hasSelectedEl() && getSelectedEl()) {
+    if (!isRecordMode() && hasSelectedEl() && getSelectedEl()) {
       state.spacingSide = nearestSide(getSelectedEl(), e.clientX, e.clientY);
-    } else if (el) {
+    } else if (!isRecordMode() && el) {
       state.spacingSide = nearestSide(el, e.clientX, e.clientY);
     }
 
     if (!state.panelCollapsed) schedule();
   }
+
+  function startRegionCapture(e) {
+    if (state.panelCollapsed) return;
+    if (!shouldShowRegionCaptureOverlay()) return;
+    state.v12.regionSelection.active = true;
+    state.v12.regionSelection.moved = false;
+    state.v12.regionSelection.startX = e.clientX;
+    state.v12.regionSelection.startY = e.clientY;
+    state.v12.regionSelection.currentX = e.clientX;
+    state.v12.regionSelection.currentY = e.clientY;
+    e.preventDefault();
+    e.stopPropagation();
+    schedule();
+  }
+
+  function updateRegionCapture(e) {
+    if (!state.v12.regionSelection.active) return;
+    state.v12.regionSelection.currentX = e.clientX;
+    state.v12.regionSelection.currentY = e.clientY;
+    if (!state.v12.regionSelection.moved) {
+      state.v12.regionSelection.moved =
+        Math.abs(state.v12.regionSelection.currentX - state.v12.regionSelection.startX) > 4 ||
+        Math.abs(state.v12.regionSelection.currentY - state.v12.regionSelection.startY) > 4;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    schedule();
+  }
+
+  function finishRegionCapture(e) {
+    if (!state.v12.regionSelection.active) return;
+    var shouldCreate = isRecordRegionMode() && state.v12.regionSelection.moved;
+    var rect = shouldCreate ? getRegionSelectionRect() : null;
+    resetRegionSelection();
+    if (shouldCreate && rect && rect.width >= 12 && rect.height >= 12) {
+      state.v12.suppressNextClick = true;
+      createRegionPendingRecord(rect);
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    schedule();
+  }
+
+  function onRegionOverlayClick(e) {
+    e.preventDefault();
+    e.stopPropagation();
+  }
+
+  function onRegionOverlaySelectStart(e) {
+    e.preventDefault();
+  }
+
   function onClick(e) {
     if (state.panelCollapsed) return;
+    if (state.v12.suppressNextClick) {
+      state.v12.suppressNextClick = false;
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    if (topbar.contains(e.target) || recordMenu.contains(e.target) || drawerStub.contains(e.target) || recordComposer.contains(e.target)) return;
     if (tooltip.contains(e.target)) return;
     state.debugRawTarget = e.target || null;
     var el = fromPoint(e.clientX, e.clientY);
     state.debugNormalizedTarget = el || null;
+
+    if (isRecordMode()) {
+      if (state.v12.pendingRecord) {
+        state.v12.categoryMenuOpen = false;
+        schedule();
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+      if (isRecordElementMode() && el) {
+        createElementPendingRecord(el);
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
 
     if (state.measureMode) {
       if (!el) return;
@@ -2858,12 +3781,26 @@
     schedule();
   }
 
+  function shouldSuppressGlobalHotkeys(e) {
+    var target = e && e.target;
+    var active = document.activeElement;
+    var activeTag = (active && active.tagName ? active.tagName : "").toLowerCase();
+    if (active && (active.isContentEditable || /input|textarea|select/.test(activeTag))) return true;
+    if (target && target.closest) {
+      if (target.closest("[data-v12-action=\"record-note\"]")) return true;
+      if (state.v12.categoryMenuOpen && target.closest("[data-v12-action=\"toggle-category-menu\"], [data-v12-action=\"pick-category\"]")) return true;
+    }
+    if (active && state.v12.categoryMenuOpen && recordComposer.contains(active)) return true;
+    return false;
+  }
+
   function onKeyDown(e) {
     if (e.__visualQAHandled) return;
     var key = (e.key || "").toLowerCase();
     if (key === "alt" || key === "shift" || key === "meta" || key === "control" || key === "ctrl") {
       updateScrubHoverCursor(!!e.altKey);
     }
+    if (shouldSuppressGlobalHotkeys(e)) return;
     if (key === CONFIG.hotkeys.exit || key === "esc") {
       e.__visualQAHandled = true;
       e.preventDefault();
@@ -2878,9 +3815,6 @@
       toggleCollapsed();
       return;
     }
-
-    var active = document.activeElement;
-    if (active && (active.isContentEditable || /input|textarea|select/.test((active.tagName || "").toLowerCase()))) return;
 
     if (key === CONFIG.hotkeys.measure) {
       e.__visualQAHandled = true;
@@ -2936,6 +3870,8 @@
 
   function destroy() {
     stopNumericScrub({ silent: true });
+    resetRegionSelection();
+    releasePageScrollLock();
     document.removeEventListener("mousemove", onMouseMove, true);
     document.removeEventListener("mousemove", onScrubMouseMove, true);
     document.removeEventListener("mousemove", onFloatMove, true);
@@ -2954,16 +3890,35 @@
     tooltip.removeEventListener("mousemove", onPanelMouseMove, true);
     tooltip.removeEventListener("mouseleave", onPanelMouseLeave, true);
     tooltip.removeEventListener("mousedown", onPanelMouseDown, true);
+    topbar.removeEventListener("click", onV12Click, true);
+    recordMenu.removeEventListener("click", onV12Click, true);
+    drawerStub.removeEventListener("click", onV12Click, true);
+    recordComposer.removeEventListener("click", onV12Click, true);
+    recordComposer.removeEventListener("input", onV12Input, true);
+    recordComposer.removeEventListener("focusin", onRecordComposerFocusIn, true);
+    recordComposer.removeEventListener("keyup", onRecordComposerKeyUp, true);
+    recordComposer.removeEventListener("mouseup", onRecordComposerMouseUp, true);
+    regionCaptureOverlay.removeEventListener("mousedown", startRegionCapture, true);
+    regionCaptureOverlay.removeEventListener("mousemove", updateRegionCapture, true);
+    regionCaptureOverlay.removeEventListener("mouseup", finishRegionCapture, true);
+    regionCaptureOverlay.removeEventListener("click", onRegionOverlayClick, true);
+    regionCaptureOverlay.removeEventListener("selectstart", onRegionOverlaySelectStart, true);
     window.removeEventListener("resize", schedule, true);
     window.removeEventListener("scroll", schedule, true);
+    window.removeEventListener("message", onBridgeMessage, false);
     head.removeEventListener("mousedown", startDrag, true);
     floating.removeEventListener("mousedown", startFloatDrag, true);
     floating.removeEventListener("mouseenter", onFloatEnter, true);
     floating.removeEventListener("mouseleave", onFloatLeave, true);
     btnMeasure.removeEventListener("click", onMeasureClick, true);
-    [highlight, selectA, selectB, tooltip, spacingLayer, measureLayer, floating].forEach(function (el) {
+    [highlight, selectA, selectB, tooltip, spacingLayer, measureLayer, floating, topbar, recordMenu, regionCaptureOverlay, drawerStub, regionSelectBox, recordComposer, v12Notice].forEach(function (el) {
       if (el && el.parentNode) el.parentNode.removeChild(el);
     });
+    Object.keys(bridgePending).forEach(function (requestId) {
+      bridgePending[requestId].reject(new Error("Visual QA destroyed"));
+      delete bridgePending[requestId];
+    });
+    window.clearTimeout(showV12Notice._timerId || 0);
     if (state.rafId) cancelAnimationFrame(state.rafId);
     delete window.__visualQAInspectorFinal__;
   }
@@ -3040,6 +3995,19 @@
 
   btnMeasure.addEventListener("click", onMeasureClick, true);
   head.addEventListener("mousedown", startDrag, true);
+  topbar.addEventListener("click", onV12Click, true);
+  recordMenu.addEventListener("click", onV12Click, true);
+  drawerStub.addEventListener("click", onV12Click, true);
+    recordComposer.addEventListener("click", onV12Click, true);
+    recordComposer.addEventListener("input", onV12Input, true);
+    recordComposer.addEventListener("focusin", onRecordComposerFocusIn, true);
+    recordComposer.addEventListener("keyup", onRecordComposerKeyUp, true);
+    recordComposer.addEventListener("mouseup", onRecordComposerMouseUp, true);
+  regionCaptureOverlay.addEventListener("mousedown", startRegionCapture, true);
+  regionCaptureOverlay.addEventListener("mousemove", updateRegionCapture, true);
+  regionCaptureOverlay.addEventListener("mouseup", finishRegionCapture, true);
+  regionCaptureOverlay.addEventListener("click", onRegionOverlayClick, true);
+  regionCaptureOverlay.addEventListener("selectstart", onRegionOverlaySelectStart, true);
   floating.addEventListener("mousedown", startFloatDrag, true);
   floating.addEventListener("mouseenter", onFloatEnter, true);
   floating.addEventListener("mouseleave", onFloatLeave, true);
@@ -3063,8 +4031,10 @@
   document.addEventListener("mouseup", stopFloatDrag, true);
   window.addEventListener("resize", schedule, true);
   window.addEventListener("scroll", schedule, true);
+  window.addEventListener("message", onBridgeMessage, false);
 
   setCollapsed(false);
   window.__visualQAInspectorFinal__ = { destroy: destroy };
+  initializeV12DraftState();
   refresh();
 })();
