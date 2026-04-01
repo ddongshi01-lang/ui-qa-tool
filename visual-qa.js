@@ -245,6 +245,11 @@
     await bridgeRequest("clear-draft", { pageKey: pageKey });
   }
 
+  function isBridgeUnavailableError(err) {
+    var message = err && err.message ? err.message : String(err || "");
+    return /Bridge runtime unavailable|Bridge timeout|Extension context invalidated/i.test(message);
+  }
+
   async function initializeV12DraftState() {
     var pageKey = normalizePageKey(location.href);
     if (!pageKey) return;
@@ -261,8 +266,10 @@
     } catch (err) {
       state.v12.draft = buildEmptyDraft(pageKey);
       state.v12.bridgeReady = false;
-      state.v12.draftStatus = "error";
-      console.warn("[visual-qa][v1.2] draft bridge unavailable:", err);
+      state.v12.draftStatus = "ready";
+      if (!isBridgeUnavailableError(err)) {
+        console.warn("[visual-qa][v1.2] draft bridge unavailable:", err);
+      }
     }
   }
 
@@ -447,8 +454,10 @@
       state.v12.draftStatus = "ready";
     } catch (err) {
       state.v12.draft = nextDraft;
-      state.v12.draftStatus = "error";
-      console.warn("[visual-qa][v1.2] draft save failed:", err);
+      state.v12.draftStatus = isBridgeUnavailableError(err) ? "ready" : "error";
+      if (!isBridgeUnavailableError(err)) {
+        console.warn("[visual-qa][v1.2] draft save failed:", err);
+      }
     } finally {
       state.v12.draftPersisting = false;
       schedule();
@@ -2782,6 +2791,17 @@
     regionSelectBox.style.height = rect.height + "px";
   }
 
+  function getRecordComposerRenderKey(record) {
+    return JSON.stringify({
+      id: record.id,
+      type: record.type,
+      targetName: record.targetName,
+      category: record.category,
+      note: record.note || "",
+      categoryMenuOpen: !!state.v12.categoryMenuOpen
+    });
+  }
+
   function renderRecordComposer() {
     var record = state.v12.pendingRecord;
     if (!record) {
@@ -2809,14 +2829,7 @@
         "</div>";
     }
 
-    var nextRenderKey = JSON.stringify({
-      id: record.id,
-      type: record.type,
-      targetName: record.targetName,
-      category: record.category,
-      note: record.note || "",
-      categoryMenuOpen: !!state.v12.categoryMenuOpen
-    });
+    var nextRenderKey = getRecordComposerRenderKey(record);
 
     recordComposer.style.display = "block";
     if (recordComposerRenderKey === nextRenderKey) return;
@@ -2970,6 +2983,7 @@
     if (!target || target.getAttribute("data-v12-action") !== "record-note") return;
     if (!state.v12.pendingRecord) return;
     state.v12.pendingRecord.note = target.value || "";
+    recordComposerRenderKey = getRecordComposerRenderKey(state.v12.pendingRecord);
     state.v12.noteSelectionStart = typeof target.selectionStart === "number" ? target.selectionStart : target.value.length;
     state.v12.noteSelectionEnd = typeof target.selectionEnd === "number" ? target.selectionEnd : state.v12.noteSelectionStart;
   }
