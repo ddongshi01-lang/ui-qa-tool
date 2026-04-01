@@ -169,6 +169,7 @@
 
   var bridgeRequestSeq = 0;
   var bridgePending = {};
+  var recordComposerRenderKey = "";
 
   function clamp(v, min, max) {
     return Math.max(min, Math.min(max, v));
@@ -2785,6 +2786,7 @@
     var record = state.v12.pendingRecord;
     if (!record) {
       recordComposer.style.display = "none";
+      recordComposerRenderKey = "";
       return;
     }
 
@@ -2807,7 +2809,18 @@
         "</div>";
     }
 
+    var nextRenderKey = JSON.stringify({
+      id: record.id,
+      type: record.type,
+      targetName: record.targetName,
+      category: record.category,
+      note: record.note || "",
+      categoryMenuOpen: !!state.v12.categoryMenuOpen
+    });
+
     recordComposer.style.display = "block";
+    if (recordComposerRenderKey === nextRenderKey) return;
+    recordComposerRenderKey = nextRenderKey;
     recordComposer.innerHTML =
       '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;">' +
       '<h4 style="margin:0;font-size:15px;font-weight:700;">新增记录</h4>' +
