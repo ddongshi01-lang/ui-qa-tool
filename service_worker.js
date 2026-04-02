@@ -40,6 +40,23 @@ async function clearDraft(pageKey) {
   return true;
 }
 
+function captureVisibleTab(windowId) {
+  return new Promise(function (resolve, reject) {
+    chrome.tabs.captureVisibleTab(windowId, { format: "png" }, function (dataUrl) {
+      var runtimeError = chrome.runtime && chrome.runtime.lastError ? chrome.runtime.lastError : null;
+      if (runtimeError) {
+        reject(new Error(runtimeError.message || "Failed to capture visible tab"));
+        return;
+      }
+      if (!dataUrl) {
+        reject(new Error("Empty capture result"));
+        return;
+      }
+      resolve(dataUrl);
+    });
+  });
+}
+
 chrome.action.onClicked.addListener(async (tab) => {
   if (!tab || !tab.id) return;
 
@@ -95,6 +112,18 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
 
     if (action === "clear-draft") {
       sendResponse({ ok: true, cleared: await clearDraft(message.pageKey) });
+      return;
+    }
+
+    if (action === "capture-visible-tab") {
+      if (!sender || !sender.tab || typeof sender.tab.windowId !== "number") {
+        sendResponse({ ok: false, error: "Missing sender window context" });
+        return;
+      }
+      sendResponse({
+        ok: true,
+        dataUrl: await captureVisibleTab(sender.tab.windowId)
+      });
       return;
     }
 

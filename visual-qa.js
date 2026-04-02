@@ -129,6 +129,7 @@
       mode: "select",
       recordSubMode: "element",
       drawerOpen: false,
+      drawerCategoryFilter: "all",
       draft: null,
       draftStatus: "idle",
       bridgeReady: false,
@@ -170,6 +171,10 @@
   var bridgeRequestSeq = 0;
   var bridgePending = {};
   var recordComposerRenderKey = "";
+  var drawerRenderKey = "";
+  var draftPersistTimer = 0;
+  var recordShotCaptureSeq = 0;
+  var recordShotCaptureTokens = {};
 
   function clamp(v, min, max) {
     return Math.max(min, Math.min(max, v));
@@ -208,9 +213,10 @@
     pending.reject(new Error(data.payload && data.payload.error ? data.payload.error : "Bridge request failed"));
   }
 
-  function bridgeRequest(action, payload) {
+  function bridgeRequest(action, payload, timeoutMs) {
     return new Promise(function (resolve, reject) {
       var requestId = "vqa-" + Date.now() + "-" + bridgeRequestSeq++;
+      var requestTimeoutMs = typeof timeoutMs === "number" ? timeoutMs : 3000;
       bridgePending[requestId] = { resolve: resolve, reject: reject };
       window.postMessage(
         {
@@ -227,7 +233,7 @@
         if (!bridgePending[requestId]) return;
         delete bridgePending[requestId];
         reject(new Error("Bridge timeout"));
-      }, 3000);
+      }, requestTimeoutMs);
     });
   }
 
@@ -285,6 +291,239 @@
     return draft && Array.isArray(draft.records) ? draft.records.length : 0;
   }
 
+  function getV12DraftRecords() {
+    var draft = state.v12.draft;
+    return draft && Array.isArray(draft.records) ? draft.records : [];
+  }
+
+  function getDrawerCategoryFilter() {
+    return state.v12.drawerCategoryFilter || "all";
+  }
+
+  function setDrawerCategoryFilter(filterId) {
+    var next = filterId || "all";
+    if (next === state.v12.drawerCategoryFilter) return;
+    state.v12.drawerCategoryFilter = next;
+    schedule();
+  }
+
+  function getDrawerVisibleRecords() {
+    var records = getV12DraftRecords().slice();
+    var filterId = getDrawerCategoryFilter();
+    if (filterId !== "all") {
+      records = records.filter(function (record) {
+        return record && record.category === filterId;
+      });
+    }
+    records.sort(function (a, b) {
+      var at = a && a.createdAt ? Date.parse(a.createdAt) || 0 : 0;
+      var bt = b && b.createdAt ? Date.parse(b.createdAt) || 0 : 0;
+      return bt - at;
+    });
+    return records;
+  }
+
+  function pad2(v) {
+    return String(v).padStart(2, "0");
+  }
+
+  function formatRecordTime(iso) {
+    if (!iso) return "";
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return "";
+    return (
+      d.getFullYear() +
+      "-" +
+      pad2(d.getMonth() + 1) +
+      "-" +
+      pad2(d.getDate()) +
+      " " +
+      pad2(d.getHours()) +
+      ":" +
+      pad2(d.getMinutes())
+    );
+  }
+
+  function getRecordPageSummary(record) {
+    if (!record) return "";
+    var title = record.pageTitle ? String(record.pageTitle).trim() : "";
+    var host = "";
+    try {
+      host = record.pageUrl ? new URL(record.pageUrl).hostname : "";
+    } catch (err) {
+      host = "";
+    }
+    if (title && host && title !== host) return truncateText(title + " · " + host, 46);
+    return truncateText(title || host || "当前页面", 46);
+  }
+
+  function getRecordLocationSummary(record) {
+    if (!record) return "";
+    var rect = record.capture && record.capture.rect ? record.capture.rect : null;
+    if (!rect) return "未记录位置";
+    return truncateText(
+      "x " + rect.left + " / y " + rect.top + " / " + rect.width + " × " + rect.height,
+      42
+    );
+  }
+
+  function getDrawerRenderKey() {
+    var records = getDrawerVisibleRecords();
+    var ids = [];
+    for (var i = 0; i < records.length; i++) {
+      ids.push(records[i] && records[i].id ? records[i].id : "");
+    }
+    return [state.v12.drawerOpen ? "open" : "closed", getDrawerCategoryFilter(), getV12RecordCount(), ids.join("|")].join("::");
+  }
+
+  function getDrawerRecordThumbHtml(record) {
+    var thumb = record && record.shot && record.shot.thumb ? String(record.shot.thumb) : "";
+    var title = esc(record && record.targetName ? record.targetName : "无标题记录");
+    var category = getRecordCategory(record && record.category ? record.category : "layout");
+    var badge = esc(category.label || "布局");
+    if (thumb) {
+      return (
+        '<div style="height:100%;box-sizing:border-box;padding:12px;background:#0f172a;">' +
+        '<img alt="缩略图" src="' +
+        esc(thumb) +
+        '" style="display:block;width:100%;height:100%;object-fit:cover;border-radius:16px;border:1px solid rgba(255,255,255,.16);background:#fff;" />' +
+        "</div>"
+      );
+    }
+    return (
+      '<div style="height:100%;box-sizing:border-box;padding:12px;background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);">' +
+      '<div style="height:100%;box-sizing:border-box;padding:12px;border-radius:16px;border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.05);display:flex;flex-direction:column;justify-content:space-between;">' +
+      '<div style="color:rgba(255,255,255,.72);font-size:12px;line-height:1.5;">暂无截图</div>' +
+      '<div style="color:#fff;font-size:14px;font-weight:700;line-height:1.4;">' +
+      title +
+      "</div>" +
+      '<div style="display:inline-flex;align-self:flex-start;padding:5px 8px;border-radius:999px;background:rgba(0,0,0,.18);font-size:11px;color:rgba(255,255,255,.9);">' +
+      badge +
+      "</div>" +
+      "</div>" +
+      "</div>"
+    );
+  }
+
+  function getDrawerRecordCardHtml(record, index) {
+    var category = getRecordCategory(record && record.category ? record.category : "layout");
+    var note = record && record.note ? String(record.note).trim() : "";
+    var targetName = record && record.targetName ? String(record.targetName) : "未命名记录";
+    var pageSummary = getRecordPageSummary(record);
+    var timeText = formatRecordTime(record && record.createdAt ? record.createdAt : "");
+    var locationText = getRecordLocationSummary(record);
+    var thumbHtml = getDrawerRecordThumbHtml(record);
+    return (
+      '<article style="overflow:hidden;border-radius:22px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.04);">' +
+      '<div style="height:116px;">' +
+      thumbHtml +
+      "</div>" +
+      '<div style="padding:14px;">' +
+      '<div style="display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:10px;">' +
+      '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;">' +
+      '<span style="display:inline-block;padding:5px 9px;border-radius:999px;background:#fff;color:#111827;font-size:12px;font-weight:700;">' +
+      esc(category.label) +
+      "</span>" +
+      '<span style="color:rgba(255,255,255,.46);font-size:12px;">' +
+      esc(timeText) +
+      "</span>" +
+      "</div>" +
+      '<div style="color:rgba(255,255,255,.46);font-size:12px;white-space:nowrap;">#' +
+      esc(String(index + 1)) +
+      "</div>" +
+      "</div>" +
+      '<div style="font-size:15px;line-height:1.7;font-weight:700;margin-bottom:8px;color:#fff;">' +
+      esc(targetName) +
+      "</div>" +
+      '<textarea data-v12-action="drawer-note" data-record-id="' +
+      esc(record && record.id ? record.id : "") +
+      '" placeholder="写下一句话备注" style="width:100%;min-height:80px;padding:12px 12px 11px;border-radius:16px;border:1px solid rgba(255,255,255,.09);background:rgba(255,255,255,.05);color:rgba(255,255,255,.96);font:13px/1.7 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;resize:none;box-sizing:border-box;outline:none;overflow:auto;">' +
+      esc(note) +
+      "</textarea>" +
+      '<div style="display:grid;grid-template-columns:1fr;gap:6px;margin-top:10px;color:rgba(255,255,255,.66);font-size:12px;line-height:1.7;">' +
+      '<div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">页面：' +
+      esc(pageSummary) +
+      "</div>" +
+      '<div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">位置：' +
+      esc(locationText) +
+      "</div>" +
+      "</div>" +
+      '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;">' +
+      '<button type="button" data-v12-action="drawer-delete" data-record-id="' +
+      esc(record && record.id ? record.id : "") +
+      '" style="padding:9px 12px;border-radius:12px;border:1px solid rgba(255,255,255,.1);background:transparent;color:#fff;font:12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;">删除</button>' +
+      "</div>" +
+      "</div>" +
+      "</article>"
+    );
+  }
+
+  async function clearCurrentPageDraft() {
+    var draft = state.v12.draft;
+    var pageKey = draft && draft.pageKey ? draft.pageKey : normalizePageKey(location.href);
+    if (!pageKey) return;
+    window.clearTimeout(draftPersistTimer);
+    draftPersistTimer = 0;
+    var cleared = false;
+    try {
+      await clearDraftFromBridge(pageKey);
+      cleared = true;
+    } catch (err) {
+      if (!isBridgeUnavailableError(err)) {
+        console.warn("[visual-qa][v1.2] draft clear failed:", err);
+      }
+    }
+    state.v12.draft = buildEmptyDraft(pageKey);
+    state.v12.drawerCategoryFilter = "all";
+    drawerRenderKey = "";
+    if (!cleared) {
+      await persistCurrentDraft();
+    }
+    schedule();
+  }
+
+  function queueDraftPersist() {
+    window.clearTimeout(draftPersistTimer);
+    draftPersistTimer = window.setTimeout(function () {
+      draftPersistTimer = 0;
+      persistCurrentDraft();
+    }, 220);
+  }
+
+  function updateDraftRecordNote(recordId, value) {
+    var note = value == null ? "" : String(value);
+    var draft = state.v12.draft;
+    if (!draft || !Array.isArray(draft.records) || !recordId) return;
+    for (var i = 0; i < draft.records.length; i++) {
+      if (draft.records[i] && draft.records[i].id === recordId) {
+        draft.records[i].note = note;
+        draft.records[i].updatedAt = new Date().toISOString();
+        break;
+      }
+    }
+    if (state.v12.pendingRecord && state.v12.pendingRecord.id === recordId) {
+      state.v12.pendingRecord.note = note;
+      state.v12.pendingRecord.updatedAt = new Date().toISOString();
+    }
+    queueDraftPersist();
+  }
+
+  async function deleteDraftRecord(recordId) {
+    var draft = state.v12.draft;
+    if (!draft || !Array.isArray(draft.records) || !recordId) return;
+    var nextRecords = [];
+    for (var i = 0; i < draft.records.length; i++) {
+      if (draft.records[i] && draft.records[i].id !== recordId) {
+        nextRecords.push(draft.records[i]);
+      }
+    }
+    draft.records = nextRecords;
+    if (state.v12.pendingRecord && state.v12.pendingRecord.id === recordId) {
+      state.v12.pendingRecord = null;
+    }
+    await persistCurrentDraft();
+  }
+
   function isSelectMode() {
     return state.v12.mode === "select";
   }
@@ -339,6 +578,7 @@
     state.v12.mode = mode;
     state.v12.recordMenuOpen = mode === "record";
     if (mode !== "record") {
+      if (state.v12.pendingRecord) discardPendingShotCapture(state.v12.pendingRecord.id);
       state.v12.categoryMenuOpen = false;
       state.v12.pendingRecord = null;
       resetRegionSelection();
@@ -354,13 +594,6 @@
     if (state.v12.pendingRecord) {
       showV12Notice("请先保存或取消当前记录");
       return;
-    }
-    if (!state.v12.drawerOpen && isRecordMode()) {
-      state.v12.mode = "select";
-      state.v12.recordMenuOpen = false;
-      state.v12.categoryMenuOpen = false;
-      clearRecordTarget();
-      resetRegionSelection();
     }
     state.v12.drawerOpen = !state.v12.drawerOpen;
     schedule();
@@ -421,20 +654,347 @@
     return "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(svg);
   }
 
-  function placeholderShotData(targetName, categoryLabel, typeLabel) {
+  function placeholderShotDataSized(targetName, categoryLabel, typeLabel, width, height) {
     var title = esc(targetName || "记录");
     var badge = esc(categoryLabel || "布局");
     var meta = esc(typeLabel || "记录");
     return dataUrlFromSvg(
-      '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180" viewBox="0 0 320 180">' +
+      '<svg xmlns="http://www.w3.org/2000/svg" width="' +
+        width +
+        '" height="' +
+        height +
+        '" viewBox="0 0 ' +
+        width +
+        " " +
+        height +
+        '">' +
         '<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#111827"/><stop offset="1" stop-color="#334155"/></linearGradient></defs>' +
-        '<rect width="320" height="180" rx="20" fill="url(#g)"/>' +
-        '<rect x="18" y="18" width="284" height="144" rx="16" fill="rgba(255,255,255,0.06)" stroke="rgba(255,255,255,0.18)"/>' +
-        '<text x="30" y="52" fill="#ffffff" font-size="14" font-family="Arial, sans-serif">' + meta + '</text>' +
-        '<text x="30" y="88" fill="#ffffff" font-size="22" font-weight="700" font-family="Arial, sans-serif">' + title + '</text>' +
-        '<text x="30" y="128" fill="rgba(255,255,255,0.78)" font-size="14" font-family="Arial, sans-serif">' + badge + '</text>' +
+        '<rect width="' +
+        width +
+        '" height="' +
+        height +
+        '" rx="20" fill="url(#g)"/>' +
+        '<rect x="18" y="18" width="' +
+        Math.max(0, width - 36) +
+        '" height="' +
+        Math.max(0, height - 36) +
+        '" rx="16" fill="rgba(255,255,255,0.06)" stroke="rgba(255,255,255,0.18)"/>' +
+        '<text x="30" y="52" fill="#ffffff" font-size="14" font-family="Arial, sans-serif">' +
+        meta +
+        '</text>' +
+        '<text x="30" y="88" fill="#ffffff" font-size="22" font-weight="700" font-family="Arial, sans-serif">' +
+        title +
+        '</text>' +
+        '<text x="30" y="128" fill="rgba(255,255,255,0.78)" font-size="14" font-family="Arial, sans-serif">' +
+        badge +
+        '</text>' +
       '</svg>'
     );
+  }
+
+  function placeholderShotData(targetName, categoryLabel, typeLabel) {
+    return placeholderShotDataSized(targetName, categoryLabel, typeLabel, 320, 180);
+  }
+
+  function placeholderExportShotData(targetName, categoryLabel, typeLabel) {
+    return placeholderShotDataSized(targetName, categoryLabel, typeLabel, 840, 472);
+  }
+
+  function getPageBounds() {
+    var doc = document.documentElement;
+    var body = document.body || { scrollWidth: 0, scrollHeight: 0, clientWidth: 0, clientHeight: 0 };
+    return {
+      width: Math.max(doc.scrollWidth || 0, doc.clientWidth || 0, body.scrollWidth || 0, body.clientWidth || 0, window.innerWidth || 0),
+      height: Math.max(doc.scrollHeight || 0, doc.clientHeight || 0, body.scrollHeight || 0, body.clientHeight || 0, window.innerHeight || 0)
+    };
+  }
+
+  function normalizeRect(rect) {
+    if (!rect) return null;
+    var left = Math.round(rect.left || 0);
+    var top = Math.round(rect.top || 0);
+    var width = Math.max(1, Math.round(rect.width || 0));
+    var height = Math.max(1, Math.round(rect.height || 0));
+    return {
+      left: left,
+      top: top,
+      width: width,
+      height: height
+    };
+  }
+
+  function clampRectToPage(rect) {
+    if (!rect) return null;
+    var page = getPageBounds();
+    var left = clamp(Math.round(rect.left || 0), 0, Math.max(0, page.width - 1));
+    var top = clamp(Math.round(rect.top || 0), 0, Math.max(0, page.height - 1));
+    var right = clamp(Math.round(rect.left + rect.width), left + 1, page.width);
+    var bottom = clamp(Math.round(rect.top + rect.height), top + 1, page.height);
+    return {
+      left: left,
+      top: top,
+      width: Math.max(1, right - left),
+      height: Math.max(1, bottom - top)
+    };
+  }
+
+  function expandRect(rect, padding) {
+    if (!rect) return null;
+    var padded = {
+      left: rect.left - padding,
+      top: rect.top - padding,
+      width: rect.width + padding * 2,
+      height: rect.height + padding * 2
+    };
+    return clampRectToPage(padded);
+  }
+
+  function fitRectToMaxSize(rect, maxWidth, maxHeight) {
+    if (!rect) return null;
+    var scale = Math.min(maxWidth / rect.width, maxHeight / rect.height, 1);
+    if (!(scale > 0) || scale === 1) return clampRectToPage(rect);
+    var centerX = rect.left + rect.width / 2;
+    var centerY = rect.top + rect.height / 2;
+    var width = Math.max(1, Math.round(rect.width * scale));
+    var height = Math.max(1, Math.round(rect.height * scale));
+    return clampRectToPage({
+      left: Math.round(centerX - width / 2),
+      top: Math.round(centerY - height / 2),
+      width: width,
+      height: height
+    });
+  }
+
+  function buildRecordCaptureRect(type, rawRect) {
+    var rect = normalizeRect(rawRect);
+    if (!rect) return null;
+    var padding = type === "element" ? clamp(Math.round(Math.max(rect.width, rect.height) * 0.18), 24, 48) : 24;
+    var expanded = expandRect(rect, padding);
+    if (!expanded) return null;
+    if (type === "element") {
+      return fitRectToMaxSize(expanded, 720, 480);
+    }
+    return fitRectToMaxSize(expanded, 900, 900);
+  }
+
+  function getRecordShotKindLabel(type) {
+    return type === "element" ? "元素记录" : "区域记录";
+  }
+
+  function getRecordPlaceholderShot(record, kind) {
+    var category = getRecordCategory(record && record.category ? record.category : "layout");
+    var labelText = getRecordShotKindLabel(record && record.type ? record.type : "element");
+    if (kind === "export") {
+      return placeholderExportShotData(record && record.targetName ? record.targetName : "记录", category.label, labelText);
+    }
+    return placeholderShotData(record && record.targetName ? record.targetName : "记录", category.label, labelText);
+  }
+
+  function cloneShot(shot) {
+    return shot ? cloneDraft(shot) : null;
+  }
+
+  function createPlaceholderShotBundle(record) {
+    return {
+      thumb: getRecordPlaceholderShot(record, "thumb"),
+      export: null
+    };
+  }
+
+  function findDraftRecordById(recordId) {
+    var draft = state.v12.draft;
+    if (!draft || !Array.isArray(draft.records) || !recordId) return null;
+    for (var i = 0; i < draft.records.length; i++) {
+      if (draft.records[i] && draft.records[i].id === recordId) return draft.records[i];
+    }
+    return null;
+  }
+
+  function discardPendingShotCapture(recordId) {
+    if (!recordId) return;
+    delete recordShotCaptureTokens[recordId];
+  }
+
+  function setRecordShotById(recordId, shot) {
+    var changed = false;
+    if (!recordId || !shot) return false;
+    if (state.v12.pendingRecord && state.v12.pendingRecord.id === recordId) {
+      state.v12.pendingRecord.shot = cloneShot(shot);
+      changed = true;
+    }
+    var draftRecord = findDraftRecordById(recordId);
+    if (draftRecord) {
+      draftRecord.shot = cloneShot(shot);
+      draftRecord.updatedAt = new Date().toISOString();
+      changed = true;
+    }
+    if (changed) {
+      drawerRenderKey = "";
+      schedule();
+    }
+    return !!draftRecord;
+  }
+
+  async function loadImageFromDataUrl(dataUrl) {
+    return new Promise(function (resolve, reject) {
+      var img = new Image();
+      img.onload = function () {
+        resolve(img);
+      };
+      img.onerror = function () {
+        reject(new Error("Failed to load capture image"));
+      };
+      img.src = dataUrl;
+    });
+  }
+
+  function createCanvas(width, height) {
+    var canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(width));
+    canvas.height = Math.max(1, Math.round(height));
+    return canvas;
+  }
+
+  function canvasToDataUrl(canvas, mimeType, quality) {
+    var type = mimeType || "image/jpeg";
+    if (type === "image/jpeg" || type === "image/webp") {
+      return canvas.toDataURL(type, typeof quality === "number" ? quality : 0.9);
+    }
+    return canvas.toDataURL(type);
+  }
+
+  function getVisibleViewportRect() {
+    return {
+      left: window.scrollX || window.pageXOffset || 0,
+      top: window.scrollY || window.pageYOffset || 0,
+      width: window.innerWidth || 0,
+      height: window.innerHeight || 0
+    };
+  }
+
+  function intersectRects(a, b) {
+    var left = Math.max(a.left, b.left);
+    var top = Math.max(a.top, b.top);
+    var right = Math.min(a.left + a.width, b.left + b.width);
+    var bottom = Math.min(a.top + a.height, b.top + b.height);
+    if (right <= left || bottom <= top) return null;
+    return {
+      left: left,
+      top: top,
+      width: right - left,
+      height: bottom - top
+    };
+  }
+
+  async function buildShotImagesFromCapture(record, dataUrl) {
+    var rect = record && record.capture && record.capture.rect ? normalizeRect(record.capture.rect) : null;
+    if (!rect) return null;
+    var viewport = getVisibleViewportRect();
+    var viewportRect = {
+      left: viewport.left,
+      top: viewport.top,
+      width: Math.max(1, viewport.width),
+      height: Math.max(1, viewport.height)
+    };
+    var visibleIntersection = intersectRects(rect, viewportRect);
+    if (!visibleIntersection) return null;
+
+    var img = await loadImageFromDataUrl(dataUrl);
+    var scale = img.naturalWidth / viewportRect.width;
+    if (!(scale > 0)) scale = img.naturalHeight / viewportRect.height;
+    if (!(scale > 0)) scale = 1;
+
+    var sourceLeft = Math.round((visibleIntersection.left - viewportRect.left) * scale);
+    var sourceTop = Math.round((visibleIntersection.top - viewportRect.top) * scale);
+    var sourceWidth = Math.round(visibleIntersection.width * scale);
+    var sourceHeight = Math.round(visibleIntersection.height * scale);
+    if (sourceWidth <= 0 || sourceHeight <= 0) return null;
+
+    var baseCanvas = createCanvas(rect.width * scale, rect.height * scale);
+    var baseCtx = baseCanvas.getContext("2d");
+    baseCtx.fillStyle = "#ffffff";
+    baseCtx.fillRect(0, 0, baseCanvas.width, baseCanvas.height);
+    baseCtx.drawImage(
+      img,
+      sourceLeft,
+      sourceTop,
+      sourceWidth,
+      sourceHeight,
+      Math.round((visibleIntersection.left - rect.left) * scale),
+      Math.round((visibleIntersection.top - rect.top) * scale),
+      sourceWidth,
+      sourceHeight
+    );
+
+    var thumbWidth = 300;
+    var thumbHeight = Math.max(1, Math.round(baseCanvas.height * (thumbWidth / baseCanvas.width)));
+    var thumbCanvas = createCanvas(thumbWidth, thumbHeight);
+    var thumbCtx = thumbCanvas.getContext("2d");
+    thumbCtx.fillStyle = "#ffffff";
+    thumbCtx.fillRect(0, 0, thumbCanvas.width, thumbCanvas.height);
+    thumbCtx.drawImage(baseCanvas, 0, 0, thumbCanvas.width, thumbCanvas.height);
+
+    var exportLongEdge = 840;
+    var exportScale = exportLongEdge / Math.max(baseCanvas.width, baseCanvas.height);
+    if (!(exportScale > 0)) exportScale = 1;
+    var exportWidth = Math.max(1, Math.round(baseCanvas.width * exportScale));
+    var exportHeight = Math.max(1, Math.round(baseCanvas.height * exportScale));
+    var exportCanvas = createCanvas(exportWidth, exportHeight);
+    var exportCtx = exportCanvas.getContext("2d");
+    exportCtx.fillStyle = "#ffffff";
+    exportCtx.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
+    exportCtx.drawImage(baseCanvas, 0, 0, exportCanvas.width, exportCanvas.height);
+
+    return {
+      thumb: canvasToDataUrl(thumbCanvas, "image/jpeg", 0.9),
+      export: canvasToDataUrl(exportCanvas, "image/jpeg", 0.92)
+    };
+  }
+
+  async function requestVisibleTabCapture() {
+    var response = await bridgeRequest(
+      "capture-visible-tab",
+      { pageKey: state.v12.draft && state.v12.draft.pageKey ? state.v12.draft.pageKey : "" },
+      8000
+    );
+    return response && response.dataUrl ? response.dataUrl : "";
+  }
+
+  function buildFallbackShotBundle(record) {
+    return {
+      thumb: getRecordPlaceholderShot(record, "thumb"),
+      export: getRecordPlaceholderShot(record, "export")
+    };
+  }
+
+  async function runPendingRecordShotCapture(record) {
+    if (!record || !record.id) return;
+    var token = ++recordShotCaptureSeq;
+    recordShotCaptureTokens[record.id] = token;
+    try {
+      var dataUrl = await requestVisibleTabCapture();
+      if (!dataUrl) throw new Error("Empty capture result");
+      if (recordShotCaptureTokens[record.id] !== token) return;
+      var shot = await buildShotImagesFromCapture(record, dataUrl);
+      if (recordShotCaptureTokens[record.id] !== token) return;
+      if (shot) {
+        setRecordShotById(record.id, shot);
+      } else {
+        setRecordShotById(record.id, buildFallbackShotBundle(record));
+      }
+    } catch (err) {
+      if (recordShotCaptureTokens[record.id] !== token) return;
+      console.warn("[visual-qa][v1.2] shot capture failed:", err);
+      setRecordShotById(record.id, buildFallbackShotBundle(record));
+    } finally {
+      if (recordShotCaptureTokens[record.id] === token) {
+        delete recordShotCaptureTokens[record.id];
+      }
+      var draftRecord = findDraftRecordById(record.id);
+      if (draftRecord) {
+        await persistCurrentDraft();
+      }
+    }
   }
 
   function cloneDraft(draft) {
@@ -475,6 +1035,7 @@
   function createPendingRecord(type, targetName, captureRect, targetHint) {
     var category = getRecordCategory("layout");
     var now = new Date().toISOString();
+    var normalizedCaptureRect = buildRecordCaptureRect(type, captureRect);
     return {
       id: makeRecordId(),
       type: type,
@@ -490,7 +1051,7 @@
         export: null
       },
       capture: {
-        rect: captureRect,
+        rect: normalizedCaptureRect,
         scroll: {
           x: window.scrollX || window.pageXOffset || 0,
           y: window.scrollY || window.pageYOffset || 0
@@ -2723,21 +3284,65 @@
   function renderDrawerStub() {
     if (!state.v12.drawerOpen) {
       drawerStub.style.display = "none";
+      drawerRenderKey = "";
       return;
     }
 
+    var nextRenderKey = getDrawerRenderKey();
     drawerStub.style.display = "block";
+    if (drawerRenderKey === nextRenderKey) return;
+    drawerRenderKey = nextRenderKey;
+    var records = getDrawerVisibleRecords();
+    var totalCount = getV12RecordCount();
+    var filterButtons =
+      '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;">' +
+      '<button type="button" data-v12-action="drawer-filter" data-filter-id="all" style="padding:6px 10px;border-radius:999px;border:0;background:' +
+      (getDrawerCategoryFilter() === "all" ? "#fff" : "rgba(255,255,255,.08)") +
+      ';color:' +
+      (getDrawerCategoryFilter() === "all" ? "#111827" : "rgba(255,255,255,.76)") +
+      ';font-size:12px;font-weight:' +
+      (getDrawerCategoryFilter() === "all" ? "700" : "400") +
+      ';cursor:pointer;">全部</button>' +
+      RECORD_CATEGORIES.map(function (item) {
+        var active = getDrawerCategoryFilter() === item.id;
+        return (
+          '<button type="button" data-v12-action="drawer-filter" data-filter-id="' +
+          esc(item.id) +
+          '" style="padding:6px 10px;border-radius:999px;border:0;background:' +
+          (active ? "rgba(255,255,255,.96)" : "rgba(255,255,255,.08)") +
+          ';color:' +
+          (active ? "#111827" : "rgba(255,255,255,.76)") +
+          ';font-size:12px;font-weight:' +
+          (active ? "700" : "400") +
+          ';cursor:pointer;">' +
+          esc(item.label) +
+          "</button>"
+        );
+      }).join("") +
+      "</div>";
+    var cardsHtml = records.length
+      ? records.map(function (record, index) {
+          return getDrawerRecordCardHtml(record, index);
+        }).join("")
+      : '<div style="padding:28px 18px;border:1px dashed rgba(255,255,255,.12);border-radius:22px;background:rgba(255,255,255,.03);color:rgba(255,255,255,.64);font-size:13px;line-height:1.8;text-align:center;">当前没有记录。<br>切到记录模式后创建元素记录或区域记录，保存后会出现在这里。</div>';
     drawerStub.innerHTML =
-      '<div style="padding:22px 16px 16px;border-bottom:1px solid rgba(255,255,255,.08);">' +
+      '<div style="padding:22px 16px 16px;border-bottom:1px solid rgba(255,255,255,.08);position:sticky;top:0;background:#101216;z-index:2;">' +
       '<small style="display:block;color:rgba(255,255,255,.38);font-size:11px;letter-spacing:.18em;text-transform:uppercase;margin-bottom:8px;">Record Drawer</small>' +
       '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">' +
-      '<h3 style="margin:0;font-size:22px;line-height:1.2;">本次记录 ' + esc(String(getV12RecordCount())) + "</h3>" +
+      '<h3 style="margin:0;font-size:22px;line-height:1.2;">本次记录 ' + esc(String(totalCount)) + "</h3>" +
       '<button type="button" data-v12-action="toggle-drawer" style="border:1px solid rgba(255,255,255,.1);background:transparent;color:#fff;border-radius:12px;padding:8px 10px;font:12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;">收起</button>' +
       "</div>" +
-      '<div style="margin-top:14px;color:rgba(255,255,255,.64);font-size:13px;line-height:1.8;">' +
-      "记录抽屉入口已接好，本步仅保留数量占位与开关动作。" +
-      "<br>完整列表、筛选、编辑、删除将在后续步骤接入。" +
+      '<div style="margin-top:14px;display:flex;flex-wrap:wrap;gap:8px;">' +
+      '<button type="button" data-v12-action="drawer-export-html" style="padding:10px 12px;border-radius:12px;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.08);color:#fff;font:12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;">导出 HTML</button>' +
+      '<button type="button" data-v12-action="drawer-clear" style="padding:10px 12px;border-radius:12px;border:1px solid rgba(255,255,255,.1);background:transparent;color:#fff;font:12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;">清空本次</button>' +
       "</div>" +
+      '<div style="margin-top:14px;">' +
+      filterButtons +
+      "</div>" +
+      "</div>";
+    drawerStub.innerHTML +=
+      '<div style="height:calc(100% - 190px);overflow:auto;padding:14px;display:flex;flex-direction:column;gap:12px;">' +
+      cardsHtml +
       "</div>";
   }
 
@@ -2899,40 +3504,40 @@
   function createElementPendingRecord(el) {
     setRecordTarget(el);
     var rect = el.getBoundingClientRect();
-    openPendingRecord(
-      createPendingRecord(
-        "element",
-        buildElementTargetName(el),
-        {
-          left: Math.round(rect.left),
-          top: Math.round(rect.top),
-          width: Math.round(rect.width),
-          height: Math.round(rect.height)
-        },
-        buildElementTargetHint(el)
-      )
+    var record = createPendingRecord(
+      "element",
+      buildElementTargetName(el),
+      {
+        left: Math.round(rect.left),
+        top: Math.round(rect.top),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height)
+      },
+      buildElementTargetHint(el)
     );
+    openPendingRecord(record);
+    runPendingRecordShotCapture(record);
   }
 
   function createRegionPendingRecord(rect) {
-    openPendingRecord(
-      createPendingRecord(
-        "region",
-        "区域记录",
-        {
-          left: Math.round(rect.left),
-          top: Math.round(rect.top),
-          width: Math.round(rect.width),
-          height: Math.round(rect.height)
-        },
-        {
-          label: "region-selection",
-          className: "",
-          tagName: "",
-          text: ""
-        }
-      )
+    var record = createPendingRecord(
+      "region",
+      "区域记录",
+      {
+        left: Math.round(rect.left),
+        top: Math.round(rect.top),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height)
+      },
+      {
+        label: "region-selection",
+        className: "",
+        tagName: "",
+        text: ""
+      }
     );
+    openPendingRecord(record);
+    runPendingRecordShotCapture(record);
   }
 
   function onV12Click(e) {
@@ -2958,18 +3563,24 @@
       if (state.v12.pendingRecord) {
         state.v12.pendingRecord.category = target.getAttribute("data-category-id") || "layout";
         state.v12.categoryMenuOpen = false;
-        var pickedCategory = getRecordCategory(state.v12.pendingRecord.category);
-        state.v12.pendingRecord.shot.thumb = placeholderShotData(
-          state.v12.pendingRecord.targetName,
-          pickedCategory.label,
-          state.v12.pendingRecord.type === "element" ? "元素记录" : "区域记录"
-        );
         state.v12.composerFocusPending = true;
         schedule();
       }
+    } else if (action === "drawer-filter") {
+      setDrawerCategoryFilter(target.getAttribute("data-filter-id") || "all");
+    } else if (action === "drawer-delete") {
+      deleteDraftRecord(target.getAttribute("data-record-id") || "");
+    } else if (action === "drawer-clear") {
+      void clearCurrentPageDraft();
+    } else if (action === "drawer-export-html") {
+      showV12Notice("HTML 导出将在下一步接入");
+    } else if (action === "record-note" || action === "drawer-note") {
+      return;
     } else if (action === "cancel-record") {
+      if (state.v12.pendingRecord) discardPendingShotCapture(state.v12.pendingRecord.id);
       closePendingRecord();
     } else if (action === "reselect-region") {
+      if (state.v12.pendingRecord) discardPendingShotCapture(state.v12.pendingRecord.id);
       restartRegionRecordSelection();
     } else if (action === "save-record") {
       savePendingRecord();
@@ -2980,12 +3591,20 @@
 
   function onV12Input(e) {
     var target = e.target;
-    if (!target || target.getAttribute("data-v12-action") !== "record-note") return;
-    if (!state.v12.pendingRecord) return;
-    state.v12.pendingRecord.note = target.value || "";
-    recordComposerRenderKey = getRecordComposerRenderKey(state.v12.pendingRecord);
-    state.v12.noteSelectionStart = typeof target.selectionStart === "number" ? target.selectionStart : target.value.length;
-    state.v12.noteSelectionEnd = typeof target.selectionEnd === "number" ? target.selectionEnd : state.v12.noteSelectionStart;
+    if (!target) return;
+    var action = target.getAttribute("data-v12-action");
+    if (action === "record-note") {
+      if (!state.v12.pendingRecord) return;
+      state.v12.pendingRecord.note = target.value || "";
+      recordComposerRenderKey = getRecordComposerRenderKey(state.v12.pendingRecord);
+      state.v12.noteSelectionStart = typeof target.selectionStart === "number" ? target.selectionStart : target.value.length;
+      state.v12.noteSelectionEnd = typeof target.selectionEnd === "number" ? target.selectionEnd : state.v12.noteSelectionStart;
+      return;
+    }
+    if (action === "drawer-note") {
+      updateDraftRecordNote(target.getAttribute("data-record-id") || "", target.value || "");
+      return;
+    }
   }
 
   function onRecordComposerFocusIn(e) {
@@ -3920,6 +4539,7 @@
     topbar.removeEventListener("click", onV12Click, true);
     recordMenu.removeEventListener("click", onV12Click, true);
     drawerStub.removeEventListener("click", onV12Click, true);
+    drawerStub.removeEventListener("input", onV12Input, true);
     recordComposer.removeEventListener("click", onV12Click, true);
     recordComposer.removeEventListener("input", onV12Input, true);
     recordComposer.removeEventListener("focusin", onRecordComposerFocusIn, true);
@@ -4025,11 +4645,12 @@
   topbar.addEventListener("click", onV12Click, true);
   recordMenu.addEventListener("click", onV12Click, true);
   drawerStub.addEventListener("click", onV12Click, true);
-    recordComposer.addEventListener("click", onV12Click, true);
-    recordComposer.addEventListener("input", onV12Input, true);
-    recordComposer.addEventListener("focusin", onRecordComposerFocusIn, true);
-    recordComposer.addEventListener("keyup", onRecordComposerKeyUp, true);
-    recordComposer.addEventListener("mouseup", onRecordComposerMouseUp, true);
+  drawerStub.addEventListener("input", onV12Input, true);
+  recordComposer.addEventListener("click", onV12Click, true);
+  recordComposer.addEventListener("input", onV12Input, true);
+  recordComposer.addEventListener("focusin", onRecordComposerFocusIn, true);
+  recordComposer.addEventListener("keyup", onRecordComposerKeyUp, true);
+  recordComposer.addEventListener("mouseup", onRecordComposerMouseUp, true);
   regionCaptureOverlay.addEventListener("mousedown", startRegionCapture, true);
   regionCaptureOverlay.addEventListener("mousemove", updateRegionCapture, true);
   regionCaptureOverlay.addEventListener("mouseup", finishRegionCapture, true);
