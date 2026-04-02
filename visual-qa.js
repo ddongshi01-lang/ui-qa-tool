@@ -130,6 +130,9 @@
       recordSubMode: "element",
       drawerOpen: false,
       drawerCategoryFilter: "all",
+      drawerMenuRecordId: "",
+      drawerEditingNoteId: "",
+      drawerEditingNoteValue: "",
       previewRecordId: "",
       draft: null,
       draftStatus: "idle",
@@ -325,6 +328,15 @@
     return records;
   }
 
+  function getRecordById(recordId) {
+    if (!recordId) return null;
+    var records = getV12DraftRecords();
+    for (var i = 0; i < records.length; i++) {
+      if (records[i] && records[i].id === recordId) return records[i];
+    }
+    return null;
+  }
+
   function pad2(v) {
     return String(v).padStart(2, "0");
   }
@@ -374,9 +386,24 @@
     var records = getDrawerVisibleRecords();
     var ids = [];
     for (var i = 0; i < records.length; i++) {
-      ids.push(records[i] && records[i].id ? records[i].id : "");
+      ids.push(
+        [
+          records[i] && records[i].id ? records[i].id : "",
+          records[i] && records[i].updatedAt ? records[i].updatedAt : "",
+          records[i] && records[i].note ? records[i].note : ""
+        ].join("@")
+      );
     }
-    return [state.v12.drawerOpen ? "open" : "closed", getDrawerCategoryFilter(), getV12RecordCount(), state.v12.previewRecordId || "", ids.join("|")].join("::");
+    return [
+      state.v12.drawerOpen ? "open" : "closed",
+      getDrawerCategoryFilter(),
+      getV12RecordCount(),
+      state.v12.previewRecordId || "",
+      state.v12.drawerMenuRecordId || "",
+      state.v12.drawerEditingNoteId || "",
+      state.v12.drawerEditingNoteValue || "",
+      ids.join("|")
+    ].join("::");
   }
 
   function getRecordPreviewSrc(record) {
@@ -604,7 +631,6 @@
 
   function getDrawerRecordThumbHtml(record) {
     var thumb = record && record.shot && record.shot.thumb ? String(record.shot.thumb) : "";
-    var title = esc(record && record.targetName ? record.targetName : "无标题记录");
     var category = getRecordCategory(record && record.category ? record.category : "layout");
     var badge = esc(category.label || "布局");
     if (thumb) {
@@ -612,23 +638,18 @@
       return (
         '<button type="button" data-v12-action="drawer-open-preview" data-record-id="' +
         esc(record && record.id ? record.id : "") +
-        '" style="display:flex;align-items:center;justify-content:center;width:100%;height:100%;padding:12px;border:0;background:#0f172a;box-sizing:border-box;cursor:zoom-in;">' +
-        '<div style="position:relative;display:flex;align-items:center;justify-content:center;width:100%;height:100%;border-radius:16px;border:1px solid rgba(255,255,255,.16);background:#fff;overflow:hidden;">' +
+        '" style="display:flex;align-items:center;justify-content:center;width:100%;height:100%;padding:0;border:0;background:#0f172a;box-sizing:border-box;cursor:zoom-in;">' +
+        '<div style="position:relative;display:flex;align-items:center;justify-content:center;width:100%;height:100%;background:#fff;overflow:hidden;">' +
         shotSvg +
         "</div>" +
         "</button>"
       );
     }
     return (
-      '<div style="height:100%;box-sizing:border-box;padding:12px;background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);">' +
-      '<div style="height:100%;box-sizing:border-box;padding:12px;border-radius:16px;border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.05);display:flex;flex-direction:column;justify-content:space-between;">' +
+      '<div style="height:100%;box-sizing:border-box;padding:16px;background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);display:flex;flex-direction:column;justify-content:space-between;">' +
       '<div style="color:rgba(255,255,255,.72);font-size:12px;line-height:1.5;">暂无截图</div>' +
-      '<div style="color:#fff;font-size:14px;font-weight:700;line-height:1.4;">' +
-      title +
-      "</div>" +
       '<div style="display:inline-flex;align-self:flex-start;padding:5px 8px;border-radius:999px;background:rgba(0,0,0,.18);font-size:11px;color:rgba(255,255,255,.9);">' +
       badge +
-      "</div>" +
       "</div>" +
       "</div>"
     );
@@ -637,51 +658,71 @@
   function getDrawerRecordCardHtml(record, index) {
     var category = getRecordCategory(record && record.category ? record.category : "layout");
     var note = record && record.note ? String(record.note).trim() : "";
-    var targetName = record && record.targetName ? String(record.targetName) : "未命名记录";
-    var pageSummary = getRecordPageSummary(record);
     var timeText = formatRecordTime(record && record.createdAt ? record.createdAt : "");
-    var locationText = getRecordLocationSummary(record);
     var thumbHtml = getDrawerRecordThumbHtml(record);
+    var recordId = record && record.id ? String(record.id) : "";
+    var menuOpen = state.v12.drawerMenuRecordId === recordId;
+    var editingNote = state.v12.drawerEditingNoteId === recordId;
+    var noteValue = editingNote ? state.v12.drawerEditingNoteValue : note;
+    var hasNote = !!note;
+    var categoryColor = category && category.color ? category.color : "#94a3b8";
+    var noteHtml = editingNote
+      ? '<div style="display:flex;flex-direction:column;gap:8px;">' +
+        '<textarea data-v12-action="drawer-note" data-record-id="' +
+        esc(recordId) +
+        '" placeholder="写一句备注" style="width:100%;min-height:72px;padding:10px 0;border:0;border-radius:0;background:transparent;color:rgba(255,255,255,.96);font:13px/1.7 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;resize:none;box-sizing:border-box;outline:none;overflow:auto;">' +
+        esc(noteValue) +
+        "</textarea>" +
+        '<div style="display:flex;justify-content:flex-end;gap:10px;">' +
+        '<button type="button" data-v12-action="drawer-cancel-note-edit" data-record-id="' +
+        esc(recordId) +
+        '" style="padding:0;border:0;background:transparent;color:rgba(255,255,255,.52);font:12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;">取消</button>' +
+        '<button type="button" data-v12-action="drawer-save-note-edit" data-record-id="' +
+        esc(recordId) +
+        '" style="padding:0;border:0;background:transparent;color:#fff;font:12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;font-weight:600;cursor:pointer;">保存</button>' +
+        "</div>" +
+        "</div>"
+      : '<button type="button" data-v12-action="drawer-edit-note" data-record-id="' +
+        esc(recordId) +
+        '" style="display:block;width:100%;padding:0;border:0;background:transparent;color:' +
+        (hasNote ? "rgba(255,255,255,.86)" : "rgba(255,255,255,.34)") +
+        ';font:13px/1.65 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;text-align:left;cursor:text;">' +
+        '<span style="display:-webkit-box;-webkit-line-clamp:' +
+        (hasNote ? "3" : "1") +
+        ';-webkit-box-orient:vertical;overflow:hidden;">' +
+        esc(hasNote ? note : "写一句备注") +
+        "</span>" +
+        "</button>";
     return (
-      '<article style="flex:0 0 auto;flex-shrink:0;min-height:320px;overflow:hidden;border-radius:22px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.04);">' +
-      '<div style="height:116px;">' +
+      '<article style="position:relative;flex:0 0 auto;flex-shrink:0;overflow:hidden;border-radius:22px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.04);box-shadow:0 12px 24px rgba(15,23,42,.14);">' +
+      '<div style="position:relative;height:148px;overflow:hidden;">' +
       thumbHtml +
+      '<button type="button" data-v12-action="drawer-toggle-menu" data-record-id="' +
+      esc(recordId) +
+      '" aria-label="更多操作" style="position:absolute;top:10px;right:10px;width:28px;height:28px;border:0;border-radius:999px;background:rgba(15,23,42,.54);color:#fff;font:16px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;display:flex;align-items:center;justify-content:center;cursor:pointer;backdrop-filter:blur(8px);">···</button>' +
+      (menuOpen
+        ? '<div style="position:absolute;top:44px;right:10px;min-width:92px;padding:6px;border-radius:14px;border:1px solid rgba(255,255,255,.08);background:rgba(16,18,22,.96);box-shadow:0 14px 28px rgba(15,23,42,.28);display:flex;flex-direction:column;gap:2px;">' +
+          '<button type="button" data-v12-action="drawer-edit-note" data-record-id="' +
+          esc(recordId) +
+          '" style="padding:9px 10px;border:0;border-radius:10px;background:transparent;color:#fff;font:12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;text-align:left;cursor:pointer;">编辑备注</button>' +
+          '<button type="button" data-v12-action="drawer-delete" data-record-id="' +
+          esc(recordId) +
+          '" style="padding:9px 10px;border:0;border-radius:10px;background:transparent;color:#ffb4c7;font:12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;text-align:left;cursor:pointer;">删除</button>' +
+          "</div>"
+        : "") +
       "</div>" +
-      '<div style="padding:14px;">' +
+      '<div style="padding:12px 14px 14px;">' +
       '<div style="display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:10px;">' +
-      '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;">' +
-      '<span style="display:inline-block;padding:5px 9px;border-radius:999px;background:#fff;color:#111827;font-size:12px;font-weight:700;">' +
+      '<span style="display:inline-flex;align-items:center;padding:4px 8px;border-radius:999px;background:' +
+      esc(categoryColor) +
+      ';color:#fff;font-size:11px;font-weight:700;line-height:1;">' +
       esc(category.label) +
       "</span>" +
       '<span style="color:rgba(255,255,255,.46);font-size:12px;">' +
       esc(timeText) +
       "</span>" +
       "</div>" +
-      '<div style="color:rgba(255,255,255,.46);font-size:12px;white-space:nowrap;">#' +
-      esc(String(index + 1)) +
-      "</div>" +
-      "</div>" +
-      '<div style="font-size:15px;line-height:1.7;font-weight:700;margin-bottom:8px;color:#fff;">' +
-      esc(targetName) +
-      "</div>" +
-      '<textarea data-v12-action="drawer-note" data-record-id="' +
-      esc(record && record.id ? record.id : "") +
-      '" placeholder="写下一句话备注" style="width:100%;min-height:80px;padding:12px 12px 11px;border-radius:16px;border:1px solid rgba(255,255,255,.09);background:rgba(255,255,255,.05);color:rgba(255,255,255,.96);font:13px/1.7 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;resize:none;box-sizing:border-box;outline:none;overflow:auto;">' +
-      esc(note) +
-      "</textarea>" +
-      '<div style="display:grid;grid-template-columns:1fr;gap:6px;margin-top:10px;color:rgba(255,255,255,.66);font-size:12px;line-height:1.7;">' +
-      '<div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">页面：' +
-      esc(pageSummary) +
-      "</div>" +
-      '<div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">位置：' +
-      esc(locationText) +
-      "</div>" +
-      "</div>" +
-      '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;">' +
-      '<button type="button" data-v12-action="drawer-delete" data-record-id="' +
-      esc(record && record.id ? record.id : "") +
-      '" style="padding:9px 12px;border-radius:12px;border:1px solid rgba(255,255,255,.1);background:transparent;color:#fff;font:12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;">删除</button>' +
-      "</div>" +
+      noteHtml +
       "</div>" +
       "</article>"
     );
@@ -831,6 +872,35 @@
     queueDraftPersist();
   }
 
+  function openDrawerRecordMenu(recordId) {
+    state.v12.drawerMenuRecordId = state.v12.drawerMenuRecordId === recordId ? "" : recordId;
+    schedule();
+  }
+
+  function startDrawerNoteEdit(recordId) {
+    var record = getRecordById(recordId);
+    state.v12.drawerEditingNoteId = recordId || "";
+    state.v12.drawerEditingNoteValue = record && record.note ? String(record.note) : "";
+    state.v12.drawerMenuRecordId = "";
+    schedule();
+  }
+
+  function cancelDrawerNoteEdit() {
+    if (!state.v12.drawerEditingNoteId) return;
+    state.v12.drawerEditingNoteId = "";
+    state.v12.drawerEditingNoteValue = "";
+    schedule();
+  }
+
+  function saveDrawerNoteEdit(recordId) {
+    var targetId = recordId || state.v12.drawerEditingNoteId;
+    if (!targetId) return;
+    updateDraftRecordNote(targetId, state.v12.drawerEditingNoteValue);
+    state.v12.drawerEditingNoteId = "";
+    state.v12.drawerEditingNoteValue = "";
+    schedule();
+  }
+
   async function deleteDraftRecord(recordId) {
     var draft = state.v12.draft;
     if (!draft || !Array.isArray(draft.records) || !recordId) return;
@@ -843,6 +913,13 @@
     draft.records = nextRecords;
     if (state.v12.pendingRecord && state.v12.pendingRecord.id === recordId) {
       state.v12.pendingRecord = null;
+    }
+    if (state.v12.drawerMenuRecordId === recordId) {
+      state.v12.drawerMenuRecordId = "";
+    }
+    if (state.v12.drawerEditingNoteId === recordId) {
+      state.v12.drawerEditingNoteId = "";
+      state.v12.drawerEditingNoteValue = "";
     }
     await persistCurrentDraft();
   }
@@ -1061,6 +1138,35 @@
     };
   }
 
+  function rectContainsRect(outer, inner) {
+    if (!outer || !inner) return false;
+    return (
+      outer.left <= inner.left &&
+      outer.top <= inner.top &&
+      outer.left + outer.width >= inner.left + inner.width &&
+      outer.top + outer.height >= inner.top + inner.height
+    );
+  }
+
+  function ensureRectContainsRect(outer, inner) {
+    var normalizedOuter = normalizeRect(outer);
+    var normalizedInner = normalizeRect(inner);
+    if (!normalizedOuter || !normalizedInner) return normalizedOuter || normalizedInner || null;
+    if (rectContainsRect(normalizedOuter, normalizedInner)) {
+      return clampRectToPage(normalizedOuter);
+    }
+    return clampRectToPage({
+      left: Math.min(normalizedOuter.left, normalizedInner.left),
+      top: Math.min(normalizedOuter.top, normalizedInner.top),
+      width:
+        Math.max(normalizedOuter.left + normalizedOuter.width, normalizedInner.left + normalizedInner.width) -
+        Math.min(normalizedOuter.left, normalizedInner.left),
+      height:
+        Math.max(normalizedOuter.top + normalizedOuter.height, normalizedInner.top + normalizedInner.height) -
+        Math.min(normalizedOuter.top, normalizedInner.top)
+    });
+  }
+
   function expandRect(rect, padding) {
     if (!rect) return null;
     var padded = {
@@ -1149,13 +1255,13 @@
       var maxSide = Math.max(rect.width, rect.height);
       if (maxSide <= 80) {
         bucket = "element-xs";
-        result = fitRectToMaxSize(buildShotRectWithBias(rect, 620, 360, 0.55), 720, 480);
+        result = buildShotRectWithBias(rect, 620, 360, 0.55);
       } else if (maxSide <= 160) {
         bucket = "element-sm";
-        result = fitRectToMaxSize(buildShotRectWithBias(rect, 520, 320, 0.54), 720, 480);
+        result = buildShotRectWithBias(rect, 520, 320, 0.54);
       } else if (maxSide <= 280) {
         bucket = "element-md";
-        result = fitRectToMaxSize(buildShotRectWithBias(rect, 420, 260, 0.53), 720, 480);
+        result = buildShotRectWithBias(rect, 420, 260, 0.53);
       } else {
         bucket = maxSide <= 420 ? "element-lg" : "element-xl";
         var minWidth = maxSide <= 420 ? 800 : 820;
@@ -1169,8 +1275,9 @@
         var targetHeight = Math.max(minHeight, rect.height + clamp(Math.round(rect.height * 0.1), 36, 72) * 2);
         targetWidth = Math.max(targetWidth, Math.ceil(rect.width / 0.78));
         targetHeight = Math.max(targetHeight, Math.ceil(rect.height / 0.82));
-        result = fitRectToMaxSize(buildShotRectWithBias(rect, targetWidth, targetHeight, 0.53), 900, 580);
+        result = buildShotRectWithBias(rect, targetWidth, targetHeight, 0.53);
       }
+      result = ensureRectContainsRect(result, rect);
       console.debug("[visual-qa][v1.2][shot-rect]", {
         type: type,
         focusWidth: rect.width,
@@ -1178,20 +1285,22 @@
         maxSide: maxSide,
         bucket: bucket,
         shotWidth: result ? result.width : 0,
-        shotHeight: result ? result.height : 0
+        shotHeight: result ? result.height : 0,
+        shotContainsFocus: !!(result && rectContainsRect(result, rect))
       });
       return result;
     }
     if (rect.width <= 220 || rect.height <= 160) {
       bucket = "region-sm";
-      result = fitRectToMaxSize(buildShotRectWithBias(rect, 680, 420, 0.55), 900, 900);
+      result = buildShotRectWithBias(rect, 680, 420, 0.55);
     } else if (Math.max(rect.width, rect.height) <= 420) {
       bucket = "region-md";
-      result = fitRectToMaxSize(buildShotRectWithBias(rect, 560, 340, 0.54), 900, 900);
+      result = buildShotRectWithBias(rect, 560, 340, 0.54);
     } else {
       bucket = "region-lg";
-      result = fitRectToMaxSize(expandRect(rect, 32), 900, 900);
+      result = expandRect(rect, 32);
     }
+    result = ensureRectContainsRect(result, rect);
     console.debug("[visual-qa][v1.2][shot-rect]", {
       type: type,
       focusWidth: rect.width,
@@ -1199,7 +1308,8 @@
       maxSide: Math.max(rect.width, rect.height),
       bucket: bucket,
       shotWidth: result ? result.width : 0,
-      shotHeight: result ? result.height : 0
+      shotHeight: result ? result.height : 0,
+      shotContainsFocus: !!(result && rectContainsRect(result, rect))
     });
     return result;
   }
@@ -1429,6 +1539,7 @@
         shotRect = buildRecordShotRect(record.type, focusRect);
       }
     }
+    shotRect = ensureRectContainsRect(shotRect, focusRect);
     return {
       focusRect: focusRect,
       shotRect: shotRect,
@@ -1454,6 +1565,7 @@
   async function buildShotImagesFromCapture(record, dataUrl) {
     var capture = normalizeRecordCapture(record, { forceAdaptiveShotRect: true });
     var rect = capture && capture.shotRect ? capture.shotRect : null;
+    var focusRect = capture && capture.focusRect ? capture.focusRect : null;
     if (!rect) return null;
     var captureScroll = capture && capture.scroll ? capture.scroll : getCurrentScrollOffset();
     var viewportRect = {
@@ -1470,11 +1582,37 @@
     if (!(scale > 0)) scale = img.naturalHeight / viewportRect.height;
     if (!(scale > 0)) scale = 1;
 
+    var focusRight = focusRect ? focusRect.left + focusRect.width : 0;
+    var focusBottom = focusRect ? focusRect.top + focusRect.height : 0;
+    var shotRight = rect.left + rect.width;
+    var shotBottom = rect.top + rect.height;
+    var focusContainsShot = !!(focusRect && rectContainsRect(focusRect, rect));
+    var shotContainsFocus = !!(focusRect && rectContainsRect(rect, focusRect));
+
     var sourceLeft = Math.round((visibleIntersection.left - viewportRect.left) * scale);
     var sourceTop = Math.round((visibleIntersection.top - viewportRect.top) * scale);
     var sourceWidth = Math.round(visibleIntersection.width * scale);
     var sourceHeight = Math.round(visibleIntersection.height * scale);
     if (sourceWidth <= 0 || sourceHeight <= 0) return null;
+
+    console.debug("[visual-qa][v1.2][shot-crop-real]", {
+      recordId: record && record.id ? record.id : "",
+      type: record && record.type ? record.type : "",
+      focusRect: focusRect,
+      shotRect: rect,
+      focusContainsShot: focusContainsShot,
+      shotContainsFocus: shotContainsFocus,
+      focusRight: focusRight,
+      shotRight: shotRight,
+      focusBottom: focusBottom,
+      shotBottom: shotBottom,
+      captureScroll: captureScroll,
+      viewportRect: viewportRect,
+      visibleIntersection: visibleIntersection,
+      imageNaturalWidth: img.naturalWidth,
+      imageNaturalHeight: img.naturalHeight,
+      captureScale: scale
+    });
 
     console.debug("[visual-qa][v1.2][shot] crop", {
       recordId: record && record.id ? record.id : "",
@@ -4002,10 +4140,7 @@
       normalizeRecordCapture(state.v12.pendingRecord)
     ) {
       var pendingCapture = normalizeRecordCapture(state.v12.pendingRecord);
-      rect = documentRectToViewportRect(
-        pendingCapture.focusRect,
-        pendingCapture.scroll
-      );
+      rect = documentRectToViewportRect(pendingCapture.focusRect, getCurrentScrollOffset());
     }
 
     if (!rect || rect.width <= 0 || rect.height <= 0) {
@@ -4206,10 +4341,20 @@
     } else if (action === "drawer-filter") {
       setDrawerCategoryFilter(target.getAttribute("data-filter-id") || "all");
     } else if (action === "drawer-open-preview") {
+      state.v12.drawerMenuRecordId = "";
       openRecordPreview(target.getAttribute("data-record-id") || "");
+    } else if (action === "drawer-toggle-menu") {
+      openDrawerRecordMenu(target.getAttribute("data-record-id") || "");
+    } else if (action === "drawer-edit-note") {
+      startDrawerNoteEdit(target.getAttribute("data-record-id") || "");
+    } else if (action === "drawer-save-note-edit") {
+      saveDrawerNoteEdit(target.getAttribute("data-record-id") || "");
+    } else if (action === "drawer-cancel-note-edit") {
+      cancelDrawerNoteEdit();
     } else if (action === "drawer-close-preview") {
       closeRecordPreview();
     } else if (action === "drawer-delete") {
+      state.v12.drawerMenuRecordId = "";
       deleteDraftRecord(target.getAttribute("data-record-id") || "");
     } else if (action === "drawer-clear") {
       void clearCurrentPageDraft();
@@ -4243,7 +4388,7 @@
       return;
     }
     if (action === "drawer-note") {
-      updateDraftRecordNote(target.getAttribute("data-record-id") || "", target.value || "");
+      state.v12.drawerEditingNoteValue = target.value || "";
       return;
     }
   }
