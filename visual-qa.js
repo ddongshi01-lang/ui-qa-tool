@@ -130,6 +130,7 @@
       recordSubMode: "element",
       drawerOpen: false,
       drawerCategoryFilter: "all",
+      previewRecordId: "",
       draft: null,
       draftStatus: "idle",
       bridgeReady: false,
@@ -175,6 +176,7 @@
   var draftPersistTimer = 0;
   var recordShotCaptureSeq = 0;
   var recordShotCaptureTokens = {};
+  var captureHideStyleEl = null;
 
   function clamp(v, min, max) {
     return Math.max(min, Math.min(max, v));
@@ -359,7 +361,8 @@
 
   function getRecordLocationSummary(record) {
     if (!record) return "";
-    var rect = record.capture && record.capture.rect ? record.capture.rect : null;
+    var capture = normalizeRecordCapture(record);
+    var rect = capture && capture.focusRect ? capture.focusRect : null;
     if (!rect) return "未记录位置";
     return truncateText(
       "x " + rect.left + " / y " + rect.top + " / " + rect.width + " × " + rect.height,
@@ -373,7 +376,230 @@
     for (var i = 0; i < records.length; i++) {
       ids.push(records[i] && records[i].id ? records[i].id : "");
     }
-    return [state.v12.drawerOpen ? "open" : "closed", getDrawerCategoryFilter(), getV12RecordCount(), ids.join("|")].join("::");
+    return [state.v12.drawerOpen ? "open" : "closed", getDrawerCategoryFilter(), getV12RecordCount(), state.v12.previewRecordId || "", ids.join("|")].join("::");
+  }
+
+  function getRecordPreviewSrc(record) {
+    if (!record || !record.shot) return "";
+    if (record.shot.export) return String(record.shot.export);
+    if (record.shot.thumb) return String(record.shot.thumb);
+    return "";
+  }
+
+  function getRecordShotSvgHtml(record, src, extraStyle) {
+    var capture = normalizeRecordCapture(record);
+    if (!capture || !capture.focusRect || !capture.shotRect || !src) return "";
+    var focusRect = capture.focusRect;
+    var shotRect = capture.shotRect;
+    var rectX = Math.max(0, focusRect.left - shotRect.left);
+    var rectY = Math.max(0, focusRect.top - shotRect.top);
+    var svgStyle = extraStyle || "display:block;width:100%;height:100%;";
+    return (
+      '<svg viewBox="0 0 ' +
+      shotRect.width +
+      " " +
+      shotRect.height +
+      '" preserveAspectRatio="xMidYMid meet" style="' +
+      svgStyle +
+      '" xmlns="http://www.w3.org/2000/svg">' +
+      '<image href="' +
+      esc(src) +
+      '" x="0" y="0" width="' +
+      shotRect.width +
+      '" height="' +
+      shotRect.height +
+      '" preserveAspectRatio="xMidYMid meet" />' +
+      '<rect x="' +
+      rectX +
+      '" y="' +
+      rectY +
+      '" width="' +
+      focusRect.width +
+      '" height="' +
+      focusRect.height +
+      '" rx="10" fill="rgba(217,70,239,0.12)" stroke="#d946ef" stroke-width="2" vector-effect="non-scaling-stroke" />' +
+      "</svg>"
+    );
+  }
+
+  function getRecordFocusOverlayBoxStyle(record, displayWidth, displayHeight) {
+    var capture = normalizeRecordCapture(record);
+    if (!capture || !capture.focusRect || !capture.shotRect) return "";
+    var focusRect = capture.focusRect;
+    var shotRect = capture.shotRect;
+    if (!(shotRect.width > 0) || !(shotRect.height > 0)) return "";
+    if (displayWidth > 0 && displayHeight > 0) {
+      var scaleX = displayWidth / shotRect.width;
+      var scaleY = displayHeight / shotRect.height;
+      return [
+        "position:absolute",
+        "left:" + Math.max(0, (focusRect.left - shotRect.left) * scaleX) + "px",
+        "top:" + Math.max(0, (focusRect.top - shotRect.top) * scaleY) + "px",
+        "width:" + Math.max(0, focusRect.width * scaleX) + "px",
+        "height:" + Math.max(0, focusRect.height * scaleY) + "px",
+        "border:2px solid #d946ef",
+        "background:rgba(217,70,239,.12)",
+        "border-radius:10px",
+        "box-sizing:border-box",
+        "box-shadow:0 0 0 1px rgba(255,255,255,.22) inset",
+        "pointer-events:none"
+      ].join(";");
+    }
+    return [
+      "position:absolute",
+      "left:" + ((focusRect.left - shotRect.left) / shotRect.width) * 100 + "%",
+      "top:" + ((focusRect.top - shotRect.top) / shotRect.height) * 100 + "%",
+      "width:" + (focusRect.width / shotRect.width) * 100 + "%",
+      "height:" + (focusRect.height / shotRect.height) * 100 + "%",
+      "border:2px solid #d946ef",
+      "background:rgba(217,70,239,.12)",
+      "border-radius:10px",
+      "box-sizing:border-box",
+      "box-shadow:0 0 0 1px rgba(255,255,255,.22) inset",
+      "pointer-events:none"
+    ].join(";");
+  }
+
+  function applyRecordPreviewLayout(record) {
+    if (!recordPreview || !record || state.v12.previewRecordId !== record.id) return;
+    var previewBody = recordPreview.querySelector("[data-v12-preview-body]");
+    var previewShell = recordPreview.querySelector("[data-v12-preview-shell]");
+    var previewPlaceholder = recordPreview.querySelector("[data-v12-preview-placeholder]");
+    var img = recordPreview.querySelector("[data-v12-preview-img]");
+    var stage = recordPreview.querySelector("[data-v12-preview-stage]");
+    var overlay = recordPreview.querySelector("[data-v12-preview-overlay]");
+    var previewSrcExists = !!getRecordPreviewSrc(record);
+
+    function logPreviewLayout(payload) {
+      console.debug("[visual-qa][v1.2][preview-layout-real]", payload);
+    }
+
+    function showPlaceholder(message, imageLoadSuccess) {
+      if (previewShell) previewShell.style.display = "none";
+      if (overlay) overlay.style.display = "none";
+      if (previewPlaceholder) {
+        previewPlaceholder.style.display = "flex";
+        previewPlaceholder.textContent = message || "暂无可预览图片";
+      }
+      window.requestAnimationFrame(function () {
+        logPreviewLayout({
+          recordId: record && record.id ? record.id : "",
+          naturalWidth: img ? img.naturalWidth || 0 : 0,
+          naturalHeight: img ? img.naturalHeight || 0 : 0,
+          maxPreviewWidth: Math.min(800, Math.round(window.innerWidth * 0.9)),
+          maxPreviewHeight: Math.round(window.innerHeight * 0.78),
+          scale: 0,
+          displayWidth: 0,
+          displayHeight: 0,
+          previewBodyClientWidth: previewBody ? previewBody.clientWidth : 0,
+          previewBodyClientHeight: previewBody ? previewBody.clientHeight : 0,
+          previewShellClientWidth: previewShell ? previewShell.clientWidth : 0,
+          previewShellClientHeight: previewShell ? previewShell.clientHeight : 0,
+          imageStageClientWidth: stage ? stage.clientWidth : 0,
+          imageStageClientHeight: stage ? stage.clientHeight : 0,
+          imgRectWidth: img ? img.getBoundingClientRect().width : 0,
+          imgRectHeight: img ? img.getBoundingClientRect().height : 0,
+          overlayRectWidth: overlay ? overlay.getBoundingClientRect().width : 0,
+          overlayRectHeight: overlay ? overlay.getBoundingClientRect().height : 0,
+          previewSrcExists: previewSrcExists,
+          imageLoadSuccess: !!imageLoadSuccess,
+          renderBranch: "placeholder",
+          overlayLeft: 0,
+          overlayTop: 0,
+          overlayWidth: 0,
+          overlayHeight: 0
+        });
+      });
+    }
+
+    if (!img || !stage || !previewShell) {
+      showPlaceholder("暂无可预览图片", false);
+      return;
+    }
+
+    function updateLayout() {
+      var naturalWidth = img.naturalWidth || 0;
+      var naturalHeight = img.naturalHeight || 0;
+      if (!(naturalWidth > 0) || !(naturalHeight > 0)) {
+        showPlaceholder("图片加载失败", false);
+        return;
+      }
+      var maxPreviewWidth = Math.min(800, Math.round(window.innerWidth * 0.9));
+      var maxPreviewHeight = Math.round(window.innerHeight * 0.78);
+      var scale = Math.min(
+        maxPreviewWidth / naturalWidth,
+        maxPreviewHeight / naturalHeight,
+        1
+      );
+      if (!(scale > 0)) scale = 1;
+      var displayWidth = Math.max(1, Math.round(naturalWidth * scale));
+      var displayHeight = Math.max(1, Math.round(naturalHeight * scale));
+      previewShell.style.display = "block";
+      previewShell.style.width = "fit-content";
+      previewShell.style.height = "fit-content";
+      previewShell.style.maxWidth = "none";
+      previewShell.style.maxHeight = "none";
+      previewShell.style.flex = "0 0 auto";
+      stage.style.width = displayWidth + "px";
+      stage.style.height = displayHeight + "px";
+      stage.style.flex = "0 0 auto";
+      img.style.width = displayWidth + "px";
+      img.style.height = displayHeight + "px";
+      img.style.maxWidth = "none";
+      img.style.maxHeight = "none";
+      if (previewPlaceholder) previewPlaceholder.style.display = "none";
+      if (overlay) {
+        overlay.style.cssText = getRecordFocusOverlayBoxStyle(record, displayWidth, displayHeight);
+        overlay.style.display = overlay.style.cssText ? "block" : "none";
+      }
+      window.requestAnimationFrame(function () {
+        var stageRect = stage.getBoundingClientRect();
+        var imgRect = img.getBoundingClientRect();
+        var overlayRect = overlay ? overlay.getBoundingClientRect() : { left: 0, top: 0, width: 0, height: 0 };
+        console.debug("[visual-qa][v1.2][preview-layout-real]", {
+          recordId: record && record.id ? record.id : "",
+          naturalWidth: naturalWidth,
+          naturalHeight: naturalHeight,
+          maxPreviewWidth: maxPreviewWidth,
+          maxPreviewHeight: maxPreviewHeight,
+          scale: scale,
+          displayWidth: displayWidth,
+          displayHeight: displayHeight,
+          previewBodyClientWidth: previewBody ? previewBody.clientWidth : 0,
+          previewBodyClientHeight: previewBody ? previewBody.clientHeight : 0,
+          previewShellClientWidth: previewShell ? previewShell.clientWidth : 0,
+          previewShellClientHeight: previewShell ? previewShell.clientHeight : 0,
+          imageStageClientWidth: stage.clientWidth,
+          imageStageClientHeight: stage.clientHeight,
+          imgRectWidth: imgRect.width,
+          imgRectHeight: imgRect.height,
+          overlayRectWidth: overlayRect.width,
+          overlayRectHeight: overlayRect.height,
+          previewSrcExists: previewSrcExists,
+          imageLoadSuccess: true,
+          renderBranch: "image",
+          overlayLeft: Math.max(0, overlayRect.left - stageRect.left),
+          overlayTop: Math.max(0, overlayRect.top - stageRect.top),
+          overlayWidth: overlayRect.width,
+          overlayHeight: overlayRect.height
+        });
+      });
+    }
+
+    if (img.complete && img.naturalWidth > 0 && img.naturalHeight > 0) {
+      updateLayout();
+      return;
+    }
+    if (img.complete) {
+      showPlaceholder("图片加载失败", false);
+      return;
+    }
+    img.onload = function () {
+      updateLayout();
+    };
+    img.onerror = function () {
+      showPlaceholder("图片加载失败", false);
+    };
   }
 
   function getDrawerRecordThumbHtml(record) {
@@ -382,12 +608,15 @@
     var category = getRecordCategory(record && record.category ? record.category : "layout");
     var badge = esc(category.label || "布局");
     if (thumb) {
+      var shotSvg = getRecordShotSvgHtml(record, thumb, "display:block;width:100%;height:100%;");
       return (
-        '<div style="height:100%;box-sizing:border-box;padding:12px;background:#0f172a;">' +
-        '<img alt="缩略图" src="' +
-        esc(thumb) +
-        '" style="display:block;width:100%;height:100%;object-fit:cover;border-radius:16px;border:1px solid rgba(255,255,255,.16);background:#fff;" />' +
-        "</div>"
+        '<button type="button" data-v12-action="drawer-open-preview" data-record-id="' +
+        esc(record && record.id ? record.id : "") +
+        '" style="display:flex;align-items:center;justify-content:center;width:100%;height:100%;padding:12px;border:0;background:#0f172a;box-sizing:border-box;cursor:zoom-in;">' +
+        '<div style="position:relative;display:flex;align-items:center;justify-content:center;width:100%;height:100%;border-radius:16px;border:1px solid rgba(255,255,255,.16);background:#fff;overflow:hidden;">' +
+        shotSvg +
+        "</div>" +
+        "</button>"
       );
     }
     return (
@@ -414,7 +643,7 @@
     var locationText = getRecordLocationSummary(record);
     var thumbHtml = getDrawerRecordThumbHtml(record);
     return (
-      '<article style="overflow:hidden;border-radius:22px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.04);">' +
+      '<article style="flex:0 0 auto;flex-shrink:0;min-height:320px;overflow:hidden;border-radius:22px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.04);">' +
       '<div style="height:116px;">' +
       thumbHtml +
       "</div>" +
@@ -456,6 +685,100 @@
       "</div>" +
       "</article>"
     );
+  }
+
+  function findRecordForPreview(recordId) {
+    if (!recordId) return null;
+    if (state.v12.pendingRecord && state.v12.pendingRecord.id === recordId) {
+      return state.v12.pendingRecord;
+    }
+    return findDraftRecordById(recordId);
+  }
+
+  function openRecordPreview(recordId) {
+    var record = findRecordForPreview(recordId);
+    if (!record || !getRecordPreviewSrc(record)) return;
+    state.v12.previewRecordId = recordId;
+    schedule();
+  }
+
+  function closeRecordPreview() {
+    if (!state.v12.previewRecordId) return;
+    state.v12.previewRecordId = "";
+    schedule();
+  }
+
+  function renderRecordPreview() {
+    var record = findRecordForPreview(state.v12.previewRecordId);
+    var src = getRecordPreviewSrc(record);
+    if (!record || state.panelCollapsed) {
+      recordPreview.style.display = "none";
+      recordPreview.innerHTML = "";
+      return;
+    }
+    var hasPreviewSrc = !!src;
+    recordPreview.style.display = "flex";
+    recordPreview.innerHTML =
+      '<div data-v12-action="drawer-close-preview" style="position:absolute;inset:0;background:rgba(3,6,12,.76);"></div>' +
+      '<div style="position:relative;display:flex;flex-direction:column;gap:12px;width:fit-content;max-width:calc(100vw - 48px);max-height:92vh;margin:0 auto;padding:18px;border-radius:24px;background:rgba(16,18,22,.96);border:1px solid rgba(255,255,255,.1);box-shadow:0 24px 64px rgba(0,0,0,.45);box-sizing:border-box;">' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;color:#fff;">' +
+      '<div style="min-width:0;">' +
+      '<div style="font-size:16px;line-height:1.4;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' +
+      esc(record.targetName || "记录预览") +
+      "</div>" +
+      '<div style="margin-top:4px;color:rgba(255,255,255,.58);font-size:12px;">图片预览</div>' +
+      "</div>" +
+      '<button type="button" data-v12-action="drawer-close-preview" style="flex:0 0 auto;padding:8px 10px;border-radius:12px;border:1px solid rgba(255,255,255,.12);background:transparent;color:#fff;font:12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;">关闭</button>' +
+      "</div>" +
+      '<div data-v12-preview-body="1" style="display:flex;align-items:center;justify-content:center;overflow:auto;max-height:80vh;padding:8px;border-radius:18px;background:#0f172a;border:1px solid rgba(255,255,255,.08);box-sizing:border-box;">' +
+      '<div data-v12-preview-shell="1" style="display:' +
+      (hasPreviewSrc ? "none" : "none") +
+      ';width:fit-content;height:fit-content;max-width:none;max-height:none;flex:0 0 auto;">' +
+      '<div data-v12-preview-stage="1" style="position:relative;display:block;line-height:0;flex:0 0 auto;">' +
+      (hasPreviewSrc
+        ? '<img alt="记录预览" src="' +
+          esc(src) +
+          '" data-v12-preview-img="1" style="display:block;background:#fff;border-radius:14px;" />' +
+          '<div data-v12-preview-overlay="1" style="display:none;"></div>'
+        : "") +
+      "</div>" +
+      "</div>" +
+      '<div data-v12-preview-placeholder="1" style="display:flex;align-items:center;justify-content:center;min-width:320px;min-height:220px;padding:24px;border-radius:16px;border:1px dashed rgba(255,255,255,.18);background:rgba(255,255,255,.04);color:rgba(255,255,255,.68);font-size:14px;line-height:1.6;text-align:center;">' +
+      (hasPreviewSrc ? "图片加载中…" : "暂无可预览图片") +
+      "</div>" +
+      "</div>" +
+      "</div>";
+    if (hasPreviewSrc) {
+      applyRecordPreviewLayout(record);
+    } else {
+      console.debug("[visual-qa][v1.2][preview-layout-real]", {
+        recordId: record && record.id ? record.id : "",
+        naturalWidth: 0,
+        naturalHeight: 0,
+        maxPreviewWidth: Math.min(800, Math.round(window.innerWidth * 0.9)),
+        maxPreviewHeight: Math.round(window.innerHeight * 0.78),
+        scale: 0,
+        displayWidth: 0,
+        displayHeight: 0,
+        previewBodyClientWidth: 0,
+        previewBodyClientHeight: 0,
+        previewShellClientWidth: 0,
+        previewShellClientHeight: 0,
+        imageStageClientWidth: 0,
+        imageStageClientHeight: 0,
+        imgRectWidth: 0,
+        imgRectHeight: 0,
+        overlayRectWidth: 0,
+        overlayRectHeight: 0,
+        previewSrcExists: false,
+        imageLoadSuccess: false,
+        renderBranch: "placeholder",
+        overlayLeft: 0,
+        overlayTop: 0,
+        overlayWidth: 0,
+        overlayHeight: 0
+      });
+    }
   }
 
   async function clearCurrentPageDraft() {
@@ -749,6 +1072,16 @@
     return clampRectToPage(padded);
   }
 
+  function expandRectDirectional(rect, topPadding, rightPadding, bottomPadding, leftPadding) {
+    if (!rect) return null;
+    return clampRectToPage({
+      left: rect.left - leftPadding,
+      top: rect.top - topPadding,
+      width: rect.width + leftPadding + rightPadding,
+      height: rect.height + topPadding + bottomPadding
+    });
+  }
+
   function fitRectToMaxSize(rect, maxWidth, maxHeight) {
     if (!rect) return null;
     var scale = Math.min(maxWidth / rect.width, maxHeight / rect.height, 1);
@@ -765,16 +1098,110 @@
     });
   }
 
-  function buildRecordCaptureRect(type, rawRect) {
+  function fitRectAroundCenter(rect, targetWidth, targetHeight) {
+    if (!rect) return null;
+    var width = Math.max(rect.width, Math.round(targetWidth || rect.width));
+    var height = Math.max(rect.height, Math.round(targetHeight || rect.height));
+    var centerX = rect.left + rect.width / 2;
+    var centerY = rect.top + rect.height / 2;
+    return clampRectToPage({
+      left: Math.round(centerX - width / 2),
+      top: Math.round(centerY - height / 2),
+      width: width,
+      height: height
+    });
+  }
+
+  function buildShotRectWithBias(focusRect, targetWidth, targetHeight, topShare) {
+    if (!focusRect) return null;
+    var page = getPageBounds();
+    var minPadding = 24;
+    var width = Math.max(Math.round(targetWidth || focusRect.width), focusRect.width + minPadding * 2);
+    var height = Math.max(Math.round(targetHeight || focusRect.height), focusRect.height + minPadding * 2);
+    width = Math.min(width, page.width);
+    height = Math.min(height, page.height);
+
+    var extraWidth = Math.max(0, width - focusRect.width);
+    var extraHeight = Math.max(0, height - focusRect.height);
+    var leftPad = Math.round(extraWidth / 2);
+    var desiredTopShare = clamp(topShare == null ? 0.52 : topShare, 0.5, 0.55);
+    var topPad = Math.round(extraHeight * desiredTopShare);
+    var maxTopPad = Math.max(minPadding, extraHeight - minPadding);
+    topPad = clamp(topPad, minPadding, maxTopPad);
+
+    var left = clamp(focusRect.left - leftPad, 0, Math.max(0, page.width - width));
+    var top = clamp(focusRect.top - topPad, 0, Math.max(0, page.height - height));
+
+    return {
+      left: left,
+      top: top,
+      width: width,
+      height: height
+    };
+  }
+
+  function buildRecordShotRect(type, rawRect) {
     var rect = normalizeRect(rawRect);
     if (!rect) return null;
-    var padding = type === "element" ? clamp(Math.round(Math.max(rect.width, rect.height) * 0.18), 24, 48) : 24;
-    var expanded = expandRect(rect, padding);
-    if (!expanded) return null;
+    var bucket = "";
+    var result = null;
     if (type === "element") {
-      return fitRectToMaxSize(expanded, 720, 480);
+      var maxSide = Math.max(rect.width, rect.height);
+      if (maxSide <= 80) {
+        bucket = "element-xs";
+        result = fitRectToMaxSize(buildShotRectWithBias(rect, 620, 360, 0.55), 720, 480);
+      } else if (maxSide <= 160) {
+        bucket = "element-sm";
+        result = fitRectToMaxSize(buildShotRectWithBias(rect, 520, 320, 0.54), 720, 480);
+      } else if (maxSide <= 280) {
+        bucket = "element-md";
+        result = fitRectToMaxSize(buildShotRectWithBias(rect, 420, 260, 0.53), 720, 480);
+      } else {
+        bucket = maxSide <= 420 ? "element-lg" : "element-xl";
+        var minWidth = maxSide <= 420 ? 800 : 820;
+        var minHeight = maxSide <= 420 ? 520 : 520;
+        var aspect = rect.height > 0 ? rect.width / rect.height : 1;
+        if (aspect >= 1.6) {
+          minWidth = Math.max(minWidth, 840);
+          minHeight = Math.max(minHeight, 500);
+        }
+        var targetWidth = Math.max(minWidth, rect.width + clamp(Math.round(rect.width * 0.12), 40, 88) * 2);
+        var targetHeight = Math.max(minHeight, rect.height + clamp(Math.round(rect.height * 0.1), 36, 72) * 2);
+        targetWidth = Math.max(targetWidth, Math.ceil(rect.width / 0.78));
+        targetHeight = Math.max(targetHeight, Math.ceil(rect.height / 0.82));
+        result = fitRectToMaxSize(buildShotRectWithBias(rect, targetWidth, targetHeight, 0.53), 900, 580);
+      }
+      console.debug("[visual-qa][v1.2][shot-rect]", {
+        type: type,
+        focusWidth: rect.width,
+        focusHeight: rect.height,
+        maxSide: maxSide,
+        bucket: bucket,
+        shotWidth: result ? result.width : 0,
+        shotHeight: result ? result.height : 0
+      });
+      return result;
     }
-    return fitRectToMaxSize(expanded, 900, 900);
+    if (rect.width <= 220 || rect.height <= 160) {
+      bucket = "region-sm";
+      result = fitRectToMaxSize(buildShotRectWithBias(rect, 680, 420, 0.55), 900, 900);
+    } else if (Math.max(rect.width, rect.height) <= 420) {
+      bucket = "region-md";
+      result = fitRectToMaxSize(buildShotRectWithBias(rect, 560, 340, 0.54), 900, 900);
+    } else {
+      bucket = "region-lg";
+      result = fitRectToMaxSize(expandRect(rect, 32), 900, 900);
+    }
+    console.debug("[visual-qa][v1.2][shot-rect]", {
+      type: type,
+      focusWidth: rect.width,
+      focusHeight: rect.height,
+      maxSide: Math.max(rect.width, rect.height),
+      bucket: bucket,
+      shotWidth: result ? result.width : 0,
+      shotHeight: result ? result.height : 0
+    });
+    return result;
   }
 
   function getRecordShotKindLabel(type) {
@@ -872,6 +1299,144 @@
     };
   }
 
+  function getCurrentScrollOffset() {
+    return {
+      x: window.scrollX || window.pageXOffset || 0,
+      y: window.scrollY || window.pageYOffset || 0
+    };
+  }
+
+  function viewportRectToDocumentRect(rect, scroll) {
+    var normalizedRect = normalizeRect(rect);
+    if (!normalizedRect) return null;
+    var offset = scroll || getCurrentScrollOffset();
+    return normalizeRect({
+      left: normalizedRect.left + (offset.x || 0),
+      top: normalizedRect.top + (offset.y || 0),
+      width: normalizedRect.width,
+      height: normalizedRect.height
+    });
+  }
+
+  function documentRectToViewportRect(rect, scroll) {
+    var normalizedRect = normalizeRect(rect);
+    if (!normalizedRect) return null;
+    var offset = scroll || getCurrentScrollOffset();
+    return normalizeRect({
+      left: normalizedRect.left - (offset.x || 0),
+      top: normalizedRect.top - (offset.y || 0),
+      width: normalizedRect.width,
+      height: normalizedRect.height
+    });
+  }
+
+  function updateRecordCaptureById(recordId, capture) {
+    var changed = false;
+    if (!recordId || !capture) return false;
+    if (state.v12.pendingRecord && state.v12.pendingRecord.id === recordId) {
+      state.v12.pendingRecord.capture = cloneDraft(capture);
+      changed = true;
+    }
+    var draftRecord = findDraftRecordById(recordId);
+    if (draftRecord) {
+      draftRecord.capture = cloneDraft(capture);
+      draftRecord.updatedAt = new Date().toISOString();
+      changed = true;
+    }
+    return changed;
+  }
+
+  function ensureCaptureHideStyle() {
+    if (captureHideStyleEl && captureHideStyleEl.parentNode) return;
+    captureHideStyleEl = document.createElement("style");
+    captureHideStyleEl.setAttribute("data-vqa-capture-hide-style", "1");
+    captureHideStyleEl.textContent =
+      '[data-vqa-capture-hidden="1"]{display:none !important;visibility:hidden !important;pointer-events:none !important;}';
+    (document.head || document.documentElement || document.body).appendChild(captureHideStyleEl);
+  }
+
+  function getCaptureHiddenElements() {
+    return [
+      highlight,
+      selectA,
+      selectB,
+      tooltip,
+      spacingLayer,
+      measureLayer,
+      floating,
+      topbar,
+      recordMenu,
+      regionCaptureOverlay,
+      drawerStub,
+      regionSelectBox,
+      recordComposer,
+      recordPreview,
+      v12Notice
+    ];
+  }
+
+  function setPluginUiCaptureHidden(hidden) {
+    ensureCaptureHideStyle();
+    getCaptureHiddenElements().forEach(function (el) {
+      if (!el) return;
+      if (hidden) {
+        el.setAttribute("data-vqa-capture-hidden", "1");
+      } else {
+        el.removeAttribute("data-vqa-capture-hidden");
+      }
+    });
+  }
+
+  function waitForAnimationFrames(count) {
+    return new Promise(function (resolve) {
+      function step(remaining) {
+        if (remaining <= 0) {
+          resolve();
+          return;
+        }
+        requestAnimationFrame(function () {
+          step(remaining - 1);
+        });
+      }
+      step(Math.max(0, count || 0));
+    });
+  }
+
+  async function requestCleanVisibleTabCapture() {
+    setPluginUiCaptureHidden(true);
+    await waitForAnimationFrames(2);
+    try {
+      return await requestVisibleTabCapture();
+    } finally {
+      setPluginUiCaptureHidden(false);
+      await waitForAnimationFrames(1);
+    }
+  }
+
+  function normalizeRecordCapture(record, options) {
+    if (!record || !record.capture) return null;
+    var opts = options || {};
+    var capture = record.capture || {};
+    var focusRect = normalizeRect(capture.focusRect || capture.rect);
+    if (!focusRect) return null;
+    var hasStoredShot = !!(record.shot && (record.shot.thumb || record.shot.export));
+    var legacyRectOnly = !capture.focusRect && !!capture.rect;
+    var shotRect = normalizeRect(capture.shotRect);
+    if (!shotRect) {
+      if (legacyRectOnly && hasStoredShot && !opts.forceAdaptiveShotRect) {
+        shotRect = normalizeRect(focusRect);
+      } else {
+        shotRect = buildRecordShotRect(record.type, focusRect);
+      }
+    }
+    return {
+      focusRect: focusRect,
+      shotRect: shotRect,
+      scroll: capture.scroll || getCurrentScrollOffset(),
+      legacyStaticShot: !!(legacyRectOnly && hasStoredShot && !opts.forceAdaptiveShotRect)
+    };
+  }
+
   function intersectRects(a, b) {
     var left = Math.max(a.left, b.left);
     var top = Math.max(a.top, b.top);
@@ -887,14 +1452,15 @@
   }
 
   async function buildShotImagesFromCapture(record, dataUrl) {
-    var rect = record && record.capture && record.capture.rect ? normalizeRect(record.capture.rect) : null;
+    var capture = normalizeRecordCapture(record, { forceAdaptiveShotRect: true });
+    var rect = capture && capture.shotRect ? capture.shotRect : null;
     if (!rect) return null;
-    var viewport = getVisibleViewportRect();
+    var captureScroll = capture && capture.scroll ? capture.scroll : getCurrentScrollOffset();
     var viewportRect = {
-      left: viewport.left,
-      top: viewport.top,
-      width: Math.max(1, viewport.width),
-      height: Math.max(1, viewport.height)
+      left: Math.round(captureScroll.x || 0),
+      top: Math.round(captureScroll.y || 0),
+      width: Math.max(1, window.innerWidth || 0),
+      height: Math.max(1, window.innerHeight || 0)
     };
     var visibleIntersection = intersectRects(rect, viewportRect);
     if (!visibleIntersection) return null;
@@ -909,6 +1475,20 @@
     var sourceWidth = Math.round(visibleIntersection.width * scale);
     var sourceHeight = Math.round(visibleIntersection.height * scale);
     if (sourceWidth <= 0 || sourceHeight <= 0) return null;
+
+    console.debug("[visual-qa][v1.2][shot] crop", {
+      recordId: record && record.id ? record.id : "",
+      captureRect: rect,
+      captureScroll: captureScroll,
+      viewportRect: viewportRect,
+      visibleIntersection: visibleIntersection,
+      cropRect: {
+        left: sourceLeft,
+        top: sourceTop,
+        width: sourceWidth,
+        height: sourceHeight
+      }
+    });
 
     var baseCanvas = createCanvas(rect.width * scale, rect.height * scale);
     var baseCtx = baseCanvas.getContext("2d");
@@ -926,16 +1506,19 @@
       sourceHeight
     );
 
-    var thumbWidth = 300;
-    var thumbHeight = Math.max(1, Math.round(baseCanvas.height * (thumbWidth / baseCanvas.width)));
+    var thumbLongEdge = 320;
+    var thumbScale = Math.min(thumbLongEdge / Math.max(baseCanvas.width, baseCanvas.height), 1);
+    if (!(thumbScale > 0)) thumbScale = 1;
+    var thumbWidth = Math.max(1, Math.round(baseCanvas.width * thumbScale));
+    var thumbHeight = Math.max(1, Math.round(baseCanvas.height * thumbScale));
     var thumbCanvas = createCanvas(thumbWidth, thumbHeight);
     var thumbCtx = thumbCanvas.getContext("2d");
     thumbCtx.fillStyle = "#ffffff";
     thumbCtx.fillRect(0, 0, thumbCanvas.width, thumbCanvas.height);
     thumbCtx.drawImage(baseCanvas, 0, 0, thumbCanvas.width, thumbCanvas.height);
 
-    var exportLongEdge = 840;
-    var exportScale = exportLongEdge / Math.max(baseCanvas.width, baseCanvas.height);
+    var exportLongEdge = 1600;
+    var exportScale = Math.min(exportLongEdge / Math.max(baseCanvas.width, baseCanvas.height), 1);
     if (!(exportScale > 0)) exportScale = 1;
     var exportWidth = Math.max(1, Math.round(baseCanvas.width * exportScale));
     var exportHeight = Math.max(1, Math.round(baseCanvas.height * exportScale));
@@ -972,14 +1555,41 @@
     var token = ++recordShotCaptureSeq;
     recordShotCaptureTokens[record.id] = token;
     try {
-      var dataUrl = await requestVisibleTabCapture();
+      var captureScroll = getCurrentScrollOffset();
+      var currentCapture = normalizeRecordCapture(record, { forceAdaptiveShotRect: true });
+      var nextCapture = {
+        focusRect: currentCapture && currentCapture.focusRect ? cloneDraft(currentCapture.focusRect) : null,
+        shotRect: currentCapture && currentCapture.shotRect ? cloneDraft(currentCapture.shotRect) : null,
+        scroll: captureScroll
+      };
+      record.capture = nextCapture;
+      updateRecordCaptureById(record.id, nextCapture);
+      console.debug("[visual-qa][v1.2][shot] capture-start", {
+        recordId: record.id,
+        type: record.type,
+        focusRect: nextCapture.focusRect,
+        shotRect: nextCapture.shotRect,
+        captureScroll: nextCapture.scroll
+      });
+      var dataUrl = await requestCleanVisibleTabCapture();
       if (!dataUrl) throw new Error("Empty capture result");
       if (recordShotCaptureTokens[record.id] !== token) return;
       var shot = await buildShotImagesFromCapture(record, dataUrl);
       if (recordShotCaptureTokens[record.id] !== token) return;
       if (shot) {
+        console.debug("[visual-qa][v1.2][shot] capture-success", {
+          recordId: record.id,
+          thumb: !!shot.thumb,
+          export: !!shot.export
+        });
         setRecordShotById(record.id, shot);
       } else {
+        console.debug("[visual-qa][v1.2][shot] capture-empty", {
+          recordId: record.id,
+          focusRect: record.capture && record.capture.focusRect ? record.capture.focusRect : null,
+          shotRect: record.capture && record.capture.shotRect ? record.capture.shotRect : null,
+          captureScroll: record.capture && record.capture.scroll ? record.capture.scroll : null
+        });
         setRecordShotById(record.id, buildFallbackShotBundle(record));
       }
     } catch (err) {
@@ -1032,10 +1642,12 @@
     draft.updatedAt = new Date().toISOString();
   }
 
-  function createPendingRecord(type, targetName, captureRect, targetHint) {
+  function createPendingRecord(type, targetName, focusRect, targetHint) {
     var category = getRecordCategory("layout");
     var now = new Date().toISOString();
-    var normalizedCaptureRect = buildRecordCaptureRect(type, captureRect);
+    var normalizedFocusRect = normalizeRect(focusRect);
+    var normalizedShotRect = buildRecordShotRect(type, normalizedFocusRect);
+    var captureScroll = getCurrentScrollOffset();
     return {
       id: makeRecordId(),
       type: type,
@@ -1051,11 +1663,9 @@
         export: null
       },
       capture: {
-        rect: normalizedCaptureRect,
-        scroll: {
-          x: window.scrollX || window.pageXOffset || 0,
-          y: window.scrollY || window.pageYOffset || 0
-        }
+        focusRect: normalizedFocusRect,
+        shotRect: normalizedShotRect,
+        scroll: captureScroll
       },
       targetHint: targetHint || {}
     };
@@ -3204,7 +3814,7 @@
     "div",
     "position:fixed;top:0;right:0;width:332px;height:100%;border-left:1px solid rgba(255,255,255,.08);background:#101216;color:#fff;z-index:" +
       (CONFIG.zIndexTooltip + 1) +
-      ";box-shadow:-14px 0 28px rgba(15,23,42,.18);display:none;"
+      ";box-shadow:-14px 0 28px rgba(15,23,42,.18);display:none;overflow:hidden;"
   );
 
   var regionSelectBox = make(
@@ -3219,6 +3829,13 @@
     "position:fixed;right:28px;top:156px;width:336px;padding:16px;border-radius:24px;background:#16181d;border:1px solid rgba(255,255,255,.08);color:#fff;box-shadow:0 18px 36px rgba(15,23,42,.26);z-index:" +
       (CONFIG.zIndexTooltip + 3) +
       ";display:none;"
+  );
+
+  var recordPreview = make(
+    "div",
+    "position:fixed;inset:0;display:none;align-items:center;justify-content:center;padding:24px;box-sizing:border-box;z-index:" +
+      (CONFIG.zIndexTooltip + 5) +
+      ";"
   );
 
   var v12Notice = make(
@@ -3326,7 +3943,8 @@
         }).join("")
       : '<div style="padding:28px 18px;border:1px dashed rgba(255,255,255,.12);border-radius:22px;background:rgba(255,255,255,.03);color:rgba(255,255,255,.64);font-size:13px;line-height:1.8;text-align:center;">当前没有记录。<br>切到记录模式后创建元素记录或区域记录，保存后会出现在这里。</div>';
     drawerStub.innerHTML =
-      '<div style="padding:22px 16px 16px;border-bottom:1px solid rgba(255,255,255,.08);position:sticky;top:0;background:#101216;z-index:2;">' +
+      '<div style="display:flex;flex-direction:column;height:100%;min-height:0;overflow:hidden;">' +
+      '<div style="padding:22px 16px 16px;border-bottom:1px solid rgba(255,255,255,.08);flex:0 0 auto;background:#101216;z-index:2;">' +
       '<small style="display:block;color:rgba(255,255,255,.38);font-size:11px;letter-spacing:.18em;text-transform:uppercase;margin-bottom:8px;">Record Drawer</small>' +
       '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">' +
       '<h3 style="margin:0;font-size:22px;line-height:1.2;">本次记录 ' + esc(String(totalCount)) + "</h3>" +
@@ -3339,11 +3957,15 @@
       '<div style="margin-top:14px;">' +
       filterButtons +
       "</div>" +
-      "</div>";
-    drawerStub.innerHTML +=
-      '<div style="height:calc(100% - 190px);overflow:auto;padding:14px;display:flex;flex-direction:column;gap:12px;">' +
+      "</div>" +
+      '<div style="flex:1 1 auto;min-height:0;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:12px;">' +
       cardsHtml +
+      "</div>" +
       "</div>";
+  }
+
+  function isRecordPreviewOpen() {
+    return !!state.v12.previewRecordId;
   }
 
   function renderV12Notice() {
@@ -3377,10 +3999,13 @@
     } else if (
       state.v12.pendingRecord &&
       state.v12.pendingRecord.type === "region" &&
-      state.v12.pendingRecord.capture &&
-      state.v12.pendingRecord.capture.rect
+      normalizeRecordCapture(state.v12.pendingRecord)
     ) {
-      rect = state.v12.pendingRecord.capture.rect;
+      var pendingCapture = normalizeRecordCapture(state.v12.pendingRecord);
+      rect = documentRectToViewportRect(
+        pendingCapture.focusRect,
+        pendingCapture.scroll
+      );
     }
 
     if (!rect || rect.width <= 0 || rect.height <= 0) {
@@ -3504,15 +4129,24 @@
   function createElementPendingRecord(el) {
     setRecordTarget(el);
     var rect = el.getBoundingClientRect();
+    var rawViewportRect = {
+      left: Math.round(rect.left),
+      top: Math.round(rect.top),
+      width: Math.round(rect.width),
+      height: Math.round(rect.height)
+    };
+    var captureRect = viewportRectToDocumentRect(rawViewportRect);
+    console.debug("[visual-qa][v1.2][shot] element-record", {
+      scrollX: window.scrollX || window.pageXOffset || 0,
+      scrollY: window.scrollY || window.pageYOffset || 0,
+      rawRect: rawViewportRect,
+      boundingClientRect: rawViewportRect,
+      captureRect: captureRect
+    });
     var record = createPendingRecord(
       "element",
       buildElementTargetName(el),
-      {
-        left: Math.round(rect.left),
-        top: Math.round(rect.top),
-        width: Math.round(rect.width),
-        height: Math.round(rect.height)
-      },
+      captureRect,
       buildElementTargetHint(el)
     );
     openPendingRecord(record);
@@ -3520,15 +4154,18 @@
   }
 
   function createRegionPendingRecord(rect) {
+    var rawViewportRect = normalizeRect(rect);
+    var captureRect = viewportRectToDocumentRect(rawViewportRect);
+    console.debug("[visual-qa][v1.2][shot] region-record", {
+      scrollX: window.scrollX || window.pageXOffset || 0,
+      scrollY: window.scrollY || window.pageYOffset || 0,
+      rawRect: rawViewportRect,
+      captureRect: captureRect
+    });
     var record = createPendingRecord(
       "region",
       "区域记录",
-      {
-        left: Math.round(rect.left),
-        top: Math.round(rect.top),
-        width: Math.round(rect.width),
-        height: Math.round(rect.height)
-      },
+      captureRect,
       {
         label: "region-selection",
         className: "",
@@ -3568,6 +4205,10 @@
       }
     } else if (action === "drawer-filter") {
       setDrawerCategoryFilter(target.getAttribute("data-filter-id") || "all");
+    } else if (action === "drawer-open-preview") {
+      openRecordPreview(target.getAttribute("data-record-id") || "");
+    } else if (action === "drawer-close-preview") {
+      closeRecordPreview();
     } else if (action === "drawer-delete") {
       deleteDraftRecord(target.getAttribute("data-record-id") || "");
     } else if (action === "drawer-clear") {
@@ -4182,6 +4823,7 @@
       recordComposer.style.display = "none";
       v12Notice.style.display = "none";
       regionSelectBox.style.display = "none";
+      recordPreview.style.display = "none";
       highlight.style.display = "none";
       selectA.style.display = "none";
       selectB.style.display = "none";
@@ -4202,6 +4844,7 @@
     renderDrawerStub();
     renderRecordComposer();
     renderV12Notice();
+    renderRecordPreview();
     renderRegionSelection();
     var el = getActiveEl();
     state.primaryMeasure = isRecordMode() ? null : hasSelectedEl() ? resolvePrimaryMeasure(state.mouseX, state.mouseY, state.hoveredEl) : null;
@@ -4327,6 +4970,7 @@
       return;
     }
     if (topbar.contains(e.target) || recordMenu.contains(e.target) || drawerStub.contains(e.target) || recordComposer.contains(e.target)) return;
+    if (recordPreview.contains(e.target)) return;
     if (tooltip.contains(e.target)) return;
     state.debugRawTarget = e.target || null;
     var el = fromPoint(e.clientX, e.clientY);
@@ -4447,6 +5091,13 @@
       updateScrubHoverCursor(!!e.altKey);
     }
     if (shouldSuppressGlobalHotkeys(e)) return;
+    if (isRecordPreviewOpen() && (key === CONFIG.hotkeys.exit || key === "esc")) {
+      e.__visualQAHandled = true;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      closeRecordPreview();
+      return;
+    }
     if (key === CONFIG.hotkeys.exit || key === "esc") {
       e.__visualQAHandled = true;
       e.preventDefault();
@@ -4545,6 +5196,7 @@
     recordComposer.removeEventListener("focusin", onRecordComposerFocusIn, true);
     recordComposer.removeEventListener("keyup", onRecordComposerKeyUp, true);
     recordComposer.removeEventListener("mouseup", onRecordComposerMouseUp, true);
+    recordPreview.removeEventListener("click", onV12Click, true);
     regionCaptureOverlay.removeEventListener("mousedown", startRegionCapture, true);
     regionCaptureOverlay.removeEventListener("mousemove", updateRegionCapture, true);
     regionCaptureOverlay.removeEventListener("mouseup", finishRegionCapture, true);
@@ -4558,7 +5210,7 @@
     floating.removeEventListener("mouseenter", onFloatEnter, true);
     floating.removeEventListener("mouseleave", onFloatLeave, true);
     btnMeasure.removeEventListener("click", onMeasureClick, true);
-    [highlight, selectA, selectB, tooltip, spacingLayer, measureLayer, floating, topbar, recordMenu, regionCaptureOverlay, drawerStub, regionSelectBox, recordComposer, v12Notice].forEach(function (el) {
+    [highlight, selectA, selectB, tooltip, spacingLayer, measureLayer, floating, topbar, recordMenu, regionCaptureOverlay, drawerStub, regionSelectBox, recordComposer, recordPreview, v12Notice].forEach(function (el) {
       if (el && el.parentNode) el.parentNode.removeChild(el);
     });
     Object.keys(bridgePending).forEach(function (requestId) {
@@ -4651,6 +5303,7 @@
   recordComposer.addEventListener("focusin", onRecordComposerFocusIn, true);
   recordComposer.addEventListener("keyup", onRecordComposerKeyUp, true);
   recordComposer.addEventListener("mouseup", onRecordComposerMouseUp, true);
+  recordPreview.addEventListener("click", onV12Click, true);
   regionCaptureOverlay.addEventListener("mousedown", startRegionCapture, true);
   regionCaptureOverlay.addEventListener("mousemove", updateRegionCapture, true);
   regionCaptureOverlay.addEventListener("mouseup", finishRegionCapture, true);
