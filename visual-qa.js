@@ -128,6 +128,7 @@
     v12: {
       mode: "select",
       recordSubMode: "element",
+      recordSubModePreference: "",
       drawerOpen: false,
       drawerCategoryFilter: "all",
       drawerMenuRecordId: "",
@@ -180,9 +181,59 @@
   var recordShotCaptureSeq = 0;
   var recordShotCaptureTokens = {};
   var captureHideStyleEl = null;
+  var captureRestoreTimerId = 0;
+  var captureRestoreSeq = 0;
+  var RECORD_SUB_MODE_STORAGE_KEY = "visual-qa.record-sub-mode";
+  var CAPTURE_RESTORE_DURATION_MS = 150;
 
   function clamp(v, min, max) {
     return Math.max(min, Math.min(max, v));
+  }
+
+  function readStoredRecordSubMode() {
+    try {
+      var value = window.localStorage.getItem(RECORD_SUB_MODE_STORAGE_KEY);
+      return value === "element" || value === "region" ? value : "";
+    } catch (err) {
+      return "";
+    }
+  }
+
+  function storeRecordSubModePreference(subMode) {
+    try {
+      window.localStorage.setItem(RECORD_SUB_MODE_STORAGE_KEY, subMode);
+    } catch (err) {
+      // Ignore storage failures and fall back to the in-memory default.
+    }
+  }
+
+  function getRememberedRecordSubMode() {
+    return state.v12.recordSubModePreference || "";
+  }
+
+  function getRecordSubModeValue(subMode) {
+    return subMode === "region" ? "region" : "element";
+  }
+
+  function formatRecordSubModeLabel(subMode) {
+    return getRecordSubModeValue(subMode) === "region" ? "区域" : "元素";
+  }
+
+  function getPreferredRecordSubMode() {
+    return getRememberedRecordSubMode() || "region";
+  }
+
+  function setRecordSubModePreference(subMode) {
+    var nextSubMode = getRecordSubModeValue(subMode);
+    state.v12.recordSubMode = nextSubMode;
+    state.v12.recordSubModePreference = nextSubMode;
+    storeRecordSubModePreference(nextSubMode);
+  }
+
+  var rememberedRecordSubMode = readStoredRecordSubMode();
+  if (rememberedRecordSubMode) {
+    state.v12.recordSubMode = rememberedRecordSubMode;
+    state.v12.recordSubModePreference = rememberedRecordSubMode;
   }
 
   function normalizePageKey(url) {
@@ -418,8 +469,10 @@
     if (!capture || !capture.focusRect || !capture.shotRect || !src) return "";
     var focusRect = capture.focusRect;
     var shotRect = capture.shotRect;
-    var rectX = Math.max(0, focusRect.left - shotRect.left);
-    var rectY = Math.max(0, focusRect.top - shotRect.top);
+    var visibleFocusRect = intersectRects(focusRect, shotRect) || null;
+    if (!visibleFocusRect) return "";
+    var rectX = Math.max(0, visibleFocusRect.left - shotRect.left);
+    var rectY = Math.max(0, visibleFocusRect.top - shotRect.top);
     var svgStyle = extraStyle || "display:block;width:100%;height:100%;";
     return (
       '<svg viewBox="0 0 ' +
@@ -441,9 +494,9 @@
       '" y="' +
       rectY +
       '" width="' +
-      focusRect.width +
+      visibleFocusRect.width +
       '" height="' +
-      focusRect.height +
+      visibleFocusRect.height +
       '" rx="10" fill="rgba(217,70,239,0.12)" stroke="#d946ef" stroke-width="2" vector-effect="non-scaling-stroke" />' +
       "</svg>"
     );
@@ -454,16 +507,18 @@
     if (!capture || !capture.focusRect || !capture.shotRect) return "";
     var focusRect = capture.focusRect;
     var shotRect = capture.shotRect;
+    var visibleFocusRect = intersectRects(focusRect, shotRect) || null;
+    if (!visibleFocusRect) return "";
     if (!(shotRect.width > 0) || !(shotRect.height > 0)) return "";
     if (displayWidth > 0 && displayHeight > 0) {
       var scaleX = displayWidth / shotRect.width;
       var scaleY = displayHeight / shotRect.height;
       return [
         "position:absolute",
-        "left:" + Math.max(0, (focusRect.left - shotRect.left) * scaleX) + "px",
-        "top:" + Math.max(0, (focusRect.top - shotRect.top) * scaleY) + "px",
-        "width:" + Math.max(0, focusRect.width * scaleX) + "px",
-        "height:" + Math.max(0, focusRect.height * scaleY) + "px",
+        "left:" + Math.max(0, (visibleFocusRect.left - shotRect.left) * scaleX) + "px",
+        "top:" + Math.max(0, (visibleFocusRect.top - shotRect.top) * scaleY) + "px",
+        "width:" + Math.max(0, visibleFocusRect.width * scaleX) + "px",
+        "height:" + Math.max(0, visibleFocusRect.height * scaleY) + "px",
         "border:2px solid #d946ef",
         "background:rgba(217,70,239,.12)",
         "border-radius:10px",
@@ -474,10 +529,10 @@
     }
     return [
       "position:absolute",
-      "left:" + ((focusRect.left - shotRect.left) / shotRect.width) * 100 + "%",
-      "top:" + ((focusRect.top - shotRect.top) / shotRect.height) * 100 + "%",
-      "width:" + (focusRect.width / shotRect.width) * 100 + "%",
-      "height:" + (focusRect.height / shotRect.height) * 100 + "%",
+      "left:" + ((visibleFocusRect.left - shotRect.left) / shotRect.width) * 100 + "%",
+      "top:" + ((visibleFocusRect.top - shotRect.top) / shotRect.height) * 100 + "%",
+      "width:" + (visibleFocusRect.width / shotRect.width) * 100 + "%",
+      "height:" + (visibleFocusRect.height / shotRect.height) * 100 + "%",
       "border:2px solid #d946ef",
       "background:rgba(217,70,239,.12)",
       "border-radius:10px",
@@ -941,7 +996,7 @@
   }
 
   function getRecordSubModeLabel() {
-    return state.v12.recordSubMode === "region" ? "区域" : "元素";
+    return formatRecordSubModeLabel(state.v12.recordSubMode);
   }
 
   function getRecordTargetEl() {
@@ -970,24 +1025,60 @@
 
   function setV12Mode(mode) {
     if (mode !== "select" && mode !== "record") return;
-    if (mode === "record" && state.v12.mode === "record" && !state.v12.pendingRecord) {
-      state.v12.recordMenuOpen = !state.v12.recordMenuOpen;
-      schedule();
-      return;
-    }
-    state.v12.mode = mode;
-    state.v12.recordMenuOpen = mode === "record";
     if (mode !== "record") {
       if (state.v12.pendingRecord) discardPendingShotCapture(state.v12.pendingRecord.id);
-      state.v12.categoryMenuOpen = false;
-      state.v12.pendingRecord = null;
-      resetRegionSelection();
-      clearRecordTarget();
+      state.v12.mode = mode;
+      cleanupRecordInteractionState();
     } else {
+      state.v12.mode = mode;
       state.v12.drawerOpen = false;
-      state.v12.categoryMenuOpen = false;
+      cleanupRecordInteractionState({ keepPendingRecord: true });
     }
     schedule();
+  }
+
+  function closeRecordMenu() {
+    if (!state.v12.recordMenuOpen) return;
+    state.v12.recordMenuOpen = false;
+  }
+
+  function toggleRecordMenu() {
+    state.v12.recordMenuOpen = !state.v12.recordMenuOpen;
+    schedule();
+  }
+
+  function enterRecordModeWithSubMode(subMode) {
+    if (state.v12.pendingRecord) {
+      showV12Notice("请先保存或取消当前记录");
+      return;
+    }
+    setRecordSubModePreference(subMode);
+    state.v12.recordMenuOpen = false;
+    state.v12.categoryMenuOpen = false;
+    state.v12.drawerOpen = false;
+    cleanupRecordInteractionState();
+    setV12Mode("record");
+  }
+
+  function handleRecordMainAction() {
+    if (state.v12.pendingRecord) {
+      showV12Notice("请先保存或取消当前记录");
+      return;
+    }
+    var preferred = getRememberedRecordSubMode();
+    if (!preferred) {
+      toggleRecordMenu();
+      return;
+    }
+    enterRecordModeWithSubMode(preferred);
+  }
+
+  function handleRecordArrowAction() {
+    if (state.v12.pendingRecord) {
+      showV12Notice("请先保存或取消当前记录");
+      return;
+    }
+    toggleRecordMenu();
   }
 
   function toggleV12Drawer() {
@@ -1000,14 +1091,7 @@
   }
 
   function setV12RecordSubMode(subMode) {
-    if (subMode !== "element" && subMode !== "region") return;
-    state.v12.recordSubMode = subMode;
-    state.v12.recordMenuOpen = false;
-    state.v12.categoryMenuOpen = false;
-    state.v12.drawerOpen = false;
-    resetRegionSelection();
-    clearRecordTarget();
-    schedule();
+    enterRecordModeWithSubMode(subMode);
   }
 
   var RECORD_CATEGORIES = [
@@ -1034,6 +1118,18 @@
       currentX: 0,
       currentY: 0
     };
+  }
+
+  function cleanupRecordInteractionState(options) {
+    var keepPendingRecord = !!(options && options.keepPendingRecord);
+    state.v12.recordMenuOpen = false;
+    state.v12.categoryMenuOpen = false;
+    state.v12.suppressNextClick = false;
+    if (!keepPendingRecord) {
+      state.v12.pendingRecord = null;
+    }
+    resetRegionSelection();
+    clearRecordTarget();
   }
 
   function getRegionSelectionRect() {
@@ -1461,7 +1557,11 @@
     captureHideStyleEl = document.createElement("style");
     captureHideStyleEl.setAttribute("data-vqa-capture-hide-style", "1");
     captureHideStyleEl.textContent =
-      '[data-vqa-capture-hidden="1"]{display:none !important;visibility:hidden !important;pointer-events:none !important;}';
+      '[data-vqa-capture-hidden="1"]{display:none !important;visibility:hidden !important;pointer-events:none !important;}' +
+      '[data-vqa-capture-restoring="1"]{opacity:0 !important;pointer-events:none !important;will-change:opacity;}' +
+      '[data-vqa-capture-restoring="1"][data-vqa-capture-restoring-ready="1"]{opacity:1 !important;transition:opacity ' +
+      CAPTURE_RESTORE_DURATION_MS +
+      'ms ease-out !important;}';
     (document.head || document.documentElement || document.body).appendChild(captureHideStyleEl);
   }
 
@@ -1487,14 +1587,60 @@
 
   function setPluginUiCaptureHidden(hidden) {
     ensureCaptureHideStyle();
+    if (hidden && captureRestoreTimerId) {
+      window.clearTimeout(captureRestoreTimerId);
+      captureRestoreTimerId = 0;
+    }
+    if (hidden) {
+      captureRestoreSeq++;
+    }
     getCaptureHiddenElements().forEach(function (el) {
       if (!el) return;
       if (hidden) {
+        el.removeAttribute("data-vqa-capture-restoring");
+        el.removeAttribute("data-vqa-capture-restoring-ready");
         el.setAttribute("data-vqa-capture-hidden", "1");
       } else {
         el.removeAttribute("data-vqa-capture-hidden");
       }
     });
+  }
+
+  function animateCaptureUiRestore() {
+    ensureCaptureHideStyle();
+    var restoreSeq = ++captureRestoreSeq;
+    var animatedElements = [topbar, floating, recordMenu, drawerStub, recordComposer, recordPreview, v12Notice];
+
+    if (captureRestoreTimerId) {
+      window.clearTimeout(captureRestoreTimerId);
+      captureRestoreTimerId = 0;
+    }
+
+    setPluginUiCaptureHidden(false);
+
+    animatedElements.forEach(function (el) {
+      if (!el) return;
+      el.setAttribute("data-vqa-capture-restoring", "1");
+      el.removeAttribute("data-vqa-capture-restoring-ready");
+    });
+
+    requestAnimationFrame(function () {
+      if (restoreSeq !== captureRestoreSeq) return;
+      animatedElements.forEach(function (el) {
+        if (!el || el.getAttribute("data-vqa-capture-restoring") !== "1") return;
+        el.setAttribute("data-vqa-capture-restoring-ready", "1");
+      });
+    });
+
+    captureRestoreTimerId = window.setTimeout(function () {
+      if (restoreSeq !== captureRestoreSeq) return;
+      animatedElements.forEach(function (el) {
+        if (!el) return;
+        el.removeAttribute("data-vqa-capture-restoring");
+        el.removeAttribute("data-vqa-capture-restoring-ready");
+      });
+      captureRestoreTimerId = 0;
+    }, CAPTURE_RESTORE_DURATION_MS + 40);
   }
 
   function waitForAnimationFrames(count) {
@@ -1518,7 +1664,7 @@
     try {
       return await requestVisibleTabCapture();
     } finally {
-      setPluginUiCaptureHidden(false);
+      animateCaptureUiRestore();
       await waitForAnimationFrames(1);
     }
   }
@@ -1538,8 +1684,9 @@
       } else {
         shotRect = buildRecordShotRect(record.type, focusRect);
       }
+      shotRect = ensureRectContainsRect(shotRect, focusRect);
+      shotRect = fitRectToVisibleViewport(shotRect);
     }
-    shotRect = ensureRectContainsRect(shotRect, focusRect);
     return {
       focusRect: focusRect,
       shotRect: shotRect,
@@ -1560,6 +1707,24 @@
       width: right - left,
       height: bottom - top
     };
+  }
+
+  function fitRectToVisibleViewport(rect) {
+    var normalizedRect = normalizeRect(rect);
+    if (!normalizedRect) return null;
+    var viewportRect = getVisibleViewportRect();
+    var viewportWidth = Math.max(1, viewportRect.width || window.innerWidth || 1);
+    var viewportHeight = Math.max(1, viewportRect.height || window.innerHeight || 1);
+    var width = Math.min(normalizedRect.width, viewportWidth);
+    var height = Math.min(normalizedRect.height, viewportHeight);
+    var maxLeft = viewportRect.left + Math.max(0, viewportWidth - width);
+    var maxTop = viewportRect.top + Math.max(0, viewportHeight - height);
+    return normalizeRect({
+      left: clamp(normalizedRect.left, viewportRect.left, maxLeft),
+      top: clamp(normalizedRect.top, viewportRect.top, maxTop),
+      width: width,
+      height: height
+    });
   }
 
   async function buildShotImagesFromCapture(record, dataUrl) {
@@ -1811,8 +1976,6 @@
 
   function openPendingRecord(record) {
     state.v12.pendingRecord = record;
-    state.v12.recordMenuOpen = false;
-    state.v12.categoryMenuOpen = false;
     state.v12.drawerOpen = false;
     state.v12.composerFocusPending = true;
     state.v12.noteSelectionStart = record && record.note ? String(record.note).length : 0;
@@ -1821,25 +1984,18 @@
   }
 
   function closePendingRecord() {
-    state.v12.pendingRecord = null;
-    state.v12.categoryMenuOpen = false;
+    cleanupRecordInteractionState();
     state.v12.composerFocusPending = false;
     state.v12.noteSelectionStart = 0;
     state.v12.noteSelectionEnd = 0;
-    clearRecordTarget();
-    resetRegionSelection();
     schedule();
   }
 
   function restartRegionRecordSelection() {
-    state.v12.pendingRecord = null;
-    state.v12.recordMenuOpen = false;
-    state.v12.categoryMenuOpen = false;
+    cleanupRecordInteractionState();
     state.v12.composerFocusPending = false;
     state.v12.noteSelectionStart = 0;
     state.v12.noteSelectionEnd = 0;
-    clearRecordTarget();
-    resetRegionSelection();
     schedule();
   }
 
@@ -3964,9 +4120,9 @@
 
   var recordComposer = make(
     "div",
-    "position:fixed;right:28px;top:156px;width:336px;padding:16px;border-radius:24px;background:#16181d;border:1px solid rgba(255,255,255,.08);color:#fff;box-shadow:0 18px 36px rgba(15,23,42,.26);z-index:" +
+    "position:fixed;left:0;top:0;right:auto;bottom:auto;width:336px;padding:16px;border-radius:24px;background:#16181d;border:1px solid rgba(255,255,255,.08);color:#fff;box-shadow:0 18px 36px rgba(15,23,42,.26);z-index:" +
       (CONFIG.zIndexTooltip + 3) +
-      ";display:none;"
+      ";display:none;transform:none;"
   );
 
   var recordPreview = make(
@@ -4011,29 +4167,82 @@
   function renderTopbar() {
     topbar.innerHTML =
       modeButtonHtml("mode-select", "选择", isSelectMode()) +
-      modeButtonHtml("mode-record", "记录", isRecordMode(), isRecordMode() ? getRecordSubModeLabel() : null) +
+      '<div style="display:inline-flex;align-items:stretch;overflow:hidden;border-radius:999px;border:1px solid ' +
+      (isRecordMode() ? "#ffffff" : "rgba(255,255,255,.10)") +
+      ";background:" +
+      (isRecordMode() ? "#ffffff" : "transparent") +
+      ';box-shadow:' +
+      (state.v12.recordMenuOpen ? "0 0 0 1px rgba(255,255,255,.08) inset" : "none") +
+      ';">' +
+      '<button type="button" data-v12-action="record-main" style="display:inline-flex;align-items:center;gap:8px;padding:10px 14px;border:0;background:' +
+      (isRecordMode() ? "#ffffff" : "transparent") +
+      ";color:" +
+      (isRecordMode() ? "#111827" : "rgba(255,255,255,.82)") +
+      ';font:14px/1.1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;' +
+      (isRecordMode() ? "font-weight:700;" : "") +
+      'cursor:pointer;white-space:nowrap;">' +
+      "记录" +
+      (getRememberedRecordSubMode()
+        ? '<span style="min-width:34px;height:20px;padding:0 8px;border-radius:999px;background:' +
+          (isRecordMode() ? "#111827" : "rgba(255,255,255,.10)") +
+          ";color:" +
+          (isRecordMode() ? "#fff" : "rgba(255,255,255,.90)") +
+          ';display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;">' +
+          esc(formatRecordSubModeLabel(getRememberedRecordSubMode())) +
+          "</span>"
+        : "") +
+      "</button>" +
+      '<button type="button" data-v12-action="record-menu-toggle" aria-label="打开记录模式菜单" style="display:inline-flex;align-items:center;justify-content:center;width:32px;border:0;border-left:1px solid ' +
+      (isRecordMode() ? "rgba(17,24,39,.12)" : "rgba(255,255,255,.08)") +
+      ";background:" +
+      (state.v12.recordMenuOpen || isRecordMode() ? (isRecordMode() ? "rgba(17,24,39,.05)" : "rgba(255,255,255,.08)") : "transparent") +
+      ';color:' +
+      (isRecordMode() ? "#111827" : "rgba(255,255,255,.78)") +
+      ';font:12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;">▾</button>' +
+      "</div>" +
       modeButtonHtml("mode-measure", "测量", false) +
       modeButtonHtml("toggle-drawer", "记录列表", state.v12.drawerOpen, getV12RecordCount());
   }
 
   function renderRecordMenu() {
-    if (!isRecordMode() || !state.v12.recordMenuOpen) {
+    if (!state.v12.recordMenuOpen) {
       recordMenu.style.display = "none";
       return;
     }
 
     recordMenu.style.display = "block";
+    var selectedSubMode = getPreferredRecordSubMode();
     recordMenu.innerHTML =
-      '<button type="button" data-v12-action="record-submode-element" style="display:block;width:100%;padding:12px 14px;border:0;border-radius:14px;background:' +
-      (state.v12.recordSubMode === "element" ? "rgba(255,255,255,.08)" : "transparent") +
-      ";color:#fff;text-align:left;font:14px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;" +
-      (state.v12.recordSubMode === "element" ? "font-weight:600;" : "") +
-      'cursor:pointer;">元素</button>' +
-      '<button type="button" data-v12-action="record-submode-region" style="display:block;width:100%;margin-top:4px;padding:12px 14px;border:0;border-radius:14px;background:' +
-      (state.v12.recordSubMode === "region" ? "rgba(255,255,255,.08)" : "transparent") +
-      ";color:#fff;text-align:left;font:14px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;" +
-      (state.v12.recordSubMode === "region" ? "font-weight:600;" : "") +
-      'cursor:pointer;">区域</button>';
+      '<button type="button" data-v12-action="record-submode-element" style="display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;padding:12px 14px;border:0;border-radius:14px;background:' +
+      (selectedSubMode === "element" ? "rgba(255,255,255,.08)" : "transparent") +
+      ";color:" +
+      (selectedSubMode === "element" ? "#fff" : "rgba(255,255,255,.88)") +
+      ';text-align:left;font:14px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;' +
+      (selectedSubMode === "element" ? "font-weight:600;" : "") +
+      'cursor:pointer;">' +
+      '<span style="display:inline-flex;align-items:center;gap:12px;">' +
+      '<span style="width:12px;height:12px;border-radius:50%;background:#3b82f6;flex:0 0 auto;"></span>' +
+      "<span>元素</span>" +
+      "</span>" +
+      '<span style="width:16px;text-align:center;color:#fff;font-weight:700;opacity:' +
+      (selectedSubMode === "element" ? "1" : "0") +
+      ';">✓</span>' +
+      "</button>" +
+      '<button type="button" data-v12-action="record-submode-region" style="display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;margin-top:4px;padding:12px 14px;border:0;border-radius:14px;background:' +
+      (selectedSubMode === "region" ? "rgba(255,255,255,.08)" : "transparent") +
+      ";color:" +
+      (selectedSubMode === "region" ? "#fff" : "rgba(255,255,255,.88)") +
+      ';text-align:left;font:14px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;' +
+      (selectedSubMode === "region" ? "font-weight:600;" : "") +
+      'cursor:pointer;">' +
+      '<span style="display:inline-flex;align-items:center;gap:12px;">' +
+      '<span style="width:12px;height:12px;border-radius:50%;background:#22c55e;flex:0 0 auto;"></span>' +
+      "<span>区域</span>" +
+      "</span>" +
+      '<span style="width:16px;text-align:center;color:#fff;font-weight:700;opacity:' +
+      (selectedSubMode === "region" ? "1" : "0") +
+      ';">✓</span>' +
+      "</button>";
   }
 
   function renderDrawerStub() {
@@ -4167,6 +4376,108 @@
     });
   }
 
+  function getRecordComposerAnchorRect(record) {
+    var capture = normalizeRecordCapture(record);
+    if (!capture || !capture.focusRect) return null;
+    return documentRectToViewportRect(capture.focusRect, getCurrentScrollOffset());
+  }
+
+  function rectsOverlapXY(a, b) {
+    if (!a || !b) return false;
+    var left = Math.max(a.left, b.left);
+    var top = Math.max(a.top, b.top);
+    var right = Math.min(a.left + a.width, b.left + b.width);
+    var bottom = Math.min(a.top + a.height, b.top + b.height);
+    return right > left && bottom > top;
+  }
+
+  function buildComposerRect(left, top, width, height) {
+    return {
+      left: Math.round(left),
+      top: Math.round(top),
+      width: Math.round(width),
+      height: Math.round(height)
+    };
+  }
+
+  function fitComposerWithinViewport(left, top, width, height, safe) {
+    var maxLeft = window.innerWidth - width - safe;
+    var maxTop = window.innerHeight - height - safe;
+    return buildComposerRect(
+      clamp(left, safe, Math.max(safe, maxLeft)),
+      clamp(top, safe, Math.max(safe, maxTop)),
+      width,
+      height
+    );
+  }
+
+  function applyRecordComposerPlacement(record) {
+    if (!record) return;
+    var anchorRect = getRecordComposerAnchorRect(record);
+    var safe = 16;
+    var gap = 20;
+    var fallbackRight = 28;
+    var fallbackTop = 156;
+    var width = Math.max(1, recordComposer.offsetWidth || recordComposer.getBoundingClientRect().width || 336);
+    var height = Math.max(1, recordComposer.offsetHeight || recordComposer.getBoundingClientRect().height || 240);
+    var vw = Math.max(1, window.innerWidth || 0);
+    var vh = Math.max(1, window.innerHeight || 0);
+    var targetRect = anchorRect;
+    var candidates = [];
+
+    function addCandidate(side, left, top) {
+      var rect = fitComposerWithinViewport(left, top, width, height, safe);
+      candidates.push({
+        side: side,
+        rect: rect,
+        fits: rect.left >= safe && rect.top >= safe && rect.left + width <= vw - safe && rect.top + height <= vh - safe
+      });
+    }
+
+    if (targetRect) {
+      addCandidate(
+        "right",
+        targetRect.left + targetRect.width + gap,
+        targetRect.top + (targetRect.height - height) / 2
+      );
+      addCandidate(
+        "left",
+        targetRect.left - width - gap,
+        targetRect.top + (targetRect.height - height) / 2
+      );
+      addCandidate(
+        "bottom",
+        targetRect.left + (targetRect.width - width) / 2,
+        targetRect.top + targetRect.height + gap
+      );
+      addCandidate(
+        "top",
+        targetRect.left + (targetRect.width - width) / 2,
+        targetRect.top - height - gap
+      );
+
+      for (var i = 0; i < candidates.length; i++) {
+        if (!candidates[i].fits) continue;
+        var composerRect = candidates[i].rect;
+        if (rectsOverlapXY(composerRect, targetRect)) continue;
+        recordComposer.style.left = composerRect.left + "px";
+        recordComposer.style.top = composerRect.top + "px";
+        recordComposer.style.right = "auto";
+        recordComposer.style.bottom = "auto";
+        recordComposer.style.transform = "none";
+        return;
+      }
+    }
+
+    var fallbackLeft = vw - width - fallbackRight;
+    var fallbackRect = fitComposerWithinViewport(fallbackLeft, fallbackTop, width, height, safe);
+    recordComposer.style.left = fallbackRect.left + "px";
+    recordComposer.style.top = fallbackRect.top + "px";
+    recordComposer.style.right = "auto";
+    recordComposer.style.bottom = "auto";
+    recordComposer.style.transform = "none";
+  }
+
   function renderRecordComposer() {
     var record = state.v12.pendingRecord;
     if (!record) {
@@ -4197,34 +4508,36 @@
     var nextRenderKey = getRecordComposerRenderKey(record);
 
     recordComposer.style.display = "block";
-    if (recordComposerRenderKey === nextRenderKey) return;
-    recordComposerRenderKey = nextRenderKey;
-    recordComposer.innerHTML =
-      '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;">' +
-      '<h4 style="margin:0;font-size:15px;font-weight:700;">新增记录</h4>' +
-      '<button type="button" data-v12-action="cancel-record" style="border:0;background:transparent;color:rgba(255,255,255,.78);font:16px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;">✕</button>' +
-      "</div>" +
-      '<div style="padding:10px 0 14px;color:rgba(255,255,255,.92);font-size:18px;line-height:1.4;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' +
-      esc(record.targetName) +
-      "</div>" +
-      '<div style="position:relative;display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">' +
-      '<button type="button" data-v12-action="toggle-category-menu" style="display:inline-flex;align-items:center;gap:8px;padding:10px 14px;border-radius:14px;background:rgba(255,255,255,.08);color:#fff;font:14px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;border:1px solid rgba(255,255,255,.08);cursor:pointer;">' +
-      '<span style="width:12px;height:12px;border-radius:50%;background:' + esc(selectedCategory.color) + ';flex:0 0 auto;"></span>' +
-      "<span>" + esc(selectedCategory.label) + "</span>" +
-      '<span style="opacity:.78;font-size:12px;">▼</span>' +
-      "</button>" +
-      menuHtml +
-      "</div>" +
-      '<textarea data-v12-action="record-note" placeholder="写下问题说明" style="width:100%;min-height:108px;padding:14px;border-radius:18px;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.05);color:rgba(255,255,255,.95);font:14px/1.8 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;resize:none;box-sizing:border-box;outline:none;">' +
-      esc(record.note || "") +
-      "</textarea>" +
-      '<div style="display:flex;gap:10px;margin-top:14px;">' +
-      '<button type="button" data-v12-action="save-record" style="flex:1;padding:12px 14px;border-radius:16px;font:14px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;border:0;background:#fff;color:#111827;font-weight:700;cursor:pointer;">保存进抽屉</button>' +
-      (record.type === "region"
-        ? '<button type="button" data-v12-action="reselect-region" style="padding:12px 14px;border-radius:16px;font:14px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;background:rgba(255,255,255,.06);color:#fff;border:1px solid rgba(255,255,255,.1);cursor:pointer;">重新框选</button>'
-        : "") +
-      '<button type="button" data-v12-action="cancel-record" style="padding:12px 14px;border-radius:16px;font:14px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;background:transparent;color:#fff;border:1px solid rgba(255,255,255,.1);cursor:pointer;">取消</button>' +
-      "</div>";
+    if (recordComposerRenderKey !== nextRenderKey) {
+      recordComposerRenderKey = nextRenderKey;
+      recordComposer.innerHTML =
+        '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;">' +
+        '<h4 style="margin:0;font-size:15px;font-weight:700;">新增记录</h4>' +
+        '<button type="button" data-v12-action="cancel-record" style="border:0;background:transparent;color:rgba(255,255,255,.78);font:16px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;">✕</button>' +
+        "</div>" +
+        '<div style="padding:10px 0 14px;color:rgba(255,255,255,.92);font-size:18px;line-height:1.4;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' +
+        esc(record.targetName) +
+        "</div>" +
+        '<div style="position:relative;display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">' +
+        '<button type="button" data-v12-action="toggle-category-menu" style="display:inline-flex;align-items:center;gap:8px;padding:10px 14px;border-radius:14px;background:rgba(255,255,255,.08);color:#fff;font:14px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;border:1px solid rgba(255,255,255,.08);cursor:pointer;">' +
+        '<span style="width:12px;height:12px;border-radius:50%;background:' + esc(selectedCategory.color) + ';flex:0 0 auto;"></span>' +
+        "<span>" + esc(selectedCategory.label) + "</span>" +
+        '<span style="opacity:.78;font-size:12px;">▼</span>' +
+        "</button>" +
+        menuHtml +
+        "</div>" +
+        '<textarea data-v12-action="record-note" placeholder="写下问题说明" style="width:100%;min-height:108px;padding:14px;border-radius:18px;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.05);color:rgba(255,255,255,.95);font:14px/1.8 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;resize:none;box-sizing:border-box;outline:none;">' +
+        esc(record.note || "") +
+        "</textarea>" +
+        '<div style="display:flex;gap:10px;margin-top:14px;">' +
+        '<button type="button" data-v12-action="save-record" style="flex:1;padding:12px 14px;border-radius:16px;font:14px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;border:0;background:#fff;color:#111827;font-weight:700;cursor:pointer;">保存进抽屉</button>' +
+        (record.type === "region"
+          ? '<button type="button" data-v12-action="reselect-region" style="padding:12px 14px;border-radius:16px;font:14px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;background:rgba(255,255,255,.06);color:#fff;border:1px solid rgba(255,255,255,.1);cursor:pointer;">重新框选</button>'
+          : "") +
+        '<button type="button" data-v12-action="cancel-record" style="padding:12px 14px;border-radius:16px;font:14px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;background:transparent;color:#fff;border:1px solid rgba(255,255,255,.1);cursor:pointer;">取消</button>' +
+        "</div>";
+    }
+    applyRecordComposerPlacement(record);
   }
 
   function focusRecordNoteEditor() {
@@ -4318,8 +4631,10 @@
     var action = target.getAttribute("data-v12-action");
     if (action === "mode-select") {
       setV12Mode("select");
-    } else if (action === "mode-record") {
-      setV12Mode("record");
+    } else if (action === "mode-record" || action === "record-main") {
+      handleRecordMainAction();
+    } else if (action === "record-menu-toggle") {
+      handleRecordArrowAction();
     } else if (action === "mode-measure") {
       schedule();
     } else if (action === "toggle-drawer") {
@@ -5114,6 +5429,13 @@
       e.stopPropagation();
       return;
     }
+    if (state.v12.recordMenuOpen && !topbar.contains(e.target) && !recordMenu.contains(e.target)) {
+      closeRecordMenu();
+      schedule();
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     if (topbar.contains(e.target) || recordMenu.contains(e.target) || drawerStub.contains(e.target) || recordComposer.contains(e.target)) return;
     if (recordPreview.contains(e.target)) return;
     if (tooltip.contains(e.target)) return;
@@ -5221,6 +5543,7 @@
     var active = document.activeElement;
     var activeTag = (active && active.tagName ? active.tagName : "").toLowerCase();
     if (active && (active.isContentEditable || /input|textarea|select/.test(activeTag))) return true;
+    if (state.v12.recordMenuOpen) return true;
     if (target && target.closest) {
       if (target.closest("[data-v12-action=\"record-note\"]")) return true;
       if (state.v12.categoryMenuOpen && target.closest("[data-v12-action=\"toggle-category-menu\"], [data-v12-action=\"pick-category\"]")) return true;
@@ -5234,6 +5557,14 @@
     var key = (e.key || "").toLowerCase();
     if (key === "alt" || key === "shift" || key === "meta" || key === "control" || key === "ctrl") {
       updateScrubHoverCursor(!!e.altKey);
+    }
+    if (state.v12.recordMenuOpen && (key === CONFIG.hotkeys.exit || key === "esc")) {
+      e.__visualQAHandled = true;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      closeRecordMenu();
+      schedule();
+      return;
     }
     if (shouldSuppressGlobalHotkeys(e)) return;
     if (isRecordPreviewOpen() && (key === CONFIG.hotkeys.exit || key === "esc")) {
@@ -5363,6 +5694,10 @@
       delete bridgePending[requestId];
     });
     window.clearTimeout(showV12Notice._timerId || 0);
+    if (captureRestoreTimerId) {
+      window.clearTimeout(captureRestoreTimerId);
+      captureRestoreTimerId = 0;
+    }
     if (state.rafId) cancelAnimationFrame(state.rafId);
     delete window.__visualQAInspectorFinal__;
   }
