@@ -42,7 +42,7 @@ async function clearDraft(pageKey) {
 
 function captureVisibleTab(windowId) {
   return new Promise(function (resolve, reject) {
-    chrome.tabs.captureVisibleTab(windowId, { format: "png" }, function (dataUrl) {
+    chrome.tabs.captureVisibleTab(windowId, { format: "jpeg", quality: 80 }, function (dataUrl) {
       var runtimeError = chrome.runtime && chrome.runtime.lastError ? chrome.runtime.lastError : null;
       if (runtimeError) {
         reject(new Error(runtimeError.message || "Failed to capture visible tab"));
