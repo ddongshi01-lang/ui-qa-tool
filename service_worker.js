@@ -57,6 +57,37 @@ function captureVisibleTab(windowId) {
   });
 }
 
+function downloadHtmlFile(html, filename) {
+  return new Promise(function (resolve, reject) {
+    if (!chrome.downloads || typeof chrome.downloads.download !== "function") {
+      reject(new Error("Downloads API unavailable"));
+      return;
+    }
+    var safeHtml = String(html || "");
+    var safeFilename = String(filename || "").trim() || "visual-qa-report.html";
+    var url = "data:text/html;charset=utf-8," + encodeURIComponent(safeHtml);
+    chrome.downloads.download(
+      {
+        url: url,
+        filename: safeFilename,
+        saveAs: false
+      },
+      function (downloadId) {
+        var runtimeError = chrome.runtime && chrome.runtime.lastError ? chrome.runtime.lastError : null;
+        if (runtimeError) {
+          reject(new Error(runtimeError.message || "Download failed"));
+          return;
+        }
+        if (typeof downloadId !== "number") {
+          reject(new Error("Empty download id"));
+          return;
+        }
+        resolve(downloadId);
+      }
+    );
+  });
+}
+
 chrome.action.onClicked.addListener(async (tab) => {
   if (!tab || !tab.id) return;
 
@@ -123,6 +154,22 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
       sendResponse({
         ok: true,
         dataUrl: await captureVisibleTab(sender.tab.windowId)
+      });
+      return;
+    }
+
+    if (action === "export-html") {
+      if (!message.filename) {
+        sendResponse({ ok: false, error: "Missing export filename" });
+        return;
+      }
+      if (!message.html) {
+        sendResponse({ ok: false, error: "Missing export html" });
+        return;
+      }
+      sendResponse({
+        ok: true,
+        downloadId: await downloadHtmlFile(message.html, message.filename)
       });
       return;
     }

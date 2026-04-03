@@ -327,7 +327,9 @@
           requestId: requestId,
           action: action,
           pageKey: payload && payload.pageKey ? payload.pageKey : "",
-          draft: payload && payload.draft ? payload.draft : null
+          draft: payload && payload.draft ? payload.draft : null,
+          html: payload && payload.html ? payload.html : "",
+          filename: payload && payload.filename ? payload.filename : ""
         },
         "*"
       );
@@ -352,6 +354,19 @@
 
   async function clearDraftFromBridge(pageKey) {
     await bridgeRequest("clear-draft", { pageKey: pageKey });
+  }
+
+  async function requestHtmlExportDownloadFromBridge(html, filename) {
+    var response = await bridgeRequest(
+      "export-html",
+      {
+        pageKey: state.v12.draft && state.v12.draft.pageKey ? state.v12.draft.pageKey : normalizePageKey(location.href),
+        html: html || "",
+        filename: filename || ""
+      },
+      8000
+    );
+    return response && typeof response.downloadId === "number" ? response.downloadId : null;
   }
 
   function isBridgeUnavailableError(err) {
@@ -507,6 +522,268 @@
     if (record.shot.export) return String(record.shot.export);
     if (record.shot.thumb) return String(record.shot.thumb);
     return "";
+  }
+
+  function sortRecordsByCreatedAt(records) {
+    return (records || []).slice().sort(function (a, b) {
+      var at = a && a.createdAt ? Date.parse(a.createdAt) || 0 : 0;
+      var bt = b && b.createdAt ? Date.parse(b.createdAt) || 0 : 0;
+      return bt - at;
+    });
+  }
+
+  function formatExportDateTime(iso) {
+    if (!iso) return "";
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return "";
+    return (
+      d.getFullYear() +
+      "-" +
+      pad2(d.getMonth() + 1) +
+      "-" +
+      pad2(d.getDate()) +
+      " " +
+      pad2(d.getHours()) +
+      ":" +
+      pad2(d.getMinutes()) +
+      ":" +
+      pad2(d.getSeconds())
+    );
+  }
+
+  function sanitizeExportFileNamePart(text) {
+    var normalized = String(text || "")
+      .trim()
+      .replace(/[\\/:*?"<>|]+/g, " ")
+      .replace(/\s+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "");
+    return normalized || "visual-qa-report";
+  }
+
+  function buildExportFileName(pageTitle, exportedAt) {
+    var d = exportedAt ? new Date(exportedAt) : new Date();
+    var timestamp = isNaN(d.getTime())
+      ? String(Date.now())
+      : [
+          d.getFullYear(),
+          pad2(d.getMonth() + 1),
+          pad2(d.getDate()),
+          "-",
+          pad2(d.getHours()),
+          pad2(d.getMinutes()),
+          pad2(d.getSeconds())
+        ].join("");
+    return sanitizeExportFileNamePart(pageTitle) + "-" + timestamp + ".html";
+  }
+
+  function getReportPageTitle(draft) {
+    if (draft && draft.pageTitle) return String(draft.pageTitle).trim();
+    return String(document.title || "当前页面").trim() || "当前页面";
+  }
+
+  function getReportPageUrl(draft) {
+    if (draft && draft.pageUrl) return String(draft.pageUrl).trim();
+    return String(location.href || "").trim();
+  }
+
+  function getRecordExportImageSrc(record) {
+    if (!record || !record.shot || !record.shot.export) return "";
+    return String(record.shot.export);
+  }
+
+  function buildRecordExportPageInfo(record) {
+    return {
+      pageTitle: record && record.pageTitle ? String(record.pageTitle).trim() : "",
+      pageUrl: record && record.pageUrl ? String(record.pageUrl).trim() : "",
+      locationSummary: getRecordLocationSummary(record)
+    };
+  }
+
+  function buildHtmlExportRecordViewModels(records) {
+    return sortRecordsByCreatedAt(records).map(function (record, index) {
+      var category = getRecordCategory(record && record.category ? record.category : "layout");
+      var pageInfo = buildRecordExportPageInfo(record);
+      return {
+        index: index + 1,
+        imageSrc: getRecordExportImageSrc(record),
+        categoryLabel: category && category.label ? category.label : "布局",
+        categoryColor: category && category.color ? category.color : "#94a3b8",
+        note: record && record.note ? String(record.note).trim() : "",
+        targetName: record && record.targetName ? String(record.targetName).trim() : "",
+        timeText: formatExportDateTime(
+          record && (record.updatedAt || record.createdAt) ? record.updatedAt || record.createdAt : ""
+        ),
+        pageTitle: pageInfo.pageTitle,
+        pageUrl: pageInfo.pageUrl,
+        locationSummary: pageInfo.locationSummary
+      };
+    });
+  }
+
+  function buildHtmlExportDocument(draft, exportedAt) {
+    var records = getV12DraftRecords();
+    var items = buildHtmlExportRecordViewModels(records);
+    var pageTitle = getReportPageTitle(draft);
+    var pageUrl = getReportPageUrl(draft);
+    var exportTimeText = formatExportDateTime(exportedAt);
+    var listHtml = items.length
+      ? items
+          .map(function (item) {
+            var imageHtml = item.imageSrc
+              ? '<img src="' +
+                esc(item.imageSrc) +
+                '" alt="记录导出图" class="shot-image" />'
+              : '<div class="shot-empty"><strong>暂无导出图</strong><span>该记录未生成 export 图，导出未中断，可稍后回到记录页重新截图后再导出。</span></div>';
+            return (
+              '<article class="issue-card">' +
+              '<div class="issue-media">' +
+              imageHtml +
+              "</div>" +
+              '<div class="issue-body">' +
+              '<div class="issue-head">' +
+              '<span class="issue-index">#' +
+              esc(String(item.index)) +
+              "</span>" +
+              '<span class="issue-category" style="--issue-category:' +
+              esc(item.categoryColor) +
+              ';">' +
+              esc(item.categoryLabel) +
+              "</span>" +
+              "</div>" +
+              '<div class="issue-grid">' +
+              '<section class="issue-field issue-note">' +
+              "<h3>备注</h3>" +
+              "<p>" +
+              esc(item.note || "未填写备注") +
+              "</p>" +
+              "</section>" +
+              '<section class="issue-field">' +
+              "<h3>目标区域名</h3>" +
+              "<p>" +
+              esc(item.targetName || "未命名区域") +
+              "</p>" +
+              "</section>" +
+              '<section class="issue-field">' +
+              "<h3>时间</h3>" +
+              "<p>" +
+              esc(item.timeText || "未知时间") +
+              "</p>" +
+              "</section>" +
+              '<section class="issue-field">' +
+              "<h3>页面信息</h3>" +
+              '<p class="page-meta">' +
+              esc(item.pageTitle || "当前页面") +
+              "</p>" +
+              '<p class="page-link">' +
+              esc(item.pageUrl || pageUrl || "-") +
+              "</p>" +
+              '<p class="page-location">' +
+              esc(item.locationSummary || "未记录位置") +
+              "</p>" +
+              "</section>" +
+              "</div>" +
+              "</div>" +
+              "</article>"
+            );
+          })
+          .join("")
+      : '<div class="empty-state">当前没有可导出的记录。</div>';
+    return (
+      "<!doctype html>" +
+      '<html lang="zh-CN">' +
+      "<head>" +
+      '<meta charset="utf-8" />' +
+      '<meta name="viewport" content="width=device-width, initial-scale=1" />' +
+      "<title>" +
+      esc(pageTitle) +
+      " - Visual QA HTML 导出</title>" +
+      "<style>" +
+      ":root{color-scheme:light;--bg:#f3f6fb;--panel:#ffffff;--panel-soft:#f8fafc;--text:#0f172a;--muted:#64748b;--line:#dbe3ee;--line-strong:#c6d2e1;--accent:#0f172a;--shadow:0 18px 48px rgba(15,23,42,.08);}" +
+      "*{box-sizing:border-box;}" +
+      "html,body{margin:0;padding:0;background:linear-gradient(180deg,#eef4fb 0%,#f8fbff 100%);color:var(--text);font:14px/1.6 -apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;}" +
+      "body{padding:32px 20px 48px;}" +
+      ".report{max-width:1180px;margin:0 auto;}" +
+      ".hero,.section{background:rgba(255,255,255,.9);backdrop-filter:saturate(140%) blur(4px);border:1px solid rgba(198,210,225,.9);border-radius:24px;box-shadow:var(--shadow);}" +
+      ".hero{padding:28px;}" +
+      ".eyebrow{margin:0 0 10px;color:#475569;font-size:12px;letter-spacing:.12em;text-transform:uppercase;}" +
+      ".hero h1{margin:0;font-size:30px;line-height:1.2;word-break:break-word;}" +
+      ".hero-url{margin:12px 0 0;color:#2563eb;word-break:break-all;}" +
+      ".summary-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-top:22px;}" +
+      ".summary-card{padding:16px 18px;border-radius:18px;background:var(--panel-soft);border:1px solid var(--line);}" +
+      ".summary-card .label{display:block;color:var(--muted);font-size:12px;margin-bottom:8px;}" +
+      ".summary-card .value{display:block;color:var(--text);font-size:16px;font-weight:700;word-break:break-word;}" +
+      ".section{margin-top:24px;padding:24px;}" +
+      ".section h2{margin:0 0 16px;font-size:22px;line-height:1.25;}" +
+      ".issue-list{display:flex;flex-direction:column;gap:18px;}" +
+      ".issue-card{display:grid;grid-template-columns:minmax(280px,420px) minmax(0,1fr);gap:20px;padding:20px;border:1px solid var(--line);border-radius:22px;background:#fff;}" +
+      ".issue-media{min-height:220px;border-radius:18px;border:1px solid var(--line);background:#e2e8f0;overflow:hidden;display:flex;align-items:center;justify-content:center;}" +
+      ".shot-image{display:block;width:100%;height:100%;object-fit:contain;background:#fff;}" +
+      ".shot-empty{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:8px;width:100%;height:100%;padding:22px;background:linear-gradient(180deg,#e2e8f0 0%,#f8fafc 100%);color:#475569;}" +
+      ".shot-empty strong{font-size:16px;color:#0f172a;}" +
+      ".issue-body{min-width:0;}" +
+      ".issue-head{display:flex;align-items:center;gap:10px;margin-bottom:14px;}" +
+      ".issue-index{display:inline-flex;align-items:center;justify-content:center;padding:4px 10px;border-radius:999px;background:#e2e8f0;color:#334155;font-size:12px;font-weight:700;}" +
+      ".issue-category{display:inline-flex;align-items:center;padding:4px 10px;border-radius:999px;background:color-mix(in srgb,var(--issue-category) 14%,white);color:var(--issue-category);font-size:12px;font-weight:700;}" +
+      ".issue-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;}" +
+      ".issue-field{padding:16px;border-radius:16px;background:var(--panel-soft);border:1px solid var(--line);min-width:0;}" +
+      ".issue-field h3{margin:0 0 8px;font-size:12px;color:var(--muted);letter-spacing:.04em;text-transform:uppercase;}" +
+      ".issue-field p{margin:0;color:var(--text);word-break:break-word;white-space:pre-wrap;}" +
+      ".issue-note{grid-column:1 / -1;}" +
+      ".page-meta{font-weight:600;}" +
+      ".page-link,.page-location{margin-top:6px !important;color:#475569 !important;}" +
+      ".empty-state{padding:28px;border-radius:18px;border:1px dashed var(--line-strong);background:var(--panel-soft);color:var(--muted);text-align:center;}" +
+      "@media (max-width:960px){.summary-grid{grid-template-columns:repeat(2,minmax(0,1fr));}.issue-card{grid-template-columns:1fr;}.issue-media{min-height:200px;}}" +
+      "@media (max-width:640px){body{padding:18px 12px 32px;}.hero,.section{padding:18px;}.hero h1{font-size:24px;}.summary-grid,.issue-grid{grid-template-columns:1fr;}}" +
+      "</style>" +
+      "</head>" +
+      "<body>" +
+      '<main class="report">' +
+      '<section class="hero">' +
+      '<p class="eyebrow">Visual QA HTML Report</p>' +
+      "<h1>" +
+      esc(pageTitle) +
+      "</h1>" +
+      '<p class="hero-url">' +
+      esc(pageUrl || "-") +
+      "</p>" +
+      '<div class="summary-grid">' +
+      '<div class="summary-card"><span class="label">页面标题</span><span class="value">' +
+      esc(pageTitle) +
+      "</span></div>" +
+      '<div class="summary-card"><span class="label">页面 URL</span><span class="value">' +
+      esc(pageUrl || "-") +
+      "</span></div>" +
+      '<div class="summary-card"><span class="label">导出时间</span><span class="value">' +
+      esc(exportTimeText || "-") +
+      "</span></div>" +
+      '<div class="summary-card"><span class="label">记录总数</span><span class="value">' +
+      esc(String(items.length)) +
+      "</span></div>" +
+      "</div>" +
+      "</section>" +
+      '<section class="section">' +
+      "<h2>问题列表</h2>" +
+      '<div class="issue-list">' +
+      listHtml +
+      "</div>" +
+      "</section>" +
+      "</main>" +
+      "</body>" +
+      "</html>"
+    );
+  }
+
+  async function exportCurrentDraftAsHtml() {
+    var draft = state.v12.draft || buildEmptyDraft(normalizePageKey(location.href));
+    var exportedAt = new Date().toISOString();
+    var html = buildHtmlExportDocument(draft, exportedAt);
+    var fileName = buildExportFileName(getReportPageTitle(draft), exportedAt);
+    var downloadId = await requestHtmlExportDownloadFromBridge(html, fileName);
+    if (downloadId == null) {
+      throw new Error("Empty download id");
+    }
+    showV12Notice("HTML 导出已生成");
   }
 
   function getRecordShotSvgHtml(record, src, extraStyle) {
@@ -5769,8 +6046,11 @@
         armDrawerClearConfirm();
       }
     } else if (action === "drawer-export-html") {
-      showV12Notice("正在预热导出图");
-      void warmAllRecordExports("drawer-export-html");
+      showV12Notice("正在生成 HTML 导出");
+      void exportCurrentDraftAsHtml().catch(function (err) {
+        console.warn("[visual-qa][v1.2] html export failed:", err);
+        showV12Notice("HTML 导出失败，请稍后重试");
+      });
     } else if (action === "record-note" || action === "drawer-note") {
       return;
     } else if (action === "cancel-record") {
@@ -5787,6 +6067,9 @@
     }
     e.preventDefault();
     e.stopPropagation();
+    if (typeof e.stopImmediatePropagation === "function") {
+      e.stopImmediatePropagation();
+    }
   }
 
   function onV12Input(e) {

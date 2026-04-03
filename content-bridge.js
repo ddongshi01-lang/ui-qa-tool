@@ -63,7 +63,9 @@
           requestId: data.requestId,
           action: data.action,
           pageKey: data.pageKey,
-          draft: data.draft || null
+          draft: data.draft || null,
+          html: data.html || "",
+          filename: data.filename || ""
         },
         function (response) {
           var runtimeError = chrome.runtime && chrome.runtime.lastError ? chrome.runtime.lastError : null;
