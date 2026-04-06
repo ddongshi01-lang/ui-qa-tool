@@ -524,6 +524,98 @@
     return "";
   }
 
+  function isRecordShotMarked(record) {
+    return !!(record && record.shot && record.shot.marked);
+  }
+
+  function getRecordMarkedFrameRect(record, targetWidth, targetHeight) {
+    var capture = normalizeRecordCapture(record, { forceAdaptiveShotRect: true });
+    if (!capture || !capture.shotRect) return null;
+    var focusRect = capture.visibleFocusRect || capture.focusRect;
+    var shotRect = capture.shotRect;
+    var visibleFocusRect = capture.visibleFocusRect || (focusRect ? intersectRects(focusRect, shotRect) : null);
+    if (!visibleFocusRect) return null;
+    var width = Math.max(1, Math.round(targetWidth || 0));
+    var height = Math.max(1, Math.round(targetHeight || 0));
+    if (!(width > 0) || !(height > 0) || !(shotRect.width > 0) || !(shotRect.height > 0)) return null;
+    var scaleX = width / shotRect.width;
+    var scaleY = height / shotRect.height;
+    return {
+      left: Math.max(0, (visibleFocusRect.left - shotRect.left) * scaleX),
+      top: Math.max(0, (visibleFocusRect.top - shotRect.top) * scaleY),
+      width: Math.max(0, visibleFocusRect.width * scaleX),
+      height: Math.max(0, visibleFocusRect.height * scaleY),
+      scaleX: scaleX,
+      scaleY: scaleY
+    };
+  }
+
+  function drawRoundedRectPath(ctx, left, top, width, height, radius) {
+    var r = Math.max(0, Math.min(radius || 0, width / 2, height / 2));
+    ctx.beginPath();
+    if (!r) {
+      ctx.rect(left, top, width, height);
+      return;
+    }
+    ctx.moveTo(left + r, top);
+    ctx.lineTo(left + width - r, top);
+    ctx.quadraticCurveTo(left + width, top, left + width, top + r);
+    ctx.lineTo(left + width, top + height - r);
+    ctx.quadraticCurveTo(left + width, top + height, left + width - r, top + height);
+    ctx.lineTo(left + r, top + height);
+    ctx.quadraticCurveTo(left, top + height, left, top + height - r);
+    ctx.lineTo(left, top + r);
+    ctx.quadraticCurveTo(left, top, left + r, top);
+    ctx.closePath();
+  }
+
+  function drawRecordMarkedFrame(ctx, rect) {
+    if (!ctx || !rect || !(rect.width > 0) || !(rect.height > 0)) return;
+    var left = Math.round(rect.left);
+    var top = Math.round(rect.top);
+    var width = Math.max(1, Math.round(rect.width));
+    var height = Math.max(1, Math.round(rect.height));
+    var strokeWidth = 2;
+    ctx.save();
+    ctx.globalCompositeOperation = "source-over";
+    ctx.fillStyle = RECORD_ACCENT.strong;
+    ctx.fillRect(left, top, width, height);
+    ctx.shadowColor = RECORD_ACCENT.shadowStrong;
+    ctx.shadowBlur = 4;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 0;
+    ctx.lineWidth = strokeWidth;
+    ctx.strokeStyle = RECORD_ACCENT.base;
+    ctx.strokeRect(left + strokeWidth / 2, top + strokeWidth / 2, Math.max(1, width - strokeWidth), Math.max(1, height - strokeWidth));
+    ctx.shadowBlur = 0;
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = RECORD_ACCENT.ringStrong;
+    ctx.strokeRect(left + 0.5, top + 0.5, Math.max(1, width - 1), Math.max(1, height - 1));
+    ctx.restore();
+  }
+
+  function composeMarkedRecordCanvas(record, sourceCanvas) {
+    if (!record || !sourceCanvas) return null;
+    var width = Math.max(1, sourceCanvas.width || 0);
+    var height = Math.max(1, sourceCanvas.height || 0);
+    if (!(width > 0) || !(height > 0)) return null;
+    var canvas = createCanvas(width, height);
+    var ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, width, height);
+    ctx.drawImage(sourceCanvas, 0, 0);
+    drawRecordMarkedFrame(ctx, getRecordMarkedFrameRect(record, width, height));
+    return canvas;
+  }
+
+  function applyRecordBoxChromeStyle(el) {
+    if (!el) return;
+    el.style.borderRadius = "0px";
+    el.style.borderColor = "var(--qa-accent)";
+    el.style.background = "var(--qa-accent-strong)";
+    el.style.boxShadow = "0 0 0 1px var(--qa-accent-ring-strong) inset, 0 0 0 4px var(--qa-accent-shadow-strong)";
+  }
+
   function sortRecordsByCreatedAt(records) {
     return (records || []).slice().sort(function (a, b) {
       var at = a && a.createdAt ? Date.parse(a.createdAt) || 0 : 0;
@@ -588,8 +680,10 @@
   }
 
   function getRecordExportImageSrc(record) {
-    if (!record || !record.shot || !record.shot.export) return "";
-    return String(record.shot.export);
+    if (!record || !record.shot) return "";
+    if (record.shot.export) return String(record.shot.export);
+    if (record.shot.thumb) return String(record.shot.thumb);
+    return "";
   }
 
   function buildRecordExportPageInfo(record) {
@@ -777,6 +871,21 @@
   async function exportCurrentDraftAsHtml() {
     var draft = state.v12.draft || buildEmptyDraft(normalizePageKey(location.href));
     var exportedAt = new Date().toISOString();
+    await warmAllRecordExports("html-export-preflight");
+    if (draft && Array.isArray(draft.records)) {
+      for (var i = 0; i < draft.records.length; i++) {
+        var record = draft.records[i];
+        if (!record || !record.id || !record.shot) continue;
+        if (record.shot.export) continue;
+        if (!record.shot.thumb) continue;
+        setRecordShotById(record.id, {
+          thumb: record.shot.thumb,
+          export: record.shot.thumb,
+          source: record.shot.source || null,
+          marked: !!record.shot.marked
+        });
+      }
+    }
     var html = buildHtmlExportDocument(draft, exportedAt);
     var fileName = buildExportFileName(getReportPageTitle(draft), exportedAt);
     var downloadId = await requestHtmlExportDownloadFromBridge(html, fileName);
@@ -819,7 +928,7 @@
       visibleFocusRect.width +
       '" height="' +
       visibleFocusRect.height +
-      '" rx="10" style="fill:var(--qa-accent-hover);stroke:var(--qa-accent);stroke-width:2;vector-effect:non-scaling-stroke;" />' +
+      '" rx="0" ry="0" style="fill:var(--qa-accent-strong);stroke:var(--qa-accent);stroke-width:2;vector-effect:non-scaling-stroke;" />' +
       "</svg>"
     );
   }
@@ -843,7 +952,7 @@
         "height:" + Math.max(0, visibleFocusRect.height * scaleY) + "px",
         "border:2px solid var(--qa-accent)",
         "background:var(--qa-accent-strong)",
-        "border-radius:10px",
+        "border-radius:0px",
         "box-sizing:border-box",
         "box-shadow:0 0 0 1px var(--qa-accent-ring-strong) inset, 0 0 0 4px var(--qa-accent-shadow-strong)",
         "pointer-events:none"
@@ -857,7 +966,7 @@
       "height:" + (visibleFocusRect.height / shotRect.height) * 100 + "%",
       "border:2px solid var(--qa-accent)",
       "background:var(--qa-accent-strong)",
-      "border-radius:10px",
+      "border-radius:0px",
       "box-sizing:border-box",
       "box-shadow:0 0 0 1px var(--qa-accent-ring-strong) inset, 0 0 0 4px var(--qa-accent-shadow-strong)",
       "pointer-events:none"
@@ -953,8 +1062,12 @@
       img.style.maxHeight = "none";
       if (previewPlaceholder) previewPlaceholder.style.display = "none";
       if (overlay) {
-        overlay.style.cssText = getRecordFocusOverlayBoxStyle(record, displayWidth, displayHeight);
-        overlay.style.display = overlay.style.cssText ? "block" : "none";
+        if (isRecordShotMarked(record)) {
+          overlay.style.cssText = "display:none;";
+        } else {
+          overlay.style.cssText = getRecordFocusOverlayBoxStyle(record, displayWidth, displayHeight);
+          overlay.style.display = overlay.style.cssText ? "block" : "none";
+        }
       }
       window.requestAnimationFrame(function () {
         var stageRect = stage.getBoundingClientRect();
@@ -1008,16 +1121,21 @@
 
   function getDrawerRecordThumbHtml(record) {
     var thumb = record && record.shot && record.shot.thumb ? String(record.shot.thumb) : "";
+    var shotMarked = isRecordShotMarked(record);
     var category = getRecordCategory(record && record.category ? record.category : "layout");
     var badge = esc(category.label || "布局");
     if (thumb) {
-      var shotSvg = getRecordShotSvgHtml(record, thumb, "display:block;width:100%;height:100%;");
+      var shotContent = shotMarked
+        ? '<img alt="" src="' +
+          esc(thumb) +
+          '" style="display:block;width:100%;height:100%;object-fit:contain;background:#fff;" />'
+        : getRecordShotSvgHtml(record, thumb, "display:block;width:100%;height:100%;");
       return (
         '<button type="button" data-v12-action="drawer-open-preview" data-record-id="' +
         esc(record && record.id ? record.id : "") +
         '" style="display:flex;align-items:center;justify-content:center;width:100%;height:100%;padding:0;border:0;background:#0f172a;box-sizing:border-box;cursor:zoom-in;">' +
         '<div style="position:relative;display:flex;align-items:center;justify-content:center;width:100%;height:100%;background:#fff;overflow:hidden;">' +
-        shotSvg +
+        shotContent +
         "</div>" +
         "</button>"
       );
@@ -2527,15 +2645,30 @@
 
   async function generateRecordExportFromSource(record, reason) {
     if (!record || !record.id || !record.shot) return null;
-    if (record.shot.export) return record.shot.export;
+    if (record.shot.export && record.shot.marked) return record.shot.export;
     var sourceCanvas = getRecordSourceCanvas(record.id);
-    if (!sourceCanvas) return null;
+    if (!sourceCanvas) {
+      if (record.shot.export) return record.shot.export;
+      if (record.shot.thumb) {
+        setRecordShotById(record.id, {
+          thumb: record.shot.thumb || null,
+          export: record.shot.thumb || null,
+          source: record.shot.source || null,
+          marked: !!record.shot.marked
+        });
+        return record.shot.thumb;
+      }
+      return null;
+    }
     var startedAt = nowMs();
-    var exportVariant = buildShotVariantFromSourceCanvas(sourceCanvas, RECORD_EXPORT_LONG_EDGE, 0.92);
+    var markedSourceCanvas = composeMarkedRecordCanvas(record, sourceCanvas) || sourceCanvas;
+    var thumbVariant = buildShotVariantFromSourceCanvas(markedSourceCanvas, RECORD_THUMB_LONG_EDGE, 0.9);
+    var exportVariant = buildShotVariantFromSourceCanvas(markedSourceCanvas, RECORD_EXPORT_LONG_EDGE, 0.92);
     setRecordShotById(record.id, {
-      thumb: record.shot.thumb || null,
+      thumb: thumbVariant.dataUrl,
       export: exportVariant.dataUrl,
-      source: record.shot.source || null
+      source: record.shot.source || null,
+      marked: true
     });
     console.debug("[visual-qa][v1.2][record-export-lazy]", {
       recordId: record.id,
@@ -2658,9 +2791,10 @@
         return;
       }
 
+      var markedSourceCanvas = composeMarkedRecordCanvas(record, sourceBundle.recordSourceCanvas) || sourceBundle.recordSourceCanvas;
       recordSourceCanvasById[record.id] = sourceBundle.recordSourceCanvas;
 
-      var thumbVariant = buildShotVariantFromSourceCanvas(sourceBundle.recordSourceCanvas, RECORD_THUMB_LONG_EDGE, 0.9);
+      var thumbVariant = buildShotVariantFromSourceCanvas(markedSourceCanvas, RECORD_THUMB_LONG_EDGE, 0.9);
       perf.mark("thumbDone");
       perf.log("thumb-done", {
         screenshotSize: perf.screenshotSize,
@@ -2673,7 +2807,8 @@
       setRecordShotById(record.id, {
         thumb: thumbVariant.dataUrl,
         export: null,
-        source: null
+        source: null,
+        marked: true
       });
       record.shotReady = true;
       schedule();
@@ -4969,7 +5104,7 @@
     "div",
     "position:fixed;left:0;top:0;width:0;height:0;pointer-events:none;z-index:" +
       (CONFIG.zIndexSelection + 1) +
-      ";border:2px solid var(--qa-accent);background:var(--qa-accent-hover);box-shadow:0 0 0 1px var(--qa-accent-ring-soft) inset;border-radius:20px;display:none;"
+      ";border:2px solid var(--qa-accent);background:var(--qa-accent-strong);box-shadow:0 0 0 1px var(--qa-accent-ring-strong) inset, 0 0 0 4px var(--qa-accent-shadow-strong);border-radius:0px;display:none;"
   );
 
   var recordComposer = make(
@@ -5092,7 +5227,7 @@
       ".v12-record-composer-head{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:24px;}" +
       ".v12-record-composer-head-copy{display:flex;flex-direction:column;gap:3px;min-width:0;}" +
       ".v12-record-composer-eyebrow{margin:0;color:rgba(255,255,255,.56);font:600 12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;letter-spacing:.02em;}" +
-      ".v12-record-composer-status{margin:0;color:rgba(255,255,255,.44);font:12px/1.35 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;}" +
+      ".v12-record-composer-status{margin:0;min-height:16px;color:rgba(255,255,255,.44);font:12px/1.35 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;}" +
       ".v12-record-composer-close{display:inline-flex;align-items:center;justify-content:center;align-self:center;width:28px;height:28px;border:0;background:transparent;color:rgba(255,255,255,.78);font:16px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;padding:0;}" +
       ".v12-record-composer-target{color:rgba(255,255,255,.96);font:700 18px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;}" +
       ".v12-record-composer-category{position:relative;display:block;min-width:0;}" +
@@ -5146,19 +5281,22 @@
       ".v12-record-composer [data-v12-action=\"pick-category\"]," +
       ".v12-record-composer [data-v12-action=\"save-record\"]," +
       ".v12-record-composer [data-v12-action=\"reselect-region\"]," +
-      ".v12-record-composer [data-v12-action=\"cancel-record\"]{transition:background-color 90ms ease,color 90ms ease,box-shadow 90ms ease,border-color 90ms ease,opacity 90ms ease;}" +
+      ".v12-record-composer [data-v12-action=\"cancel-record\"]{transition:background-color 90ms ease,color 90ms ease,box-shadow 90ms ease,border-color 90ms ease;}" +
       ".v12-record-composer [data-v12-action=\"toggle-category-menu\"]:hover{background:rgba(255,255,255,.12)!important;border-color:rgba(255,255,255,.14)!important;}" +
       ".v12-record-composer [data-v12-action=\"toggle-category-menu\"]:active{background:rgba(255,255,255,.16)!important;border-color:rgba(255,255,255,.18)!important;}" +
       ".v12-record-composer [data-v12-action=\"pick-category\"]:hover{background:rgba(255,255,255,.1)!important;}" +
       ".v12-record-composer [data-v12-action=\"pick-category\"]:active{background:rgba(255,255,255,.14)!important;}" +
       ".v12-record-composer [data-v12-action=\"pick-category\"][data-active=\"true\"]{background:rgba(255,255,255,.06)!important;}" +
       ".v12-record-composer [data-v12-action=\"pick-category\"][data-active=\"true\"]:hover{background:rgba(255,255,255,.1)!important;}" +
+      ".v12-record-composer [data-v12-action=\"save-record\"]{transition:background-color 90ms ease,color 90ms ease,box-shadow 90ms ease,border-color 90ms ease;}" +
       ".v12-record-composer [data-v12-action=\"save-record\"]:not(:disabled):hover{background:#f3f4f6!important;box-shadow:0 8px 18px rgba(255,255,255,.08) inset;}" +
       ".v12-record-composer [data-v12-action=\"save-record\"]:not(:disabled):active{background:#e5e7eb!important;}" +
       ".v12-record-composer [data-v12-action=\"reselect-region\"]:hover," +
       ".v12-record-composer [data-v12-action=\"cancel-record\"]:hover{background:rgba(255,255,255,.1)!important;border-color:rgba(255,255,255,.16)!important;}" +
       ".v12-record-composer [data-v12-action=\"reselect-region\"]:active," +
-      ".v12-record-composer [data-v12-action=\"cancel-record\"]:active{background:rgba(255,255,255,.14)!important;border-color:rgba(255,255,255,.2)!important;}";
+      ".v12-record-composer [data-v12-action=\"cancel-record\"]:active{background:rgba(255,255,255,.14)!important;border-color:rgba(255,255,255,.2)!important;}" +
+      ".v12-record-composer{visibility:hidden;opacity:0;transform:translateY(10px) scale(.985);transition:opacity 160ms cubic-bezier(0.22,1,0.36,1),transform 160ms cubic-bezier(0.22,1,0.36,1),visibility 0s linear 160ms;will-change:opacity,transform;}" +
+      ".v12-record-composer.is-open{visibility:visible;opacity:1;transform:translateY(0) scale(1);transition-delay:0s;}";
     document.head.appendChild(style);
   }
 
@@ -5450,11 +5588,7 @@
     regionSelectBox.style.transform = "translate(" + rect.left + "px," + rect.top + "px)";
     regionSelectBox.style.width = rect.width + "px";
     regionSelectBox.style.height = rect.height + "px";
-    regionSelectBox.style.borderColor = "var(--qa-accent)";
-    regionSelectBox.style.background = confirmedSelection ? "var(--qa-accent-strong)" : "var(--qa-accent-hover)";
-    regionSelectBox.style.boxShadow = confirmedSelection
-      ? "0 0 0 1px var(--qa-accent-ring-strong) inset, 0 0 0 4px var(--qa-accent-shadow-strong)"
-      : "0 0 0 1px var(--qa-accent-ring-soft) inset, 0 0 0 4px var(--qa-accent-shadow-soft)";
+    applyRecordBoxChromeStyle(regionSelectBox);
   }
 
   function getRecordComposerRenderKey(record) {
@@ -5692,6 +5826,10 @@
     var perf = recordPopupPerfById[record.id] || null;
     recordComposer.style.visibility = "visible";
     recordComposer.style.pointerEvents = "auto";
+    requestAnimationFrame(function () {
+      if (!state.v12.pendingRecord || state.v12.pendingRecord.id !== record.id) return;
+      recordComposer.classList.add("is-open");
+    });
     if (perf && !perf.marks.popupVisible) {
       requestAnimationFrame(function () {
         if (!state.v12.pendingRecord || state.v12.pendingRecord.id !== record.id) return;
@@ -5717,15 +5855,16 @@
     var saveButton = recordComposer.querySelector('[data-v12-action="save-record"]');
     if (statusEl) {
       statusEl.textContent = shotReady ? "" : "截图处理中... 可先输入备注";
-      statusEl.style.display = shotReady ? "none" : "block";
+      statusEl.style.visibility = shotReady ? "hidden" : "visible";
+      statusEl.style.opacity = shotReady ? "0" : "1";
     }
     if (saveButton) {
       saveButton.disabled = !shotReady;
       saveButton.setAttribute("aria-disabled", shotReady ? "false" : "true");
-      saveButton.textContent = shotReady ? "保存进抽屉" : "截图处理中";
-      saveButton.style.background = shotReady ? "#fff" : "rgba(255,255,255,.42)";
+      saveButton.textContent = "保存进抽屉";
+      saveButton.style.background = "#fff";
       saveButton.style.cursor = shotReady ? "pointer" : "not-allowed";
-      saveButton.style.opacity = shotReady ? "1" : ".72";
+      saveButton.style.opacity = "1";
     }
   }
 
@@ -5735,6 +5874,7 @@
       recordComposer.style.display = "none";
       recordComposer.style.visibility = "visible";
       recordComposer.style.pointerEvents = "auto";
+      recordComposer.classList.remove("is-open");
       recordComposerRenderKey = "";
       return;
     }
@@ -5748,6 +5888,7 @@
     if (!composerVisible) {
       recordComposer.style.visibility = "hidden";
       recordComposer.style.pointerEvents = "none";
+      recordComposer.classList.remove("is-open");
     } else {
       recordComposer.style.visibility = "visible";
       recordComposer.style.pointerEvents = "auto";
@@ -5759,9 +5900,11 @@
         '<div class="v12-record-composer-head">' +
         '<div class="v12-record-composer-head-copy">' +
         '<div class="v12-record-composer-eyebrow">新增记录</div>' +
-        (shotReady
-          ? ""
-          : '<div data-v12-role="record-processing-state" class="v12-record-composer-status">截图处理中... 可先输入备注</div>') +
+        '<div data-v12-role="record-processing-state" class="v12-record-composer-status" aria-hidden="' +
+        (shotReady ? "true" : "false") +
+        '">' +
+        (shotReady ? "" : "截图处理中... 可先输入备注") +
+        "</div>" +
         "</div>" +
         '<button type="button" class="v12-record-composer-close" data-v12-action="cancel-record" aria-label="关闭记录浮窗">✕</button>' +
         "</div>" +
@@ -6392,12 +6535,14 @@
     highlight.style.width = r.width + "px";
     highlight.style.height = r.height + "px";
     if (isRecordElementMode() && getRecordTargetEl()) {
+      applyRecordBoxChromeStyle(highlight);
       highlight.style.borderColor = "var(--qa-accent)";
       highlight.style.background = "var(--qa-accent-strong)";
       highlight.style.boxShadow = "0 0 0 1px var(--qa-accent-ring-strong) inset, 0 0 0 4px var(--qa-accent-shadow-strong)";
       return;
     }
     if (isRecordElementMode()) {
+      applyRecordBoxChromeStyle(highlight);
       highlight.style.borderColor = "var(--qa-accent)";
       highlight.style.background = "var(--qa-accent-hover)";
       highlight.style.boxShadow = "0 0 0 1px var(--qa-accent-ring-soft) inset, 0 0 0 4px var(--qa-accent-shadow-soft)";
