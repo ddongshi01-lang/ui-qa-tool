@@ -23,6 +23,7 @@
       parentGap: "#3ED598",
       measureX: "#FFB020",
       measureY: "#14D19B",
+      measurePair: "#8B5CF6",
       panelBg: "rgba(17,18,22,.97)",
       panelBorder: "rgba(255,255,255,.08)",
       text: "#F5F7FA",
@@ -1603,14 +1604,12 @@
 
   function handleMeasureModeClick(el) {
     if (!el) return;
-    if (!state.measureA) {
-      state.measureA = el;
-      return;
-    }
-    if (el === state.measureA) {
+    if (state.measureA === el) {
+      state.measureB = null;
       return;
     }
     state.measureA = el;
+    state.measureB = null;
   }
 
   function closeRecordMenu() {
@@ -4960,6 +4959,216 @@
     };
   }
 
+  function getPairEdgeToEdgeMeasureData(aEl, bEl) {
+    if (!aEl || !bEl || aEl === bEl) return null;
+    var a = aEl.getBoundingClientRect();
+    var b = bEl.getBoundingClientRect();
+    var distances = {};
+
+    if (a.right < b.left) distances.right = Math.round(b.left - a.right);
+    else if (b.right < a.left) distances.left = Math.round(a.left - b.right);
+
+    if (a.bottom < b.top) distances.bottom = Math.round(b.top - a.bottom);
+    else if (b.bottom < a.top) distances.top = Math.round(a.top - b.bottom);
+
+    if (!Object.keys(distances).length) return null;
+    return {
+      kind: "outer-element-gap",
+      selectedEl: aEl,
+      targetEl: bEl,
+      distances: distances
+    };
+  }
+
+  function resolveMeasurePairState(measureA, measureB) {
+    if (!measureA || !measureB || measureA === measureB) return null;
+
+    if (isAncestorOf(measureA, measureB)) {
+      return {
+        kind: "pair",
+        pairKind: "containment",
+        measurement: getInnerElementMeasureData(measureA, measureB),
+        secondaryHighlightEl: measureB
+      };
+    }
+
+    if (isAncestorOf(measureB, measureA)) {
+      return {
+        kind: "pair",
+        pairKind: "containment",
+        measurement: getInnerElementMeasureData(measureB, measureA),
+        secondaryHighlightEl: measureB
+      };
+    }
+
+    return {
+      kind: "pair",
+      pairKind: "edge-to-edge",
+      measurement: getPairEdgeToEdgeMeasureData(measureA, measureB),
+      secondaryHighlightEl: measureB
+    };
+  }
+
+  function addPairMeasureLabel(layer, x, y, text) {
+    addMeasureLabel(layer, x, y, text, {
+      background: "rgba(17,24,39,.96)",
+      borderColor: "rgba(139,92,246,.38)",
+      color: "#F8FAFC",
+      width: Math.max(60, Math.min(96, Math.round(String(text).length * 8 + 18))),
+      height: 24
+    });
+  }
+
+  function addPairMeasureSolidLine(layer, x1, y1, x2, y2) {
+    var horizontal = Math.abs(y1 - y2) <= 1;
+    var line = document.createElement("div");
+    line.style.position = "fixed";
+    line.style.pointerEvents = "none";
+    line.style.boxSizing = "border-box";
+    line.style.background = CONFIG.colors.measurePair;
+    line.style.opacity = "0.98";
+
+    if (horizontal) {
+      line.style.left = Math.min(x1, x2) + "px";
+      line.style.top = (y1 - 1) + "px";
+      line.style.width = Math.max(0, Math.abs(x2 - x1)) + "px";
+      line.style.height = "2px";
+    } else {
+      line.style.left = (x1 - 1) + "px";
+      line.style.top = Math.min(y1, y2) + "px";
+      line.style.width = "2px";
+      line.style.height = Math.max(0, Math.abs(y2 - y1)) + "px";
+    }
+
+    layer.appendChild(line);
+  }
+
+  function addPairMeasureProjectionLine(layer, x1, y1, x2, y2) {
+    var horizontal = Math.abs(y1 - y2) <= 1;
+    var line = document.createElement("div");
+    line.style.position = "fixed";
+    line.style.pointerEvents = "none";
+    line.style.boxSizing = "border-box";
+    line.style.background = "transparent";
+    line.style.opacity = "0.88";
+
+    if (horizontal) {
+      line.style.left = Math.min(x1, x2) + "px";
+      line.style.top = (y1 - 1) + "px";
+      line.style.width = Math.max(0, Math.abs(x2 - x1)) + "px";
+      line.style.height = "0";
+      line.style.borderTop = "2px dashed " + CONFIG.colors.measurePair;
+    } else {
+      line.style.left = (x1 - 1) + "px";
+      line.style.top = Math.min(y1, y2) + "px";
+      line.style.width = "0";
+      line.style.height = Math.max(0, Math.abs(y2 - y1)) + "px";
+      line.style.borderLeft = "2px dashed " + CONFIG.colors.measurePair;
+    }
+
+    layer.appendChild(line);
+  }
+
+  function getPairCrossAxisMid(a, b, axis) {
+    if (!a || !b) return 0;
+    if (axis === "x") {
+      var overlapLeft = Math.max(a.left, b.left);
+      var overlapRight = Math.min(a.right, b.right);
+      return overlapLeft < overlapRight
+        ? Math.round((overlapLeft + overlapRight) / 2)
+        : Math.round(((a.left + a.right) / 2 + (b.left + b.right) / 2) / 2);
+    }
+    var overlapTop = Math.max(a.top, b.top);
+    var overlapBottom = Math.min(a.bottom, b.bottom);
+    return overlapTop < overlapBottom
+      ? Math.round((overlapTop + overlapBottom) / 2)
+      : Math.round(((a.top + a.bottom) / 2 + (b.top + b.bottom) / 2) / 2);
+  }
+
+  function renderPairAxisMeasurement(layer, measurement, a, b, side, value) {
+    var isHorizontalAxis = side === "left" || side === "right";
+    var crossMid = getPairCrossAxisMid(a, b, isHorizontalAxis ? "y" : "x");
+    var label = value + "px";
+
+    if (side === "right") {
+      addPairMeasureSolidLine(layer, a.right, crossMid, b.left, crossMid);
+      addPairMeasureLabel(layer, Math.round((a.right + b.left) / 2), crossMid, label);
+      addPairMeasureProjectionLine(layer, b.left, (b.top + b.bottom) / 2, b.left, crossMid);
+      return;
+    }
+    if (side === "left") {
+      addPairMeasureSolidLine(layer, b.right, crossMid, a.left, crossMid);
+      addPairMeasureLabel(layer, Math.round((b.right + a.left) / 2), crossMid, label);
+      addPairMeasureProjectionLine(layer, b.right, (b.top + b.bottom) / 2, b.right, crossMid);
+      return;
+    }
+    if (side === "bottom") {
+      addPairMeasureSolidLine(layer, crossMid, a.bottom, crossMid, b.top);
+      addPairMeasureLabel(layer, crossMid, Math.round((a.bottom + b.top) / 2), label);
+      addPairMeasureProjectionLine(layer, (b.left + b.right) / 2, b.top, crossMid, b.top);
+      return;
+    }
+    if (side === "top") {
+      addPairMeasureSolidLine(layer, crossMid, b.bottom, crossMid, a.top);
+      addPairMeasureLabel(layer, crossMid, Math.round((b.bottom + a.top) / 2), label);
+      addPairMeasureProjectionLine(layer, (b.left + b.right) / 2, b.bottom, crossMid, b.bottom);
+    }
+  }
+
+  function renderPairMeasurementGuides(layer, measurement) {
+    if (!measurement || !measurement.selectedEl || !measurement.targetEl) return;
+
+    var a = measurement.selectedEl.getBoundingClientRect();
+    var b = measurement.targetEl.getBoundingClientRect();
+
+    if (measurement.kind === "inner-element-gap") {
+      if (measurement.distances.top != null) {
+        renderPairAxisMeasurement(layer, measurement, a, b, "top", measurement.distances.top);
+      }
+      if (measurement.distances.right != null) {
+        renderPairAxisMeasurement(layer, measurement, a, b, "right", measurement.distances.right);
+      }
+      if (measurement.distances.bottom != null) {
+        renderPairAxisMeasurement(layer, measurement, a, b, "bottom", measurement.distances.bottom);
+      }
+      if (measurement.distances.left != null) {
+        renderPairAxisMeasurement(layer, measurement, a, b, "left", measurement.distances.left);
+      }
+      return;
+    }
+
+    if (measurement.kind === "outer-element-gap") {
+      if (measurement.distances.top != null) {
+        renderPairAxisMeasurement(layer, measurement, a, b, "top", measurement.distances.top);
+      }
+      if (measurement.distances.right != null) {
+        renderPairAxisMeasurement(layer, measurement, a, b, "right", measurement.distances.right);
+      }
+      if (measurement.distances.bottom != null) {
+        renderPairAxisMeasurement(layer, measurement, a, b, "bottom", measurement.distances.bottom);
+      }
+      if (measurement.distances.left != null) {
+        renderPairAxisMeasurement(layer, measurement, a, b, "left", measurement.distances.left);
+      }
+      return;
+    }
+
+    if (measurement.kind === "parent-container-gap") {
+      if (measurement.distances.top != null) {
+        renderPairAxisMeasurement(layer, measurement, a, b, "top", measurement.distances.top);
+      }
+      if (measurement.distances.right != null) {
+        renderPairAxisMeasurement(layer, measurement, a, b, "right", measurement.distances.right);
+      }
+      if (measurement.distances.bottom != null) {
+        renderPairAxisMeasurement(layer, measurement, a, b, "bottom", measurement.distances.bottom);
+      }
+      if (measurement.distances.left != null) {
+        renderPairAxisMeasurement(layer, measurement, a, b, "left", measurement.distances.left);
+      }
+    }
+  }
+
   function shouldUseParentFallback(selectedEl, hoverEl, containerEl) {
     if (!selectedEl || !hoverEl || !containerEl) return false;
     if (hoverEl === selectedEl) return false;
@@ -5171,17 +5380,110 @@
     return horizontal.score >= vertical.score ? horizontal : vertical;
   }
 
-  function resolveMeasurePaddingData(measureA, preferredAxis) {
+  function resolveMeasureStructureContentBoxRect(measureA) {
     if (!measureA) return null;
     var rect = measureA.getBoundingClientRect();
     var style = getComputedStyle(measureA);
     if (!style) return null;
+
     var padding = boxValues(style, "padding");
+    var border = {
+      t: num(style.borderTopWidth),
+      r: num(style.borderRightWidth),
+      b: num(style.borderBottomWidth),
+      l: num(style.borderLeftWidth)
+    };
     var contentRect = {
-      left: rect.left + padding.l,
-      top: rect.top + padding.t,
-      right: rect.right - padding.r,
-      bottom: rect.bottom - padding.b
+      left: rect.left + padding.l + border.l,
+      top: rect.top + padding.t + border.t,
+      right: rect.right - padding.r - border.r,
+      bottom: rect.bottom - padding.b - border.b
+    };
+    contentRect.right = Math.max(contentRect.left, contentRect.right);
+    contentRect.bottom = Math.max(contentRect.top, contentRect.bottom);
+    contentRect.width = Math.max(0, contentRect.right - contentRect.left);
+    contentRect.height = Math.max(0, contentRect.bottom - contentRect.top);
+
+    var inset = {
+      top: Math.max(0, Math.round(contentRect.top - rect.top)),
+      right: Math.max(0, Math.round(rect.right - contentRect.right)),
+      bottom: Math.max(0, Math.round(rect.bottom - contentRect.bottom)),
+      left: Math.max(0, Math.round(contentRect.left - rect.left))
+    };
+    var meaningfulInset = inset.top > 6 || inset.right > 6 || inset.bottom > 6 || inset.left > 6;
+
+    return {
+      rect: contentRect,
+      inset: inset,
+      meaningfulInset: meaningfulInset,
+      padding: padding,
+      border: border
+    };
+  }
+
+  function getMeasureStructureItemMetrics(item, axis) {
+    var rect = item && item.rect;
+    if (!rect) return null;
+    return {
+      rect: rect,
+      mainStart: axis === "x" ? rect.left : rect.top,
+      mainEnd: axis === "x" ? rect.right : rect.bottom,
+      mainSize: axis === "x" ? rect.width : rect.height,
+      crossStart: axis === "x" ? rect.top : rect.left,
+      crossEnd: axis === "x" ? rect.bottom : rect.right,
+      crossSize: axis === "x" ? rect.height : rect.width
+    };
+  }
+
+  function getMeasureStructureItemSignature(item) {
+    var el = item && item.el;
+    if (!el || !el.tagName) return null;
+    var tag = el.tagName.toLowerCase();
+    var role = (el.getAttribute && (el.getAttribute("role") || "").toLowerCase()) || "";
+    var kind = classifyTarget(el);
+    var textLike = kind === "text-like" || kind === "icon-font-like";
+    var classNames = [];
+    if (el.classList && el.classList.length) {
+      Array.prototype.forEach.call(el.classList, function (cls) {
+        var clean = cleanClassToken(cls);
+        if (!clean || clean.length < 2) return;
+        if (/^(is|has|js|qa|u|c|el|style|active|selected|disabled|open|closed|show|hide|current|primary|secondary)$/i.test(clean)) return;
+        if (/^\d/.test(clean)) return;
+        classNames.push(clean.toLowerCase());
+      });
+    }
+    return {
+      tag: tag,
+      role: role,
+      kind: kind,
+      textLike: textLike,
+      classNames: classNames,
+      classToken: getReadableClassToken(el) || shortClassName(el) || "",
+      directText: getDirectTextContent(el),
+      textLen: (getDirectTextContent(el) || "").replace(/\s+/g, "").length
+    };
+  }
+
+  function getMeasureStructureEdgePaddingData(rect, style) {
+    if (!rect || !style) return null;
+    var padding = boxValues(style, "padding");
+    var border = {
+      t: num(style.borderTopWidth),
+      r: num(style.borderRightWidth),
+      b: num(style.borderBottomWidth),
+      l: num(style.borderLeftWidth)
+    };
+    var edgeValues = {
+      top: padding.t + border.t,
+      right: padding.r + border.r,
+      bottom: padding.b + border.b,
+      left: padding.l + border.l
+    };
+    var contentRect = {
+      left: rect.left + edgeValues.left,
+      top: rect.top + edgeValues.top,
+      right: rect.right - edgeValues.right,
+      bottom: rect.bottom - edgeValues.bottom
     };
     contentRect.right = Math.max(contentRect.left, contentRect.right);
     contentRect.bottom = Math.max(contentRect.top, contentRect.bottom);
@@ -5191,67 +5493,430 @@
     var bands = [
       {
         key: "top",
-        value: padding.t,
-        rect: {
-          left: rect.left,
-          top: rect.top,
-          width: rect.width,
-          height: padding.t
-        },
+        value: edgeValues.top,
+        rect: { left: rect.left, top: rect.top, width: rect.width, height: edgeValues.top },
         anchorX: rect.left + rect.width / 2,
-        anchorY: rect.top + Math.max(1, padding.t / 2)
+        anchorY: rect.top + Math.max(1, edgeValues.top / 2)
       },
       {
         key: "right",
-        value: padding.r,
-        rect: {
-          left: contentRect.right,
-          top: rect.top,
-          width: padding.r,
-          height: rect.height
-        },
-        anchorX: contentRect.right + Math.max(1, padding.r / 2),
+        value: edgeValues.right,
+        rect: { left: contentRect.right, top: rect.top, width: edgeValues.right, height: rect.height },
+        anchorX: contentRect.right + Math.max(1, edgeValues.right / 2),
         anchorY: rect.top + rect.height / 2
       },
       {
         key: "bottom",
-        value: padding.b,
-        rect: {
-          left: rect.left,
-          top: contentRect.bottom,
-          width: rect.width,
-          height: padding.b
-        },
+        value: edgeValues.bottom,
+        rect: { left: rect.left, top: contentRect.bottom, width: rect.width, height: edgeValues.bottom },
         anchorX: rect.left + rect.width / 2,
-        anchorY: contentRect.bottom + Math.max(1, padding.b / 2)
+        anchorY: contentRect.bottom + Math.max(1, edgeValues.bottom / 2)
       },
       {
         key: "left",
-        value: padding.l,
-        rect: {
-          left: rect.left,
-          top: rect.top,
-          width: padding.l,
-          height: rect.height
-        },
-        anchorX: rect.left + Math.max(1, padding.l / 2),
+        value: edgeValues.left,
+        rect: { left: rect.left, top: rect.top, width: edgeValues.left, height: rect.height },
+        anchorX: rect.left + Math.max(1, edgeValues.left / 2),
         anchorY: rect.top + rect.height / 2
       }
     ].filter(function (band) {
       return band.value > 1;
     });
 
-    if (!bands.length) {
-      return {
-        kind: "padding",
-        rect: rect,
-        contentRect: contentRect,
-        bands: []
+    if (!bands.length) return null;
+
+    bands.sort(function (a, b) {
+      return b.value - a.value;
+    });
+    if (bands.length > 3) bands = bands.slice(0, 3);
+
+    return {
+      rect: rect,
+      contentRect: contentRect,
+      padding: padding,
+      border: border,
+      edgeValues: edgeValues,
+      bands: bands
+    };
+  }
+
+  function getMeasureStructureClassOverlap(a, b) {
+    if (!a || !b || !a.length || !b.length) return 0;
+    var set = {};
+    for (var i = 0; i < a.length; i++) set[a[i]] = true;
+    var overlap = 0;
+    for (var j = 0; j < b.length; j++) {
+      if (set[b[j]]) overlap += 1;
+    }
+    return overlap;
+  }
+
+  function getMeasureStructureItemSimilarity(prevItem, nextItem, axis) {
+    var prev = getMeasureStructureItemMetrics(prevItem, axis);
+    var next = getMeasureStructureItemMetrics(nextItem, axis);
+    var prevSig = getMeasureStructureItemSignature(prevItem);
+    var nextSig = getMeasureStructureItemSignature(nextItem);
+    if (!prev || !next || !prevSig || !nextSig) return null;
+
+    var gap = next.mainStart - prev.mainEnd;
+    if (gap < -2) return null;
+
+    var crossCenterDelta = Math.abs(
+      (prev.crossStart + prev.crossEnd) / 2 - (next.crossStart + next.crossEnd) / 2
+    );
+    var crossSizeDiff = Math.abs(prev.crossSize - next.crossSize);
+    var crossSizeBase = Math.max(prev.crossSize, next.crossSize);
+    var crossCenterLimit = Math.max(6, Math.round(crossSizeBase * 0.25));
+    var crossSizeLimit = Math.max(6, Math.round(crossSizeBase * 0.32));
+    var gapLimit = Math.max(6, Math.min(56, Math.round(crossSizeBase * 0.8)));
+    var sharedClasses = getMeasureStructureClassOverlap(prevSig.classNames, nextSig.classNames);
+    var classTokenMatch = prevSig.classToken && nextSig.classToken && prevSig.classToken === nextSig.classToken;
+    var sameTag = prevSig.tag === nextSig.tag;
+    var sameRole = prevSig.role && nextSig.role && prevSig.role === nextSig.role;
+    var textKindMatch = prevSig.textLike === nextSig.textLike;
+    var semanticMatch = sameTag || sameRole || classTokenMatch || sharedClasses > 0;
+    var kindMatch = textKindMatch || (prevSig.kind === nextSig.kind);
+    var similarityScore = 0;
+    if (sameTag) similarityScore += 2;
+    if (sameRole) similarityScore += 1;
+    if (classTokenMatch) similarityScore += 2;
+    if (sharedClasses > 0) similarityScore += Math.min(2, sharedClasses);
+    if (textKindMatch) similarityScore += 1;
+
+    if (gap > gapLimit) return null;
+    if (crossCenterDelta > crossCenterLimit) return null;
+    if (crossSizeDiff > crossSizeLimit) return null;
+    if (!semanticMatch || !kindMatch) return null;
+
+    return {
+      gap: gap,
+      prev: prev,
+      next: next,
+      prevSig: prevSig,
+      nextSig: nextSig,
+      similarityScore: similarityScore,
+      sharedClasses: sharedClasses,
+      sameTag: sameTag,
+      sameRole: sameRole,
+      classTokenMatch: classTokenMatch
+    };
+  }
+
+  function getMeasureStructureUnionRect(items) {
+    var stats = getMeasureStructureChildrenStats(items);
+    if (!stats.union) return null;
+    return {
+      left: stats.union.left,
+      top: stats.union.top,
+      right: stats.union.right,
+      bottom: stats.union.bottom,
+      width: Math.max(0, stats.union.right - stats.union.left),
+      height: Math.max(0, stats.union.bottom - stats.union.top)
+    };
+  }
+
+  function resolveMeasureStructureRepeatedGroup(ordered, axis, contentBoxRect, containerRect) {
+    if (!ordered || ordered.length < 2) return null;
+    var best = null;
+    for (var start = 0; start < ordered.length; start++) {
+      var run = [ordered[start]];
+      var gaps = [];
+      var pairScores = [];
+      for (var i = start + 1; i < ordered.length; i++) {
+        var match = getMeasureStructureItemSimilarity(run[run.length - 1], ordered[i], axis);
+        if (!match) break;
+        run.push(ordered[i]);
+        gaps.push(match.gap);
+        pairScores.push(match.similarityScore);
+      }
+      if (run.length < 3) continue;
+
+      var stats = getMeasureStructureChildrenStats(run);
+      var runRect = getMeasureStructureUnionRect(run);
+      if (!stats.union || !runRect) continue;
+
+      var firstSig = getMeasureStructureItemSignature(run[0]);
+      var typeConsistency = 0;
+      var classConsistency = 0;
+      var textConsistency = 0;
+      var sameTagCount = 1;
+      var sameRoleCount = 1;
+      for (var j = 1; j < run.length; j++) {
+        var sig = getMeasureStructureItemSignature(run[j]);
+        if (!firstSig || !sig) continue;
+        if (sig.tag === firstSig.tag) {
+          typeConsistency += 1;
+          sameTagCount += 1;
+        }
+        if (sig.role && firstSig.role && sig.role === firstSig.role) sameRoleCount += 1;
+        if (sig.classToken && firstSig.classToken && sig.classToken === firstSig.classToken) classConsistency += 1;
+        if (sig.textLike === firstSig.textLike) textConsistency += 1;
+      }
+      var classConsistencyRatio = run.length > 1 ? classConsistency / (run.length - 1) : 0;
+      var typeConsistencyRatio = run.length > 1 ? typeConsistency / (run.length - 1) : 0;
+      var textConsistencyRatio = run.length > 1 ? textConsistency / (run.length - 1) : 0;
+      var sameTagRatio = run.length > 1 ? sameTagCount / run.length : 0;
+      var sameRoleRatio = run.length > 1 ? sameRoleCount / run.length : 0;
+
+      var span = axis === "x" ? runRect.width : runRect.height;
+      var contentSpan = contentBoxRect ? (axis === "x" ? contentBoxRect.width : contentBoxRect.height) : (containerRect ? (axis === "x" ? containerRect.width : containerRect.height) : span);
+      var contentArea = contentBoxRect ? contentBoxRect.width * contentBoxRect.height : (containerRect ? containerRect.width * containerRect.height : runRect.width * runRect.height);
+      var coverage = contentArea > 0 ? (runRect.width * runRect.height) / contentArea : 0;
+      var spanCoverage = contentSpan > 0 ? span / contentSpan : 0;
+      var gapAvg = gaps.length ? gaps.reduce(function (sum, value) { return sum + value; }, 0) / gaps.length : 0;
+      var gapDeviation = gaps.length
+        ? gaps.reduce(function (sum, value) { return sum + Math.abs(value - gapAvg); }, 0) / gaps.length
+        : 0;
+      var score = run.length * 120 + spanCoverage * 80 + coverage * 45 + classConsistencyRatio * 60 + typeConsistencyRatio * 30 + textConsistencyRatio * 20 - gapDeviation * 3;
+
+      var candidate = {
+        items: run,
+        stats: stats,
+        rect: runRect,
+        gaps: gaps,
+        coverage: coverage,
+        spanCoverage: spanCoverage,
+        classConsistencyRatio: classConsistencyRatio,
+        typeConsistencyRatio: typeConsistencyRatio,
+        textConsistencyRatio: textConsistencyRatio,
+        sameTagRatio: sameTagRatio,
+        sameRoleRatio: sameRoleRatio,
+        pairScoreAvg: pairScores.length ? pairScores.reduce(function (sum, value) { return sum + value; }, 0) / pairScores.length : 0,
+        score: score
       };
+      if (!best || candidate.score > best.score || (candidate.score === best.score && candidate.items.length > best.items.length)) {
+        best = candidate;
+      }
     }
 
+    if (!best) return null;
+    best.isStrong = best.items.length >= 3 && best.pairScoreAvg >= 2 && (best.sameTagRatio >= 0.7 || best.sameRoleRatio >= 0.7 || best.classConsistencyRatio >= 0.5 || best.typeConsistencyRatio >= 0.75);
+    return best;
+  }
+
+  function resolveMeasureStructureTextRowGroup(ordered, axis, contentBoxRect, containerRect) {
+    if (!ordered || ordered.length < 4 || axis !== "x") return null;
+
+    var textish = ordered.filter(function (item) {
+      var sig = getMeasureStructureItemSignature(item);
+      return !!sig && (sig.textLike || sig.kind === "container-like");
+    });
+    if (textish.length < 4) return null;
+
+    var firstSig = getMeasureStructureItemSignature(textish[0]);
+    if (!firstSig) return null;
+
+    var run = [textish[0]];
+    var gaps = [];
+    for (var i = 1; i < textish.length; i++) {
+      var prevItem = run[run.length - 1];
+      var nextItem = textish[i];
+      var prev = getMeasureStructureItemMetrics(prevItem, axis);
+      var next = getMeasureStructureItemMetrics(nextItem, axis);
+      var prevSig = getMeasureStructureItemSignature(prevItem);
+      var nextSig = getMeasureStructureItemSignature(nextItem);
+      if (!prev || !next || !prevSig || !nextSig) break;
+
+      var gap = next.mainStart - prev.mainEnd;
+      if (gap < -2) break;
+      var heightBase = Math.max(prev.crossSize, next.crossSize);
+      var heightDiff = Math.abs(prev.crossSize - next.crossSize);
+      var textLenBase = Math.max(prevSig.textLen || 0, nextSig.textLen || 0, 1);
+      var textLenDiff = Math.abs((prevSig.textLen || 0) - (nextSig.textLen || 0));
+      var sameTag = prevSig.tag === nextSig.tag;
+      var sameRole = prevSig.role && nextSig.role && prevSig.role === nextSig.role;
+      var sameClass = prevSig.classToken && nextSig.classToken && prevSig.classToken === nextSig.classToken;
+      var textLenRatio = textLenDiff / textLenBase;
+      var gapLimit = Math.max(8, Math.round(heightBase * 1.6));
+      var heightLimit = Math.max(6, Math.round(heightBase * 0.22));
+
+      if (gap > gapLimit) break;
+      if (heightDiff > heightLimit) break;
+      if (!sameTag && !sameRole && !sameClass && !(prevSig.textLike && nextSig.textLike)) break;
+      if (textLenRatio > 1.2 && textLenBase > 2) break;
+
+      run.push(nextItem);
+      gaps.push(gap);
+    }
+
+    if (run.length < 4) return null;
+
+    var stats = getMeasureStructureChildrenStats(run);
+    var runRect = getMeasureStructureUnionRect(run);
+    if (!stats.union || !runRect) return null;
+
+    var contentSpan = contentBoxRect ? contentBoxRect.width : (containerRect ? containerRect.width : runRect.width);
+    var contentArea = contentBoxRect ? contentBoxRect.width * contentBoxRect.height : (containerRect ? containerRect.width * containerRect.height : runRect.width * runRect.height);
+    var spanCoverage = contentSpan > 0 ? runRect.width / contentSpan : 0;
+    var coverage = contentArea > 0 ? (runRect.width * runRect.height) / contentArea : 0;
+    var pairScoreAvg = gaps.length ? gaps.reduce(function (sum, value) { return sum + value; }, 0) / gaps.length : 0;
+
+    return {
+      items: run,
+      stats: stats,
+      rect: runRect,
+      gaps: gaps,
+      coverage: coverage,
+      spanCoverage: spanCoverage,
+      classConsistencyRatio: 1,
+      typeConsistencyRatio: 1,
+      textConsistencyRatio: 1,
+      sameTagRatio: 1,
+      sameRoleRatio: 1,
+      pairScoreAvg: pairScoreAvg,
+      score: run.length * 100 + spanCoverage * 80 + coverage * 40 + pairScoreAvg * 2,
+      isStrong: true,
+      isTextRow: true
+    };
+  }
+
+  function reduceMeasureStructureGapsForDisplay(gaps) {
+    console.log('[measure-debug]', {
+      fn: 'reduceMeasureStructureGapsForDisplay',
+      phase: 'enter',
+      inputLen: gaps && gaps.length,
+      gapValues: gaps ? gaps.map(function (g) { return g.value; }) : []
+    });
+    if (!gaps || !gaps.length) return [];
+    if (gaps.length <= 5) return gaps;
+    var middle = Math.floor(gaps.length / 2);
+    var picked = gaps.filter(function (_gap, index) {
+      return index === middle || index % 2 === 0;
+    });
+    if (picked.length < 2) {
+      picked = [gaps[middle], gaps[Math.max(0, middle - 1)]].filter(Boolean);
+    }
+    console.log('[measure-debug]', {
+      fn: 'reduceMeasureStructureGapsForDisplay',
+      phase: 'exit',
+      outputLen: picked && picked.length,
+      outputValues: picked ? picked.map(function (g) { return g.value; }) : [],
+      pickedIndexes: picked ? picked.map(function (g) { return gaps.indexOf(g); }) : []
+    });
+    return picked;
+  }
+
+  function resolveMeasureStructureOutputKind(repeatedGroup, contentBox, ordered) {
+    var repeatedStrong = !!(repeatedGroup && repeatedGroup.isStrong);
+    var contentStrong = !!(contentBox && contentBox.meaningfulInset);
+    var repeatedCoverage = repeatedGroup ? repeatedGroup.spanCoverage : 0;
+    var repeatedItemRatio = repeatedGroup && ordered && ordered.length ? repeatedGroup.items.length / ordered.length : 0;
+    var childCount = ordered ? ordered.length : 0;
+    var textLikeCount = 0;
+    var containerLikeCount = 0;
+    if (ordered && ordered.length) {
+      ordered.forEach(function (item) {
+        var kind = classifyTarget(item && item.el);
+        if (kind === "text-like" || kind === "icon-font-like") textLikeCount += 1;
+        if (kind === "container-like") containerLikeCount += 1;
+      });
+    }
+    var textDominant = childCount > 0 && textLikeCount >= Math.max(2, Math.ceil(childCount * 0.5));
+    var contentFavor = contentStrong && (childCount <= 4 || textDominant || containerLikeCount >= Math.max(1, Math.floor(childCount * 0.5)) || !repeatedStrong);
+    var repeatedFavor = repeatedStrong && repeatedGroup.items.length >= 3 && repeatedCoverage >= 0.45 && repeatedItemRatio >= 0.5 && (
+      repeatedGroup.sameTagRatio >= 0.7 ||
+      repeatedGroup.sameRoleRatio >= 0.7 ||
+      repeatedGroup.classConsistencyRatio >= 0.5 ||
+      repeatedGroup.typeConsistencyRatio >= 0.75
+    );
+    var result = null;
+
+    var repeatedTextRow = !!(repeatedGroup && repeatedGroup.isTextRow);
+    if (contentFavor && !repeatedFavor && !repeatedTextRow) result = "content-container";
+    if ((repeatedFavor || repeatedTextRow) && !contentFavor) result = "repeated-structure";
+    if (contentFavor && repeatedFavor) {
+      result = repeatedTextRow || childCount > 4 ? "repeated-structure" : "content-container";
+    }
+    if (repeatedFavor || repeatedTextRow) result = "repeated-structure";
+    if (contentStrong) result = "content-container";
+    if (repeatedStrong || repeatedTextRow) result = "repeated-structure";
+    if (!result) result = "content-container";
+    console.log('[measure-debug]', {
+      fn: 'resolveMeasureStructureOutputKind',
+      orderedLen: ordered && ordered.length,
+      childCount: childCount,
+      repeatedStrong: repeatedStrong,
+      contentStrong: contentStrong,
+      repeatedCoverage: repeatedCoverage,
+      repeatedItemRatio: repeatedItemRatio,
+      textLikeCount: textLikeCount,
+      containerLikeCount: containerLikeCount,
+      textDominant: textDominant,
+      repeatedFavor: repeatedFavor,
+      contentFavor: contentFavor,
+      result: result
+    });
+    return result;
+  }
+
+  function resolveMeasureStructureInsetData(containerRect, contentRect, preferredAxis) {
+    if (!containerRect || !contentRect) return null;
+
+    var inset = {
+      top: Math.max(0, Math.round(contentRect.top - containerRect.top)),
+      right: Math.max(0, Math.round(containerRect.right - contentRect.right)),
+      bottom: Math.max(0, Math.round(containerRect.bottom - contentRect.bottom)),
+      left: Math.max(0, Math.round(contentRect.left - containerRect.left))
+    };
+
+    var allBands = [
+      {
+        key: "top",
+        value: inset.top,
+        rect: {
+          left: containerRect.left,
+          top: containerRect.top,
+          width: containerRect.width,
+          height: inset.top
+        },
+        anchorX: containerRect.left + containerRect.width / 2,
+        anchorY: containerRect.top + Math.max(1, inset.top / 2)
+      },
+      {
+        key: "right",
+        value: inset.right,
+        rect: {
+          left: contentRect.right,
+          top: containerRect.top,
+          width: inset.right,
+          height: containerRect.height
+        },
+        anchorX: contentRect.right + Math.max(1, inset.right / 2),
+        anchorY: containerRect.top + containerRect.height / 2
+      },
+      {
+        key: "bottom",
+        value: inset.bottom,
+        rect: {
+          left: containerRect.left,
+          top: contentRect.bottom,
+          width: containerRect.width,
+          height: inset.bottom
+        },
+        anchorX: containerRect.left + containerRect.width / 2,
+        anchorY: contentRect.bottom + Math.max(1, inset.bottom / 2)
+      },
+      {
+        key: "left",
+        value: inset.left,
+        rect: {
+          left: containerRect.left,
+          top: containerRect.top,
+          width: inset.left,
+          height: containerRect.height
+        },
+        anchorX: containerRect.left + Math.max(1, inset.left / 2),
+        anchorY: containerRect.top + containerRect.height / 2
+      }
+    ].filter(function (band) {
+      return band.value > 1;
+    });
+
+    if (!allBands.length) return null;
+
+    var bands = allBands.slice();
     if (bands.length > 2) {
-      var axis = preferredAxis || (rect.width >= rect.height ? "x" : "y");
+      var axis = preferredAxis || (containerRect.width >= containerRect.height ? "x" : "y");
       var priority = axis === "x"
         ? { left: 0, right: 0, top: 1, bottom: 1 }
         : { top: 0, bottom: 0, left: 1, right: 1 };
@@ -5264,11 +5929,45 @@
     }
 
     return {
-      kind: "padding",
-      rect: rect,
+      kind: "inset",
+      rect: containerRect,
       contentRect: contentRect,
-      bands: bands
+      inset: inset,
+      bands: bands,
+      allBands: allBands
     };
+  }
+
+  function resolveMeasureStructureSiblingGaps(ordered, axis) {
+    if (!ordered || ordered.length < 2) return [];
+    var gaps = [];
+    for (var i = 0; i < ordered.length - 1; i++) {
+      var prev = ordered[i].rect;
+      var next = ordered[i + 1].rect;
+      var gapValue = axis === "x" ? Math.round(next.left - prev.right) : Math.round(next.top - prev.bottom);
+      if (gapValue <= 1) continue;
+      var span = getMeasureCrossSpanRect(prev, next, axis);
+      var gapRect = axis === "x"
+        ? {
+            left: prev.right,
+            top: span.top,
+            width: gapValue,
+            height: span.bottom - span.top
+          }
+        : {
+            left: span.left,
+            top: prev.bottom,
+            width: span.right - span.left,
+            height: gapValue
+          };
+      gaps.push({
+        axis: axis,
+        value: gapValue,
+        rect: gapRect,
+        label: spacingValueText(gapValue)
+      });
+    }
+    return gaps;
   }
 
   function resolveMeasureLeafData(measureA) {
@@ -5276,6 +5975,134 @@
     var rect = measureA.getBoundingClientRect();
     var style = getComputedStyle(measureA);
     var kind = classifyTarget(measureA);
+    var boxLeaf = null;
+    console.log('[measure-debug]', {
+      fn: 'resolveMeasureLeafData',
+      phase: 'enter',
+      tag: measureA && measureA.tagName && measureA.tagName.toLowerCase(),
+      kind: kind,
+      role: measureA && measureA.getAttribute && (measureA.getAttribute("role") || "").toLowerCase(),
+      display: style && style.display,
+      hasPadding: !!(style && (num(style.paddingTop) || num(style.paddingRight) || num(style.paddingBottom) || num(style.paddingLeft))),
+      hasBorder: !!hasVisibleBorder(style),
+      hasBackground: !!(style && (!isTransparentColor(style.backgroundColor) || (style.backgroundImage && style.backgroundImage !== "none")))
+    });
+    if (kind === "container-like" || kind === "text-like" || kind === "graphic-like") {
+      var displayValue = String(style.display || "").toLowerCase();
+      var role = (measureA.getAttribute && (measureA.getAttribute("role") || "").toLowerCase()) || "";
+      var tag = measureA.tagName ? measureA.tagName.toLowerCase() : "";
+      var hasPadding = !!(style && (num(style.paddingTop) || num(style.paddingRight) || num(style.paddingBottom) || num(style.paddingLeft)));
+      var hasBorder = !!hasVisibleBorder(style);
+      var hasBackground = !!(!isTransparentColor(style.backgroundColor) || (style.backgroundImage && style.backgroundImage !== "none"));
+      var boxy = /^(a|button|input|textarea|select|option|label|summary|details)$/i.test(tag) ||
+        /^(button|menuitem|tab|option|checkbox|radio|switch|textbox|combobox|listbox|link)$/i.test(role) ||
+        /^(inline-block|inline-flex|flex|grid|inline-grid|table-cell|block)$/.test(displayValue) ||
+        hasBorder ||
+        hasBackground ||
+        hasPadding;
+      var boxData = getMeasureStructureEdgePaddingData(rect, style);
+      if (!boxData && boxy && (hasPadding || hasBorder || hasBackground)) {
+        var padding = boxValues(style, "padding");
+        var border = {
+          t: num(style.borderTopWidth),
+          r: num(style.borderRightWidth),
+          b: num(style.borderBottomWidth),
+          l: num(style.borderLeftWidth)
+        };
+        var edgeValues = {
+          top: padding.t + border.t,
+          right: padding.r + border.r,
+          bottom: padding.b + border.b,
+          left: padding.l + border.l
+        };
+        var contentRect = {
+          left: rect.left + edgeValues.left,
+          top: rect.top + edgeValues.top,
+          right: rect.right - edgeValues.right,
+          bottom: rect.bottom - edgeValues.bottom
+        };
+        contentRect.right = Math.max(contentRect.left, contentRect.right);
+        contentRect.bottom = Math.max(contentRect.top, contentRect.bottom);
+        contentRect.width = Math.max(0, contentRect.right - contentRect.left);
+        contentRect.height = Math.max(0, contentRect.bottom - contentRect.top);
+        var bands = [
+          {
+            key: "top",
+            value: edgeValues.top,
+            rect: { left: rect.left, top: rect.top, width: rect.width, height: edgeValues.top },
+            anchorX: rect.left + rect.width / 2,
+            anchorY: rect.top + Math.max(1, edgeValues.top / 2)
+          },
+          {
+            key: "right",
+            value: edgeValues.right,
+            rect: { left: contentRect.right, top: rect.top, width: edgeValues.right, height: rect.height },
+            anchorX: contentRect.right + Math.max(1, edgeValues.right / 2),
+            anchorY: rect.top + rect.height / 2
+          },
+          {
+            key: "bottom",
+            value: edgeValues.bottom,
+            rect: { left: rect.left, top: contentRect.bottom, width: rect.width, height: edgeValues.bottom },
+            anchorX: rect.left + rect.width / 2,
+            anchorY: contentRect.bottom + Math.max(1, edgeValues.bottom / 2)
+          },
+          {
+            key: "left",
+            value: edgeValues.left,
+            rect: { left: rect.left, top: rect.top, width: edgeValues.left, height: rect.height },
+            anchorX: rect.left + Math.max(1, edgeValues.left / 2),
+            anchorY: rect.top + rect.height / 2
+          }
+        ].filter(function (band) {
+          return band.value > 1;
+        });
+        if (bands.length) {
+          boxData = {
+            rect: rect,
+            contentRect: contentRect,
+            padding: padding,
+            border: border,
+            edgeValues: edgeValues,
+            bands: bands
+          };
+        }
+      }
+      if (boxy && boxData) {
+        console.log('[measure-debug]', {
+          fn: 'resolveMeasureLeafData',
+          phase: 'box-leaf-hit',
+          contentRect: boxData && boxData.contentRect,
+          edgeValues: boxData && boxData.edgeValues,
+          bandsLen: boxData && boxData.bands && boxData.bands.length,
+          bandKeys: boxData && boxData.bands ? boxData.bands.map(function (b) { return b.key; }) : [],
+          bandValues: boxData && boxData.bands ? boxData.bands.map(function (b) { return b.value; }) : []
+        });
+        boxLeaf = {
+          kind: "box-leaf",
+          rect: rect,
+          contentRect: boxData.contentRect,
+          bands: boxData.bands,
+          padding: boxData.padding,
+          border: boxData.border,
+          edgeValues: boxData.edgeValues,
+          contentLabel: px(boxData.contentRect.width) + " × " + px(boxData.contentRect.height),
+          label: px(boxData.contentRect.width) + " × " + px(boxData.contentRect.height),
+          isTextLike: false
+        };
+      }
+    }
+    if (boxLeaf) return boxLeaf;
+    console.log('[measure-debug]', {
+      fn: 'resolveMeasureLeafData',
+      phase: 'leaf-fallback',
+      fallbackReason: boxLeaf ? 'box-leaf-hit' : 'not-boxy-or-no-boxData',
+      rect: rect,
+      label:
+        kind === "text-like" || kind === "icon-font-like"
+          ? "字号 " + px(style.fontSize) + " / 行高 " + px(style.lineHeight)
+          : px(rect.width) + " × " + px(rect.height)
+    });
     return {
       kind: "leaf",
       rect: rect,
@@ -5315,7 +6142,8 @@
       container: measureA,
       containerRect: rect,
       children: children,
-      axisInfo: axisInfo
+      axisInfo: axisInfo,
+      stats: stats
     };
   }
 
@@ -5326,116 +6154,84 @@
 
     var ordered = structure.axisInfo.ordered;
     var axis = structure.axisInfo.axis;
-    var gaps = [];
-    for (var i = 0; i < ordered.length - 1; i++) {
-      var prev = ordered[i].rect;
-      var next = ordered[i + 1].rect;
-      var gapValue = axis === "x" ? Math.round(next.left - prev.right) : Math.round(next.top - prev.bottom);
-      if (gapValue <= 1) continue;
-      var span = getMeasureCrossSpanRect(prev, next, axis);
-      var gapRect = axis === "x"
-        ? {
-            left: prev.right,
-            top: span.top,
-            width: gapValue,
-            height: span.bottom - span.top
-          }
-        : {
-            left: span.left,
-            top: prev.bottom,
-            width: span.right - span.left,
-            height: gapValue
-          };
-      gaps.push({
-        axis: axis,
-        value: gapValue,
-        rect: gapRect,
-        label: spacingValueText(gapValue)
-      });
-    }
-
-    var first = ordered[0].rect;
-    var last = ordered[ordered.length - 1].rect;
     var containerRect = structure.containerRect;
-    var leading = null;
-    var trailing = null;
-    if (axis === "x") {
-      var leadValue = Math.max(0, Math.round(first.left - containerRect.left));
-      var trailValue = Math.max(0, Math.round(containerRect.right - last.right));
-      if (leadValue > 1) {
-        leading = {
-          axis: axis,
-          value: leadValue,
-          rect: {
-            left: containerRect.left,
-            top: first.top,
-            width: leadValue,
-            height: first.height
-          },
-          label: spacingValueText(leadValue)
-        };
-      }
-      if (trailValue > 1) {
-        trailing = {
-          axis: axis,
-          value: trailValue,
-          rect: {
-            left: last.right,
-            top: last.top,
-            width: trailValue,
-            height: last.height
-          },
-          label: spacingValueText(trailValue)
-        };
-      }
-    } else {
-      var topValue = Math.max(0, Math.round(first.top - containerRect.top));
-      var bottomValue = Math.max(0, Math.round(containerRect.bottom - last.bottom));
-      if (topValue > 1) {
-        leading = {
-          axis: axis,
-          value: topValue,
-          rect: {
-            left: first.left,
-            top: containerRect.top,
-            width: first.width,
-            height: topValue
-          },
-          label: spacingValueText(topValue)
-        };
-      }
-      if (bottomValue > 1) {
-        trailing = {
-          axis: axis,
-          value: bottomValue,
-          rect: {
-            left: last.left,
-            top: last.bottom,
-            width: last.width,
-            height: bottomValue
-          },
-          label: spacingValueText(bottomValue)
-        };
-      }
+    var contentBox = resolveMeasureStructureContentBoxRect(measureA);
+    var repeatedGroup = resolveMeasureStructureRepeatedGroup(ordered, axis, contentBox && contentBox.rect, containerRect);
+    if (!repeatedGroup) repeatedGroup = resolveMeasureStructureTextRowGroup(ordered, axis, contentBox && contentBox.rect, containerRect);
+    var structureKind = resolveMeasureStructureOutputKind(repeatedGroup, contentBox, ordered);
+    var contentRect = null;
+    var siblingGaps = [];
+    console.log('[measure-debug]', {
+      fn: 'resolveMeasureStructureData',
+      phase: 'before-contentRect',
+      structureKind: structureKind,
+      axis: axis,
+      orderedLen: ordered && ordered.length,
+      contentBoxPresent: !!(contentBox && contentBox.rect),
+      repeatedGroupPresent: !!repeatedGroup,
+      repeatedGroupItemsLen: repeatedGroup && repeatedGroup.items && repeatedGroup.items.length,
+      repeatedGroupGapLen: repeatedGroup && repeatedGroup.gaps && repeatedGroup.gaps.length,
+      containerRect: containerRect
+    });
+
+    if (structureKind === "repeated-structure" && repeatedGroup) {
+      contentRect = repeatedGroup.rect;
+      siblingGaps = reduceMeasureStructureGapsForDisplay(resolveMeasureStructureSiblingGaps(repeatedGroup.items, axis));
+    } else if (contentBox && contentBox.rect) {
+      contentRect = contentBox.rect;
+    } else if (structure.stats && structure.stats.union) {
+      contentRect = {
+        left: structure.stats.union.left,
+        top: structure.stats.union.top,
+        right: structure.stats.union.right,
+        bottom: structure.stats.union.bottom,
+        width: Math.max(0, structure.stats.union.right - structure.stats.union.left),
+        height: Math.max(0, structure.stats.union.bottom - structure.stats.union.top)
+      };
     }
+    var inset = resolveMeasureStructureInsetData(containerRect, contentRect, axis);
+    console.log('[measure-debug]', {
+      fn: 'resolveMeasureStructureData',
+      phase: 'before-return',
+      structureKind: structureKind,
+      rawSiblingGapLen: repeatedGroup ? resolveMeasureStructureSiblingGaps(repeatedGroup.items, axis).length : 0,
+      rawSiblingGapValues: repeatedGroup ? resolveMeasureStructureSiblingGaps(repeatedGroup.items, axis).map(function (g) { return g.value; }) : [],
+      reducedSiblingGapLen: siblingGaps && siblingGaps.length,
+      reducedSiblingGapValues: siblingGaps ? siblingGaps.map(function (g) { return g.value; }) : [],
+      contentRect: contentRect,
+      insetBandsLen: inset && inset.bands && inset.bands.length,
+      insetBandKeys: inset && inset.bands ? inset.bands.map(function (b) { return b.key; }) : []
+    });
 
     return {
       kind: "structure",
+      structureKind: structureKind,
       axis: axis,
       measureA: measureA,
       container: structure.container,
       containerRect: containerRect,
-      items: ordered,
-      gaps: gaps,
-      leading: leading,
-      trailing: trailing,
-      padding: resolveMeasurePaddingData(measureA, axis)
+      items: structureKind === "repeated-structure" && repeatedGroup ? repeatedGroup.items : ordered,
+      inset: inset,
+      siblingGaps: siblingGaps,
+      contentBox: contentBox
     };
   }
 
   function resolveMeasureSingleState(measureA) {
     if (!measureA) return null;
     var data = resolveMeasureStructureData(measureA);
+    console.log('[measure-debug]', {
+      fn: 'resolveMeasureSingleState',
+      measureTag: measureA && measureA.tagName && measureA.tagName.toLowerCase(),
+      measureClass: measureA && measureA.className,
+      kind: data && data.kind,
+      dataKind: data && data.kind,
+      structureKind: data && data.structureKind,
+      itemsLen: data && data.items && data.items.length,
+      siblingGapsLen: data && data.siblingGaps && data.siblingGaps.length,
+      insetBandsLen: data && data.inset && data.inset.bands && data.inset.bands.length,
+      hoveringSelf: state.hoveredEl === measureA
+    });
     return {
       kind: data && data.kind === "structure" ? "structure" : "leaf",
       data: data,
@@ -6905,6 +7701,27 @@
     tag.style.top = pos.y + "px";
   }
 
+  function addHoverInfoLabel(layer, rect, text, options) {
+    if (!rect || !text) return;
+    var opts = options || {};
+    var width = opts.width || Math.max(72, Math.min(180, Math.round(String(text).length * 8 + 20)));
+    var height = opts.height || 24;
+    var gap = opts.gap == null ? 10 : opts.gap;
+    addMeasureLabel(
+      layer,
+      rect.left + rect.width / 2,
+      rect.bottom + gap + height / 2,
+      text,
+      {
+        background: opts.background,
+        borderColor: opts.borderColor,
+        color: opts.color,
+        width: width,
+        height: height
+      }
+    );
+  }
+
   function addMeasureRangeBlock(layer, rect, color, opacity) {
     if (!rect || rect.width <= 0 || rect.height <= 0) return;
     var block = document.createElement("div");
@@ -6950,29 +7767,44 @@
     box.style.height = r.height + "px";
   }
 
-  function renderMeasurePaddingGuides(layer, paddingData) {
-    if (!paddingData || !paddingData.bands || !paddingData.bands.length) return;
-    addMeasureInsetBox(layer, paddingData.contentRect, "rgba(85,168,255,.85)", "rgba(85,168,255,.03)");
-    paddingData.bands.forEach(function (band) {
-      addMeasureRangeBlock(layer, band.rect, "rgba(85,168,255,.9)", 0.12);
+  function renderMeasureStructureInsetGuides(layer, insetData, showAllBands) {
+    if (!insetData) return;
+    var bands = showAllBands ? (insetData.allBands || insetData.bands) : insetData.bands;
+    if (!bands || !bands.length) return;
+    addMeasureInsetBox(layer, insetData.contentRect, "rgba(62,213,152,.9)", "rgba(62,213,152,.05)");
+    bands.forEach(function (band) {
+      addMeasureRangeBlock(layer, band.rect, "rgba(62,213,152,.95)", 0.12);
       addMeasureLabel(
         layer,
         band.anchorX,
         band.anchorY,
         spacingValueText(band.value),
         {
-          background: "rgba(85,168,255,.94)",
-          borderColor: "rgba(255,255,255,.18)",
-          color: "#0F172A"
+          background: "rgba(15,23,42,.92)",
+          borderColor: "rgba(62,213,152,.34)",
+          color: "#F8FAFC"
         }
       );
     });
   }
 
-  function renderMeasureStructureGuides(layer, structureData) {
-    if (!structureData || !structureData.items || !structureData.items.length) return;
-    structureData.gaps.forEach(function (gap) {
-      addMeasureRangeBlock(layer, gap.rect, gap.axis === "x" ? CONFIG.colors.measureX : CONFIG.colors.measureY, 0.16);
+  function isHoverWithinMeasureA(measureA) {
+    var hovered = state.hoveredEl;
+    if (!measureA || !hovered) return false;
+    if (hovered === measureA) return true;
+    return !!(measureA.contains && measureA.contains(hovered));
+  }
+
+  function renderMeasureStructureGapGuides(layer, siblingGaps) {
+    if (!siblingGaps || !siblingGaps.length) return;
+    var gaps = siblingGaps;
+    if (gaps.length > 4) {
+      gaps = gaps.filter(function (_gap, index) {
+        return index % 2 === 0 || index === Math.floor(gaps.length / 2);
+      });
+    }
+    gaps.forEach(function (gap) {
+      addMeasureRangeBlock(layer, gap.rect, "rgba(217,70,239,.95)", 0.16);
       addMeasureLabel(
         layer,
         gap.rect.left + gap.rect.width / 2,
@@ -6980,53 +7812,132 @@
         gap.label,
         {
           background: "rgba(15,23,42,.92)",
-          borderColor: gap.axis === "x" ? "rgba(255,176,32,.36)" : "rgba(20,209,155,.34)"
+          borderColor: "rgba(217,70,239,.34)"
         }
       );
     });
+  }
 
-    [structureData.leading, structureData.trailing].forEach(function (segment) {
-      if (!segment) return;
-      addMeasureRangeBlock(layer, segment.rect, "rgba(62,213,152,.95)", 0.12);
+  function renderMeasureBoxLeafGuides(layer, leafData, showContentLabel) {
+    console.log('[measure-debug]', {
+      fn: 'renderMeasureBoxLeafGuides',
+      contentRect: leafData && leafData.contentRect,
+      contentLabel: leafData && leafData.contentLabel,
+      edgeValues: leafData && leafData.edgeValues,
+      bandsLen: leafData && leafData.bands && leafData.bands.length,
+      bandKeys: leafData && leafData.bands ? leafData.bands.map(function (b) { return b.key; }) : [],
+      bandValues: leafData && leafData.bands ? leafData.bands.map(function (b) { return b.value; }) : []
+    });
+    if (!leafData || !leafData.contentRect) return;
+    if (showContentLabel) {
+      addMeasureInsetBox(layer, leafData.contentRect, "rgba(85,168,255,.95)", "rgba(85,168,255,.04)");
+      addHoverInfoLabel(layer, leafData.rect, leafData.contentLabel, {
+        background: "rgba(85,168,255,.94)",
+        borderColor: "rgba(255,255,255,.18)",
+        color: "#0F172A",
+        width: 88
+      });
+    }
+    var bands = leafData.bands || [];
+    if (bands.length > 3) {
+      bands = bands.filter(function (_band, index) {
+        return index < 3 || index === bands.length - 1;
+      });
+    }
+    bands.forEach(function (band) {
+      addMeasureRangeBlock(layer, band.rect, "rgba(62,213,152,.95)", 0.12);
       addMeasureLabel(
         layer,
-        segment.rect.left + segment.rect.width / 2,
-        segment.rect.top + segment.rect.height / 2,
-        segment.label,
+        band.anchorX,
+        band.anchorY,
+        spacingValueText(band.value),
         {
           background: "rgba(15,23,42,.92)",
-          borderColor: "rgba(62,213,152,.34)"
+          borderColor: "rgba(62,213,152,.34)",
+          color: "#F8FAFC"
         }
       );
     });
-
-    renderMeasurePaddingGuides(spacingLayer, structureData.padding);
   }
 
-  function renderMeasureLeafGuides(layer, leafData, isVisible) {
-    if (!leafData || !leafData.rect || !isVisible) return;
-    addMeasureLabel(
-      layer,
-      leafData.rect.right,
-      leafData.rect.top,
-      leafData.label,
-      {
-        background: leafData.isTextLike ? "rgba(15,23,42,.92)" : "rgba(85,168,255,.94)",
-        borderColor: leafData.isTextLike ? "rgba(255,255,255,.12)" : "rgba(255,255,255,.18)",
-        color: leafData.isTextLike ? "#F8FAFC" : "#0F172A"
-      }
-    );
+  function renderMeasureBoxLeafHoverGuides(layer, leafData) {
+    if (!leafData || !leafData.contentRect) return;
+    addMeasureInsetBox(layer, leafData.contentRect, "rgba(85,168,255,.95)", "rgba(85,168,255,.04)");
+    addHoverInfoLabel(layer, leafData.rect, leafData.contentLabel, {
+      background: "rgba(85,168,255,.94)",
+      borderColor: "rgba(255,255,255,.18)",
+      color: "#0F172A",
+      width: 88
+    });
   }
 
-  function renderMeasureSingleGuides(measureState) {
+  function renderMeasureStructurePersistentGuides(layer, structureData) {
+    if (!structureData) return;
+    renderMeasureStructureInsetGuides(layer, structureData.inset, structureData.structureKind === "content-container");
+    renderMeasureStructureGapGuides(layer, structureData.siblingGaps);
+  }
+
+  function renderMeasureStructureHoverGuides(layer, structureData, isVisible) {
+    if (!structureData || !isVisible || !structureData.containerRect) return;
+    addHoverInfoLabel(layer, structureData.containerRect, px(structureData.containerRect.width) + " × " + px(structureData.containerRect.height), {
+      background: "rgba(85,168,255,.94)",
+      borderColor: "rgba(255,255,255,.18)",
+      color: "#0F172A"
+    });
+  }
+
+  function renderMeasureLeafPersistentGuides(layer, leafData) {
+    if (!leafData || !leafData.rect) return;
+    if (leafData.kind === "box-leaf") {
+      renderMeasureBoxLeafGuides(layer, leafData, false);
+    }
+  }
+
+  function renderMeasureLeafHoverGuides(layer, leafData, isVisible) {
+    console.log('[measure-debug]', {
+      fn: 'renderMeasureLeafHoverGuides',
+      leafKind: leafData && leafData.kind,
+      isVisible: isVisible,
+      leafRect: leafData && leafData.rect,
+      contentRectPresent: !!(leafData && leafData.contentRect),
+      bandsLen: leafData && leafData.bands && leafData.bands.length
+    });
+    if (!leafData || !leafData.rect || (!isVisible && leafData.kind !== "box-leaf")) return;
+    if (leafData.kind === "box-leaf") {
+      if (isVisible) renderMeasureBoxLeafHoverGuides(layer, leafData);
+      return;
+    }
+    addHoverInfoLabel(layer, leafData.rect, leafData.label, {
+      background: leafData.isTextLike ? "rgba(15,23,42,.92)" : "rgba(85,168,255,.94)",
+      borderColor: leafData.isTextLike ? "rgba(255,255,255,.12)" : "rgba(255,255,255,.18)",
+      color: leafData.isTextLike ? "#F8FAFC" : "#0F172A"
+    });
+  }
+
+  function renderMeasureSinglePersistentGuides(measureState) {
     clearLayer(spacingLayer);
+    if (!measureState || !measureState.data) return;
+    if (measureState.kind === "structure") {
+      renderMeasureStructurePersistentGuides(spacingLayer, measureState.data);
+      return;
+    }
+    renderMeasureLeafPersistentGuides(spacingLayer, measureState.data);
+  }
+
+  function renderMeasureSingleHoverGuides(measureState) {
     clearLayer(measureLayer);
     if (!measureState || !measureState.data) return;
     if (measureState.kind === "structure") {
-      renderMeasureStructureGuides(measureLayer, measureState.data);
+      renderMeasureStructureHoverGuides(measureLayer, measureState.data, isHoverWithinMeasureA(measureState.data && measureState.data.measureA));
       return;
     }
-    renderMeasureLeafGuides(measureLayer, measureState.data, !!measureState.hoveringSelf);
+    renderMeasureLeafHoverGuides(measureLayer, measureState.data, !!measureState.hoveringSelf);
+  }
+
+  function renderMeasurePairGuides(pairState) {
+    clearLayer(measureLayer);
+    if (!pairState || !pairState.measurement) return;
+    renderPairMeasurementGuides(measureLayer, pairState.measurement);
   }
 
   function getPrimaryHoverMeasureTarget() {
@@ -7389,7 +8300,8 @@
     updatePanelChrome();
     syncTopbar();
     var collapsed = state.panelCollapsed;
-    var measureSingleState = !collapsed && isMeasureTopbarMode() ? resolveMeasureSingleState(state.measureA) : null;
+    var measureSingleState = !collapsed && isMeasureTopbarMode() && state.measureA ? resolveMeasureSingleState(state.measureA) : null;
+    var measurePairState = !collapsed && isMeasureTopbarMode() && state.measureA && state.measureB ? resolveMeasurePairState(state.measureA, state.measureB) : null;
     if (collapsed) {
       tooltip.style.display = "none";
       topbar.style.display = "none";
@@ -7422,7 +8334,18 @@
     state.primaryMeasure = collapsed || isRecordMode() || isMeasureTopbarMode() ? null : hasSelectedEl() ? resolvePrimaryMeasure(state.mouseX, state.mouseY, state.hoveredEl) : null;
     updateHighlight(el);
     updateBox(selectA, !collapsed && !isRecordMode() && isMeasureTopbarMode() ? state.measureA : null);
-    updateBox(selectB, !collapsed && !isRecordMode() ? (isMeasureTopbarMode() ? (measureSingleState ? measureSingleState.secondaryHighlightEl : null) : getPrimaryHoverMeasureTarget()) : null);
+    updateBox(selectB, !collapsed && !isRecordMode() ? (isMeasureTopbarMode() ? (measurePairState ? measurePairState.secondaryHighlightEl : null) : getPrimaryHoverMeasureTarget()) : null);
+    if (isMeasureTopbarMode()) {
+      if (measurePairState) {
+        selectB.style.border = "1px dashed " + CONFIG.colors.measurePair;
+        selectB.style.background = "rgba(139,92,246,.05)";
+        selectB.style.boxShadow = "0 0 0 1px rgba(139,92,246,.16) inset";
+      } else {
+        selectB.style.border = "1px dashed " + CONFIG.colors.selectB;
+        selectB.style.background = "rgba(20,209,155,.04)";
+        selectB.style.boxShadow = "0 0 0 1px rgba(20,209,155,.22) inset";
+      }
+    }
     if (!isEditingPanel()) renderTooltip(el);
     if (shouldShowSelectedPanel()) {
       positionSelectedPanel(getSelectedEl());
@@ -7431,7 +8354,12 @@
     }
     syncRecordComposerFocus();
     if (isMeasureTopbarMode()) {
-      renderMeasureSingleGuides(measureSingleState);
+      renderMeasureSinglePersistentGuides(measureSingleState);
+      if (measurePairState) {
+        renderMeasurePairGuides(measurePairState);
+      } else {
+        renderMeasureSingleHoverGuides(measureSingleState);
+      }
     } else {
       addPrimaryMeasureGuides(state.primaryMeasure);
     }
@@ -7474,6 +8402,15 @@
 
     var el = fromPoint(e.clientX, e.clientY);
     setPageHover(el);
+    if (isMeasureTopbarMode()) {
+      if (state.measureA && el && el !== state.measureA) {
+        state.measureB = el;
+      } else {
+        state.measureB = null;
+      }
+    } else if (state.measureB) {
+      state.measureB = null;
+    }
     if (!isRecordMode() && hasSelectedEl() && getSelectedEl()) {
       state.spacingSide = nearestSide(getSelectedEl(), e.clientX, e.clientY);
     } else if (!isRecordMode() && el) {
