@@ -484,17 +484,6 @@
     return truncateText(title || host || "当前页面", 46);
   }
 
-  function getRecordLocationSummary(record) {
-    if (!record) return "";
-    var capture = normalizeRecordCapture(record);
-    var rect = capture && (capture.visibleFocusRect || capture.focusRect) ? capture.visibleFocusRect || capture.focusRect : null;
-    if (!rect) return "未记录位置";
-    return truncateText(
-      "x " + rect.left + " / y " + rect.top + " / " + rect.width + " × " + rect.height,
-      42
-    );
-  }
-
   function getDrawerRenderKey() {
     var records = getDrawerVisibleRecords();
     var ids = [];
@@ -689,8 +678,7 @@
   function buildRecordExportPageInfo(record) {
     return {
       pageTitle: record && record.pageTitle ? String(record.pageTitle).trim() : "",
-      pageUrl: record && record.pageUrl ? String(record.pageUrl).trim() : "",
-      locationSummary: getRecordLocationSummary(record)
+      pageUrl: record && record.pageUrl ? String(record.pageUrl).trim() : ""
     };
   }
 
@@ -709,8 +697,7 @@
           record && (record.updatedAt || record.createdAt) ? record.updatedAt || record.createdAt : ""
         ),
         pageTitle: pageInfo.pageTitle,
-        pageUrl: pageInfo.pageUrl,
-        locationSummary: pageInfo.locationSummary
+        pageUrl: pageInfo.pageUrl
       };
     });
   }
@@ -764,18 +751,6 @@
               esc(item.timeText || "未知时间") +
               "</p>" +
               "</section>" +
-              '<section class="issue-field">' +
-              "<h3>页面信息</h3>" +
-              '<p class="page-meta">' +
-              esc(item.pageTitle || "当前页面") +
-              "</p>" +
-              '<p class="page-link">' +
-              esc(item.pageUrl || pageUrl || "-") +
-              "</p>" +
-              '<p class="page-location">' +
-              esc(item.locationSummary || "未记录位置") +
-              "</p>" +
-              "</section>" +
               "</div>" +
               "</div>" +
               "</article>"
@@ -793,67 +768,64 @@
       esc(pageTitle) +
       " - Visual QA HTML 导出</title>" +
       "<style>" +
-      ":root{color-scheme:light;--bg:#f3f6fb;--panel:#ffffff;--panel-soft:#f8fafc;--text:#0f172a;--muted:#64748b;--line:#dbe3ee;--line-strong:#c6d2e1;--accent:#0f172a;--shadow:0 18px 48px rgba(15,23,42,.08);}" +
+      ":root{color-scheme:light;--bg:#f3f7fc;--panel:#ffffff;--panel-soft:#f8fafc;--text:#0f172a;--muted:#64748b;--muted-2:#94a3b8;--line:#dbe4f0;--line-soft:#e8eef6;--line-strong:#c6d2e1;--accent:#2563eb;--shadow:0 12px 30px rgba(15,23,42,.06);--green-bg:#dcfce7;--green-text:#16a34a;--blue-bg:#dbeafe;--blue-text:#2563eb;--orange-bg:#ffedd5;--orange-text:#ea580c;--chip-bg:#eef2f7;--chip-text:#475569;}" +
       "*{box-sizing:border-box;}" +
-      "html,body{margin:0;padding:0;background:linear-gradient(180deg,#eef4fb 0%,#f8fbff 100%);color:var(--text);font:14px/1.6 -apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;}" +
+      "html,body{margin:0;padding:0;background:linear-gradient(180deg,#f8fbff 0%,var(--bg) 100%);color:var(--text);font:14px/1.6 -apple-system,BlinkMacSystemFont,\"Segoe UI\",Roboto,\"PingFang SC\",\"Microsoft YaHei\",sans-serif;}" +
       "body{padding:32px 20px 48px;}" +
-      ".report{max-width:1180px;margin:0 auto;}" +
-      ".hero,.section{background:rgba(255,255,255,.9);backdrop-filter:saturate(140%) blur(4px);border:1px solid rgba(198,210,225,.9);border-radius:24px;box-shadow:var(--shadow);}" +
-      ".hero{padding:28px;}" +
-      ".eyebrow{margin:0 0 10px;color:#475569;font-size:12px;letter-spacing:.12em;text-transform:uppercase;}" +
-      ".hero h1{margin:0;font-size:30px;line-height:1.2;word-break:break-word;}" +
-      ".hero-url{margin:12px 0 0;color:#2563eb;word-break:break-all;}" +
-      ".summary-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-top:22px;}" +
-      ".summary-card{padding:16px 18px;border-radius:18px;background:var(--panel-soft);border:1px solid var(--line);}" +
-      ".summary-card .label{display:block;color:var(--muted);font-size:12px;margin-bottom:8px;}" +
-      ".summary-card .value{display:block;color:var(--text);font-size:16px;font-weight:700;word-break:break-word;}" +
-      ".section{margin-top:24px;padding:24px;}" +
-      ".section h2{margin:0 0 16px;font-size:22px;line-height:1.25;}" +
+      ".report{width:min(1360px,calc(100vw - 48px));margin:0 auto;}" +
+      ".hero,.section{background:rgba(255,255,255,.92);border:1px solid var(--line);border-radius:32px;box-shadow:var(--shadow);}" +
+      ".hero{padding:28px 28px 22px;}" +
+      ".eyebrow{margin:0 0 14px;color:var(--muted-2);font-size:12px;font-weight:700;letter-spacing:.04em;}" +
+      ".hero-main{display:flex;align-items:flex-start;justify-content:space-between;gap:28px;}" +
+      ".hero h1{margin:0;font-size:28px;line-height:1.28;letter-spacing:-.02em;max-width:880px;word-break:break-word;}" +
+      ".hero-url{margin:12px 0 0;color:var(--accent);font-size:15px;word-break:break-all;}" +
+      ".hero-meta{min-width:260px;border:1px solid var(--line-soft);border-radius:20px;background:#f8fbff;padding:16px 18px;}" +
+      ".hero-meta .row + .row{margin-top:10px;padding-top:10px;border-top:1px dashed var(--line);}" +
+      ".label{font-size:12px;color:var(--muted);margin-bottom:6px;font-weight:600;}" +
+      ".value{font-size:16px;font-weight:700;line-height:1.45;word-break:break-word;}" +
+      ".section{margin-top:20px;padding:22px;}" +
+      ".section h2{margin:0 0 16px;font-size:22px;line-height:1.3;}" +
       ".issue-list{display:flex;flex-direction:column;gap:18px;}" +
-      ".issue-card{display:grid;grid-template-columns:minmax(280px,420px) minmax(0,1fr);gap:20px;padding:20px;border:1px solid var(--line);border-radius:22px;background:#fff;}" +
-      ".issue-media{min-height:220px;border-radius:18px;border:1px solid var(--line);background:#e2e8f0;overflow:hidden;display:flex;align-items:center;justify-content:center;}" +
-      ".shot-image{display:block;width:100%;height:100%;object-fit:contain;background:#fff;}" +
+      ".issue-card{display:grid;grid-template-columns:minmax(440px,56%) minmax(0,1fr);gap:22px;padding:22px;border:1px solid var(--line);border-radius:26px;background:var(--panel);}" +
+      ".issue-media{min-height:320px;border-radius:22px;border:1px solid var(--line);background:#f8fafc;overflow:hidden;display:flex;align-items:center;justify-content:center;padding:18px;}" +
+      ".shot-image{display:block;width:100%;height:auto;border-radius:16px;object-fit:contain;background:#fff;box-shadow:0 10px 24px rgba(15,23,42,.08);}" +
       ".shot-empty{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:8px;width:100%;height:100%;padding:22px;background:linear-gradient(180deg,#e2e8f0 0%,#f8fafc 100%);color:#475569;}" +
       ".shot-empty strong{font-size:16px;color:#0f172a;}" +
-      ".issue-body{min-width:0;}" +
-      ".issue-head{display:flex;align-items:center;gap:10px;margin-bottom:14px;}" +
-      ".issue-index{display:inline-flex;align-items:center;justify-content:center;padding:4px 10px;border-radius:999px;background:#e2e8f0;color:#334155;font-size:12px;font-weight:700;}" +
-      ".issue-category{display:inline-flex;align-items:center;padding:4px 10px;border-radius:999px;background:color-mix(in srgb,var(--issue-category) 14%,white);color:var(--issue-category);font-size:12px;font-weight:700;}" +
-      ".issue-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;}" +
-      ".issue-field{padding:16px;border-radius:16px;background:var(--panel-soft);border:1px solid var(--line);min-width:0;}" +
-      ".issue-field h3{margin:0 0 8px;font-size:12px;color:var(--muted);letter-spacing:.04em;text-transform:uppercase;}" +
+      ".issue-body{min-width:0;display:flex;flex-direction:column;gap:14px;}" +
+      ".issue-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}" +
+      ".issue-index{display:inline-flex;align-items:center;justify-content:center;min-width:42px;height:34px;padding:0 12px;border-radius:999px;background:var(--chip-bg);color:var(--chip-text);font-size:18px;font-weight:800;}" +
+      ".issue-category{display:inline-flex;align-items:center;height:34px;padding:0 14px;border-radius:999px;background:color-mix(in srgb,var(--issue-category) 16%,white);color:var(--issue-category);font-size:15px;font-weight:700;}" +
+      ".issue-grid{display:flex;flex-direction:column;gap:10px;padding-top:6px;border-top:1px solid var(--line-soft);}" +
+      ".issue-field{min-width:0;padding:0;border:0;background:transparent;}" +
+      ".issue-field h3{margin:0 0 6px;font-size:12px;color:var(--muted);font-weight:700;letter-spacing:.04em;text-transform:uppercase;}" +
       ".issue-field p{margin:0;color:var(--text);word-break:break-word;white-space:pre-wrap;}" +
-      ".issue-note{grid-column:1 / -1;}" +
-      ".page-meta{font-weight:600;}" +
-      ".page-link,.page-location{margin-top:6px !important;color:#475569 !important;}" +
+      ".issue-note p{font-size:16px;line-height:1.75;color:#0f172a;}" +
       ".empty-state{padding:28px;border-radius:18px;border:1px dashed var(--line-strong);background:var(--panel-soft);color:var(--muted);text-align:center;}" +
-      "@media (max-width:960px){.summary-grid{grid-template-columns:repeat(2,minmax(0,1fr));}.issue-card{grid-template-columns:1fr;}.issue-media{min-height:200px;}}" +
-      "@media (max-width:640px){body{padding:18px 12px 32px;}.hero,.section{padding:18px;}.hero h1{font-size:24px;}.summary-grid,.issue-grid{grid-template-columns:1fr;}}" +
+      "@media (max-width:960px){.hero-main{flex-direction:column;}.hero-meta{min-width:0;width:100%;}.issue-card{grid-template-columns:1fr;}.issue-media{min-height:200px;}.report{width:calc(100vw - 24px);}}" +
+      "@media (max-width:640px){body{padding:18px 12px 32px;}.hero,.section{padding:18px;border-radius:24px;}.hero h1{font-size:24px;}.issue-card{padding:16px;border-radius:24px;}.issue-media{padding:14px;}.issue-index{font-size:16px;height:32px;}.issue-category{font-size:13px;height:32px;}.issue-note p{font-size:15px;}}" +
       "</style>" +
       "</head>" +
       "<body>" +
       '<main class="report">' +
       '<section class="hero">' +
       '<p class="eyebrow">Visual QA HTML Report</p>' +
+      '<div class="hero-main">' +
+      '<div>' +
       "<h1>" +
       esc(pageTitle) +
       "</h1>" +
       '<p class="hero-url">' +
       esc(pageUrl || "-") +
       "</p>" +
-      '<div class="summary-grid">' +
-      '<div class="summary-card"><span class="label">页面标题</span><span class="value">' +
-      esc(pageTitle) +
-      "</span></div>" +
-      '<div class="summary-card"><span class="label">页面 URL</span><span class="value">' +
-      esc(pageUrl || "-") +
-      "</span></div>" +
-      '<div class="summary-card"><span class="label">导出时间</span><span class="value">' +
+      "</div>" +
+      '<div class="hero-meta">' +
+      '<div class="row"><div class="label">导出时间</div><div class="value">' +
       esc(exportTimeText || "-") +
-      "</span></div>" +
-      '<div class="summary-card"><span class="label">记录总数</span><span class="value">' +
+      "</div></div>" +
+      '<div class="row"><div class="label">记录总数</div><div class="value">' +
       esc(String(items.length)) +
-      "</span></div>" +
+      "</div></div>" +
+      "</div>" +
       "</div>" +
       "</section>" +
       '<section class="section">' +
@@ -1540,6 +1512,14 @@
     return state.v12.mode === "select";
   }
 
+  function isMeasureTopbarMode() {
+    return isSelectMode() && !!state.measureMode;
+  }
+
+  function isPlainSelectMode() {
+    return isSelectMode() && !state.measureMode;
+  }
+
   function isRecordMode() {
     return state.v12.mode === "record";
   }
@@ -1569,11 +1549,11 @@
   }
 
   function shouldShowSelectedPanel() {
-    return !isRecordMode() && !state.v12.drawerOpen && hasSelectedEl();
+    return !isRecordMode() && !state.v12.drawerOpen && !isMeasureTopbarMode() && hasSelectedEl();
   }
 
   function shouldShowHoverCard() {
-    return !isRecordMode() && !state.v12.drawerOpen;
+    return !isRecordMode() && !state.v12.drawerOpen && !isMeasureTopbarMode();
   }
 
   function shouldShowHoverHighlight() {
@@ -1582,6 +1562,9 @@
 
   function setV12Mode(mode) {
     if (mode !== "select" && mode !== "record") return;
+    if (mode === "record") {
+      clearMeasureSelection({ keepTopbarMode: false });
+    }
     if (mode !== "record") {
       if (state.v12.pendingRecord) discardPendingShotCapture(state.v12.pendingRecord.id);
       state.v12.mode = mode;
@@ -1592,6 +1575,42 @@
       cleanupRecordInteractionState({ keepPendingRecord: true });
     }
     schedule();
+  }
+
+  function clearMeasureSelection(options) {
+    var opts = options || {};
+    state.measureA = null;
+    state.measureB = null;
+    state.primaryMeasure = null;
+    if (!opts.keepTopbarMode) {
+      state.measureMode = false;
+    }
+    clearLayer(spacingLayer);
+    clearLayer(measureLayer);
+  }
+
+  function setMeasureTopbarMode(enabled) {
+    if (enabled) {
+      state.measureMode = true;
+      state.measureA = null;
+      state.measureB = null;
+      state.primaryMeasure = null;
+    } else {
+      clearMeasureSelection({ keepTopbarMode: false });
+    }
+    schedule();
+  }
+
+  function handleMeasureModeClick(el) {
+    if (!el) return;
+    if (!state.measureA) {
+      state.measureA = el;
+      return;
+    }
+    if (el === state.measureA) {
+      return;
+    }
+    state.measureA = el;
   }
 
   function closeRecordMenu() {
@@ -1880,13 +1899,18 @@
     });
   }
 
-  function buildShotRectWithBias(focusRect, targetWidth, targetHeight, topShare, viewportRect) {
+  function buildShotRectWithBias(focusRect, targetWidth, targetHeight, padding, viewportRect) {
     if (!focusRect) return null;
     var page = getPageBounds();
     var viewport = normalizeRect(viewportRect) || getVisibleViewportRect();
-    var minPadding = 24;
-    var width = Math.max(Math.round(targetWidth || focusRect.width), focusRect.width + minPadding * 2);
-    var height = Math.max(Math.round(targetHeight || focusRect.height), focusRect.height + minPadding * 2);
+    var pad = padding || {};
+    var leftMin = Math.max(0, Math.round(pad.leftMin || 0));
+    var rightMin = Math.max(0, Math.round(pad.rightMin || 0));
+    var topMin = Math.max(0, Math.round(pad.topMin || 0));
+    var bottomMin = Math.max(0, Math.round(pad.bottomMin || 0));
+    var centerRatio = typeof pad.centerRatio === "number" ? pad.centerRatio : 0.41;
+    var width = Math.max(Math.round(targetWidth || focusRect.width), focusRect.width + leftMin + rightMin);
+    var height = Math.max(Math.round(targetHeight || focusRect.height), focusRect.height + topMin + bottomMin);
     width = Math.min(width, page.width);
     height = Math.min(height, page.height);
 
@@ -1920,10 +1944,20 @@
     } else if (touchesBottom) {
       topPad = extraHeight;
     } else {
-      var desiredTopShare = clamp(topShare == null ? 0.52 : topShare, 0.5, 0.55);
-      topPad = Math.round(extraHeight * desiredTopShare);
-      var maxTopPad = Math.max(minPadding, extraHeight - minPadding);
-      topPad = clamp(topPad, minPadding, maxTopPad);
+      topPad = Math.round(height * clamp(centerRatio, 0, 1) - focusRect.height / 2);
+    }
+
+    if (!(touchesLeft || touchesRight) && extraWidth > 0) {
+      var maxLeftPad = Math.max(leftMin, extraWidth - rightMin);
+      leftPad = clamp(leftPad, leftMin, maxLeftPad);
+    } else {
+      leftPad = Math.max(0, leftPad);
+    }
+    if (!(touchesTop || touchesBottom) && extraHeight > 0) {
+      var maxTopPad = Math.max(topMin, extraHeight - bottomMin);
+      topPad = clamp(topPad, topMin, maxTopPad);
+    } else {
+      topPad = Math.max(0, topPad);
     }
 
     var left = clamp(focusRect.left - leftPad, 0, Math.max(0, page.width - width));
@@ -1945,30 +1979,51 @@
     var result = null;
     if (type === "element") {
       var maxSide = Math.max(rect.width, rect.height);
-      if (maxSide <= 80) {
+      var wideShort = rect.height > 0 && rect.height <= 56 && rect.width / rect.height >= 2.2;
+      var extraWideShort = rect.height > 0 && rect.height <= 72 && rect.width / rect.height >= 2.6;
+      var elementFrameWidth = 0;
+      var elementFrameHeight = 0;
+      var elementPadding = null;
+      if (maxSide <= 64 || wideShort) {
         bucket = "element-xs";
-        result = buildShotRectWithBias(rect, 620, 360, 0.55, viewportRect);
-      } else if (maxSide <= 160) {
+        elementFrameWidth = 860;
+        elementFrameHeight = 520;
+        elementPadding = { leftMin: 150, rightMin: 150, topMin: 120, bottomMin: 170, centerRatio: 0.41 };
+      } else if (maxSide <= 140) {
         bucket = "element-sm";
-        result = buildShotRectWithBias(rect, 520, 320, 0.54, viewportRect);
-      } else if (maxSide <= 280) {
+        elementFrameWidth = 900;
+        elementFrameHeight = 560;
+        elementPadding = { leftMin: 155, rightMin: 155, topMin: 130, bottomMin: 180, centerRatio: 0.41 };
+      } else if (maxSide <= 260) {
         bucket = "element-md";
-        result = buildShotRectWithBias(rect, 420, 260, 0.53, viewportRect);
+        elementFrameWidth = 840;
+        elementFrameHeight = 520;
+        elementPadding = { leftMin: 125, rightMin: 125, topMin: 110, bottomMin: 150, centerRatio: 0.41 };
       } else {
         bucket = maxSide <= 420 ? "element-lg" : "element-xl";
-        var minWidth = maxSide <= 420 ? 800 : 820;
-        var minHeight = maxSide <= 420 ? 520 : 520;
-        var aspect = rect.height > 0 ? rect.width / rect.height : 1;
-        if (aspect >= 1.6) {
-          minWidth = Math.max(minWidth, 840);
-          minHeight = Math.max(minHeight, 500);
-        }
-        var targetWidth = Math.max(minWidth, rect.width + clamp(Math.round(rect.width * 0.12), 40, 88) * 2);
-        var targetHeight = Math.max(minHeight, rect.height + clamp(Math.round(rect.height * 0.1), 36, 72) * 2);
-        targetWidth = Math.max(targetWidth, Math.ceil(rect.width / 0.78));
-        targetHeight = Math.max(targetHeight, Math.ceil(rect.height / 0.82));
-        result = buildShotRectWithBias(rect, targetWidth, targetHeight, 0.53, viewportRect);
+        var horizontalPadding = Math.max(64, rect.width * 0.18);
+        var topPadding = Math.max(72, rect.height * 0.18);
+        var bottomPadding = Math.max(96, rect.height * 0.24);
+        elementFrameWidth = Math.max(860, rect.width + horizontalPadding * 2);
+        elementFrameHeight = Math.max(560, rect.height + topPadding + bottomPadding);
+        elementPadding = {
+          leftMin: horizontalPadding,
+          rightMin: horizontalPadding,
+          topMin: topPadding,
+          bottomMin: bottomPadding,
+          centerRatio: 0.41
+        };
       }
+      if (extraWideShort && elementPadding) {
+        elementPadding = {
+          leftMin: elementPadding.leftMin + 24,
+          rightMin: elementPadding.rightMin + 24,
+          topMin: elementPadding.topMin + 16,
+          bottomMin: elementPadding.bottomMin + 28,
+          centerRatio: 0.41
+        };
+      }
+      result = buildShotRectWithBias(rect, elementFrameWidth, elementFrameHeight, elementPadding, viewportRect);
       result = ensureRectContainsRect(result, rect);
       console.debug("[visual-qa][v1.2][shot-rect]", {
         type: type,
@@ -1982,16 +2037,33 @@
       });
       return result;
     }
-    if (rect.width <= 220 || rect.height <= 160) {
+    var longSide = Math.max(rect.width, rect.height);
+    var shortSide = Math.min(rect.width, rect.height);
+    var regionFrameWidth = 0;
+    var regionFrameHeight = 0;
+    var regionPadding = null;
+    if (longSide <= 220 || shortSide <= 120) {
       bucket = "region-sm";
-      result = buildShotRectWithBias(rect, 680, 420, 0.55, viewportRect);
-    } else if (Math.max(rect.width, rect.height) <= 420) {
+      regionFrameWidth = 900;
+      regionFrameHeight = 540;
+      regionPadding = { leftMin: 150, rightMin: 150, topMin: 120, bottomMin: 170, centerRatio: 0.41 };
+    } else if (longSide <= 420 || shortSide <= 220) {
       bucket = "region-md";
-      result = buildShotRectWithBias(rect, 560, 340, 0.54, viewportRect);
-    } else {
+      regionFrameWidth = 940;
+      regionFrameHeight = 580;
+      regionPadding = { leftMin: 155, rightMin: 155, topMin: 130, bottomMin: 180, centerRatio: 0.41 };
+    } else if (longSide <= 720) {
       bucket = "region-lg";
-      result = expandRect(rect, 32);
+      regionFrameWidth = Math.max(920, rect.width + 210);
+      regionFrameHeight = Math.max(580, rect.height + 190);
+      regionPadding = { leftMin: 110, rightMin: 110, topMin: 96, bottomMin: 130, centerRatio: 0.41 };
+    } else {
+      bucket = "region-xl";
+      regionFrameWidth = 860;
+      regionFrameHeight = 560;
+      regionPadding = { leftMin: 56, rightMin: 56, topMin: 56, bottomMin: 80, centerRatio: 0.41 };
     }
+    result = buildShotRectWithBias(rect, regionFrameWidth, regionFrameHeight, regionPadding, viewportRect);
     result = ensureRectContainsRect(result, rect);
     console.debug("[visual-qa][v1.2][shot-rect]", {
       type: type,
@@ -4739,10 +4811,7 @@
     state.frozenEl = state.selectedA;
     state.isFrozen = !!state.selectedA;
     if (!state.selectedA) {
-      state.measureMode = false;
-      state.measureA = null;
-      state.measureB = null;
-      state.primaryMeasure = null;
+      clearMeasureSelection({ keepTopbarMode: false });
       state.modifiedProps = {};
       state.editedProps = state.modifiedProps;
       state.spacingExpanded = { padding: false, margin: false };
@@ -4756,10 +4825,6 @@
     }
     if (prevSelected !== state.selectedA) {
       state.spacingExpanded = { padding: false, margin: false };
-    }
-    if (state.measureMode) {
-      state.measureA = state.selectedA;
-      state.measureB = null;
     }
   }
 
@@ -4926,6 +4991,7 @@
   function getActiveEl() {
     if (isRecordRegionMode()) return null;
     if (isRecordElementMode()) return getRecordTargetEl() || state.hoveredEl || state.lastPageEl;
+    if (isMeasureTopbarMode()) return state.hoveredEl || state.measureB || state.measureA || state.lastPageEl;
     return getSelectedEl() || state.hoveredEl || state.lastPageEl;
   }
 
@@ -4996,6 +5062,385 @@
       ay: ay,
       bx: bx,
       by: by
+    };
+  }
+
+  function isMeasureStructureNodeEligible(el) {
+    if (!el || isOverlayElement(el)) return false;
+    if (el === document.body || el === document.documentElement) return false;
+    var rect = el.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || rect.height <= 0) return false;
+    var style = getComputedStyle(el);
+    if (!style) return false;
+    if (style.display === "none" || style.visibility === "hidden") return false;
+    if (parseFloat(style.opacity || "1") <= 0.02) return false;
+    if (style.position === "absolute" || style.position === "fixed") return false;
+    return true;
+  }
+
+  function getMeasureStructureChildrenStats(children) {
+    var stats = {
+      count: 0,
+      union: null,
+      first: null,
+      last: null
+    };
+    children.forEach(function (item) {
+      var rect = item.rect;
+      if (!rect) return;
+      stats.count += 1;
+      if (!stats.first) stats.first = rect;
+      stats.last = rect;
+      if (!stats.union) {
+        stats.union = {
+          left: rect.left,
+          top: rect.top,
+          right: rect.right,
+          bottom: rect.bottom
+        };
+        return;
+      }
+      stats.union.left = Math.min(stats.union.left, rect.left);
+      stats.union.top = Math.min(stats.union.top, rect.top);
+      stats.union.right = Math.max(stats.union.right, rect.right);
+      stats.union.bottom = Math.max(stats.union.bottom, rect.bottom);
+    });
+    return stats;
+  }
+
+  function getEffectiveStructureChildren(container) {
+    if (!container || !container.children) return [];
+    return Array.prototype.filter.call(container.children, isMeasureStructureNodeEligible);
+  }
+
+  function sortMeasureStructureItems(items, axis) {
+    return items.slice().sort(function (a, b) {
+      var aCenter = axis === "x" ? (a.rect.left + a.rect.right) / 2 : (a.rect.top + a.rect.bottom) / 2;
+      var bCenter = axis === "x" ? (b.rect.left + b.rect.right) / 2 : (b.rect.top + b.rect.bottom) / 2;
+      return aCenter - bCenter;
+    });
+  }
+
+  function getMeasureCrossSpanRect(prevRect, nextRect, axis) {
+    if (axis === "x") {
+      var top = Math.max(prevRect.top, nextRect.top);
+      var bottom = Math.min(prevRect.bottom, nextRect.bottom);
+      if (bottom <= top) {
+        var midY = Math.round(((prevRect.top + prevRect.bottom) / 2 + (nextRect.top + nextRect.bottom) / 2) / 2);
+        top = midY - 2;
+        bottom = midY + 2;
+      }
+      return { top: top, bottom: bottom };
+    }
+    var left = Math.max(prevRect.left, nextRect.left);
+    var right = Math.min(prevRect.right, nextRect.right);
+    if (right <= left) {
+      var midX = Math.round(((prevRect.left + prevRect.right) / 2 + (nextRect.left + nextRect.right) / 2) / 2);
+      left = midX - 2;
+      right = midX + 2;
+    }
+    return { left: left, right: right };
+  }
+
+  function resolveMeasureStructureAxis(container, children) {
+    if (!container || !children || children.length < 2) return null;
+
+    function scoreAxis(axis) {
+      var ordered = sortMeasureStructureItems(children, axis);
+      var score = 0;
+      for (var i = 0; i < ordered.length - 1; i++) {
+        var prev = ordered[i].rect;
+        var next = ordered[i + 1].rect;
+        var gap = axis === "x" ? Math.round(next.left - prev.right) : Math.round(next.top - prev.bottom);
+        var cross = axis === "x"
+          ? Math.max(0, Math.min(prev.bottom, next.bottom) - Math.max(prev.top, next.top))
+          : Math.max(0, Math.min(prev.right, next.right) - Math.max(prev.left, next.left));
+        var crossSpan = axis === "x" ? Math.min(prev.height, next.height) : Math.min(prev.width, next.width);
+        if (gap >= 0 && crossSpan > 0 && cross >= crossSpan * 0.35) score += 1;
+      }
+      return {
+        axis: axis,
+        score: score,
+        ordered: ordered
+      };
+    }
+
+    var horizontal = scoreAxis("x");
+    var vertical = scoreAxis("y");
+    if (!horizontal.score && !vertical.score) return null;
+    return horizontal.score >= vertical.score ? horizontal : vertical;
+  }
+
+  function resolveMeasurePaddingData(measureA, preferredAxis) {
+    if (!measureA) return null;
+    var rect = measureA.getBoundingClientRect();
+    var style = getComputedStyle(measureA);
+    if (!style) return null;
+    var padding = boxValues(style, "padding");
+    var contentRect = {
+      left: rect.left + padding.l,
+      top: rect.top + padding.t,
+      right: rect.right - padding.r,
+      bottom: rect.bottom - padding.b
+    };
+    contentRect.right = Math.max(contentRect.left, contentRect.right);
+    contentRect.bottom = Math.max(contentRect.top, contentRect.bottom);
+    contentRect.width = Math.max(0, contentRect.right - contentRect.left);
+    contentRect.height = Math.max(0, contentRect.bottom - contentRect.top);
+
+    var bands = [
+      {
+        key: "top",
+        value: padding.t,
+        rect: {
+          left: rect.left,
+          top: rect.top,
+          width: rect.width,
+          height: padding.t
+        },
+        anchorX: rect.left + rect.width / 2,
+        anchorY: rect.top + Math.max(1, padding.t / 2)
+      },
+      {
+        key: "right",
+        value: padding.r,
+        rect: {
+          left: contentRect.right,
+          top: rect.top,
+          width: padding.r,
+          height: rect.height
+        },
+        anchorX: contentRect.right + Math.max(1, padding.r / 2),
+        anchorY: rect.top + rect.height / 2
+      },
+      {
+        key: "bottom",
+        value: padding.b,
+        rect: {
+          left: rect.left,
+          top: contentRect.bottom,
+          width: rect.width,
+          height: padding.b
+        },
+        anchorX: rect.left + rect.width / 2,
+        anchorY: contentRect.bottom + Math.max(1, padding.b / 2)
+      },
+      {
+        key: "left",
+        value: padding.l,
+        rect: {
+          left: rect.left,
+          top: rect.top,
+          width: padding.l,
+          height: rect.height
+        },
+        anchorX: rect.left + Math.max(1, padding.l / 2),
+        anchorY: rect.top + rect.height / 2
+      }
+    ].filter(function (band) {
+      return band.value > 1;
+    });
+
+    if (!bands.length) {
+      return {
+        kind: "padding",
+        rect: rect,
+        contentRect: contentRect,
+        bands: []
+      };
+    }
+
+    if (bands.length > 2) {
+      var axis = preferredAxis || (rect.width >= rect.height ? "x" : "y");
+      var priority = axis === "x"
+        ? { left: 0, right: 0, top: 1, bottom: 1 }
+        : { top: 0, bottom: 0, left: 1, right: 1 };
+      bands.sort(function (a, b) {
+        var diff = priority[a.key] - priority[b.key];
+        if (diff !== 0) return diff;
+        return b.value - a.value;
+      });
+      bands = bands.slice(0, 2);
+    }
+
+    return {
+      kind: "padding",
+      rect: rect,
+      contentRect: contentRect,
+      bands: bands
+    };
+  }
+
+  function resolveMeasureLeafData(measureA) {
+    if (!measureA) return null;
+    var rect = measureA.getBoundingClientRect();
+    var style = getComputedStyle(measureA);
+    var kind = classifyTarget(measureA);
+    return {
+      kind: "leaf",
+      rect: rect,
+      label:
+        kind === "text-like" || kind === "icon-font-like"
+          ? "字号 " + px(style.fontSize) + " / 行高 " + px(style.lineHeight)
+          : px(rect.width) + " × " + px(rect.height),
+      isTextLike: kind === "text-like" || kind === "icon-font-like"
+    };
+  }
+
+  function resolveMeasureStructureContainer(measureA) {
+    if (!measureA) return null;
+    if (!isMeasureStructureNodeEligible(measureA)) return null;
+    var children = getEffectiveStructureChildren(measureA).map(function (child) {
+      return { el: child, rect: child.getBoundingClientRect() };
+    });
+    if (children.length < 2) return null;
+    var axisInfo = resolveMeasureStructureAxis(measureA, children);
+    if (!axisInfo || axisInfo.score <= 0) return null;
+
+    var stats = getMeasureStructureChildrenStats(children);
+    if (!stats.union || !stats.first || !stats.last) return null;
+    var rect = measureA.getBoundingClientRect();
+    var unionWidth = Math.max(0, stats.union.right - stats.union.left);
+    var unionHeight = Math.max(0, stats.union.bottom - stats.union.top);
+    var rectArea = rect.width * rect.height;
+    var unionArea = unionWidth * unionHeight;
+    var containsChildren = stats.union.left >= rect.left - 2 &&
+      stats.union.top >= rect.top - 2 &&
+      stats.union.right <= rect.right + 2 &&
+      stats.union.bottom <= rect.bottom + 2;
+    var wrapsEnough = rectArea > unionArea * 1.08 || rect.width - unionWidth > 8 || rect.height - unionHeight > 8;
+    if (!containsChildren || !wrapsEnough) return null;
+
+    return {
+      container: measureA,
+      containerRect: rect,
+      children: children,
+      axisInfo: axisInfo
+    };
+  }
+
+  function resolveMeasureStructureData(measureA) {
+    if (!measureA) return null;
+    var structure = resolveMeasureStructureContainer(measureA);
+    if (!structure) return resolveMeasureLeafData(measureA);
+
+    var ordered = structure.axisInfo.ordered;
+    var axis = structure.axisInfo.axis;
+    var gaps = [];
+    for (var i = 0; i < ordered.length - 1; i++) {
+      var prev = ordered[i].rect;
+      var next = ordered[i + 1].rect;
+      var gapValue = axis === "x" ? Math.round(next.left - prev.right) : Math.round(next.top - prev.bottom);
+      if (gapValue <= 1) continue;
+      var span = getMeasureCrossSpanRect(prev, next, axis);
+      var gapRect = axis === "x"
+        ? {
+            left: prev.right,
+            top: span.top,
+            width: gapValue,
+            height: span.bottom - span.top
+          }
+        : {
+            left: span.left,
+            top: prev.bottom,
+            width: span.right - span.left,
+            height: gapValue
+          };
+      gaps.push({
+        axis: axis,
+        value: gapValue,
+        rect: gapRect,
+        label: spacingValueText(gapValue)
+      });
+    }
+
+    var first = ordered[0].rect;
+    var last = ordered[ordered.length - 1].rect;
+    var containerRect = structure.containerRect;
+    var leading = null;
+    var trailing = null;
+    if (axis === "x") {
+      var leadValue = Math.max(0, Math.round(first.left - containerRect.left));
+      var trailValue = Math.max(0, Math.round(containerRect.right - last.right));
+      if (leadValue > 1) {
+        leading = {
+          axis: axis,
+          value: leadValue,
+          rect: {
+            left: containerRect.left,
+            top: first.top,
+            width: leadValue,
+            height: first.height
+          },
+          label: spacingValueText(leadValue)
+        };
+      }
+      if (trailValue > 1) {
+        trailing = {
+          axis: axis,
+          value: trailValue,
+          rect: {
+            left: last.right,
+            top: last.top,
+            width: trailValue,
+            height: last.height
+          },
+          label: spacingValueText(trailValue)
+        };
+      }
+    } else {
+      var topValue = Math.max(0, Math.round(first.top - containerRect.top));
+      var bottomValue = Math.max(0, Math.round(containerRect.bottom - last.bottom));
+      if (topValue > 1) {
+        leading = {
+          axis: axis,
+          value: topValue,
+          rect: {
+            left: first.left,
+            top: containerRect.top,
+            width: first.width,
+            height: topValue
+          },
+          label: spacingValueText(topValue)
+        };
+      }
+      if (bottomValue > 1) {
+        trailing = {
+          axis: axis,
+          value: bottomValue,
+          rect: {
+            left: last.left,
+            top: last.bottom,
+            width: last.width,
+            height: bottomValue
+          },
+          label: spacingValueText(bottomValue)
+        };
+      }
+    }
+
+    return {
+      kind: "structure",
+      axis: axis,
+      measureA: measureA,
+      container: structure.container,
+      containerRect: containerRect,
+      items: ordered,
+      gaps: gaps,
+      leading: leading,
+      trailing: trailing,
+      padding: resolveMeasurePaddingData(measureA, axis)
+    };
+  }
+
+  function resolveMeasureSingleState(measureA) {
+    if (!measureA) return null;
+    var data = resolveMeasureStructureData(measureA);
+    return {
+      kind: data && data.kind === "structure" ? "structure" : "leaf",
+      data: data,
+      secondaryHighlightEl: null,
+      hoveringSelf: state.hoveredEl === measureA
     };
   }
 
@@ -5230,13 +5675,16 @@
       ".v12-record-composer-status{margin:0;min-height:16px;color:rgba(255,255,255,.44);font:12px/1.35 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;}" +
       ".v12-record-composer-close{display:inline-flex;align-items:center;justify-content:center;align-self:center;width:28px;height:28px;border:0;background:transparent;color:rgba(255,255,255,.78);font:16px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;padding:0;}" +
       ".v12-record-composer-target{color:rgba(255,255,255,.96);font:700 18px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;}" +
-      ".v12-record-composer-category{position:relative;display:block;min-width:0;}" +
+      ".v12-record-composer-category{display:block;min-width:0;overflow:visible;}" +
+      ".v12-record-composer-category-anchor{position:relative;display:inline-flex;flex-direction:column;align-items:flex-start;min-width:0;overflow:visible;}" +
       ".v12-record-composer-category-btn{display:inline-flex;align-items:center;gap:8px;max-width:100%;padding:10px 14px;border-radius:14px;background:rgba(255,255,255,.08);color:#fff;font:14px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;border:1px solid rgba(255,255,255,.08);cursor:pointer;white-space:nowrap;}" +
       ".v12-record-composer-category-btn > span{pointer-events:none;}" +
       ".v12-record-composer-note{display:block;flex:1 1 auto;min-height:108px;}" +
       ".v12-record-composer-note textarea{width:100%;min-height:108px;padding:14px;border-radius:18px;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.05);color:rgba(255,255,255,.95);font:14px/1.8 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;resize:none;box-sizing:border-box;outline:none;display:block;}" +
       ".v12-record-composer-footer{display:flex;gap:10px;padding-top:14px;border-top:1px solid rgba(255,255,255,.08);min-width:0;}" +
-      ".v12-record-category-menu{position:fixed;left:0;top:0;min-width:188px;padding:8px;border-radius:18px;background:#101216;border:1px solid rgba(255,255,255,.08);box-shadow:0 18px 32px rgba(15,23,42,.32);z-index:1;}" +
+      ".v12-record-category-menu{position:absolute;left:0;top:calc(100% + 8px);min-width:188px;padding:8px;border-radius:18px;background:#101216;border:1px solid rgba(255,255,255,.08);box-shadow:0 18px 32px rgba(15,23,42,.32);z-index:20;}" +
+      ".v12-record-category-menu[data-placement=\"up\"]{top:auto;bottom:calc(100% + 8px);}" +
+      ".v12-record-category-menu[data-placement=\"down\"]{top:calc(100% + 8px);bottom:auto;}" +
       ".v12-record-drawer [data-v12-action=\"toggle-drawer\"]," +
       ".v12-record-drawer [data-v12-action=\"drawer-export-html\"]," +
       ".v12-record-drawer [data-v12-action=\"drawer-clear\"]," +
@@ -5369,13 +5817,13 @@
 
   function syncTopbar() {
     ensureTopbarDom();
-    syncTopbarButton(topbarDom.selectBtn, isSelectMode(), state.v12.topbarPressedAction === "mode-select");
+    syncTopbarButton(topbarDom.selectBtn, isPlainSelectMode(), state.v12.topbarPressedAction === "mode-select");
     if (topbarDom.recordSplit) {
       topbarDom.recordSplit.setAttribute("data-active", isRecordMode() ? "true" : "false");
     }
     syncTopbarButton(topbarDom.recordMainBtn, isRecordMode(), state.v12.topbarPressedAction === "record-main");
     syncTopbarButton(topbarDom.recordArrowBtn, isRecordMode(), state.v12.topbarPressedAction === "record-menu-toggle");
-    syncTopbarButton(topbarDom.measureBtn, false, state.v12.topbarPressedAction === "mode-measure");
+    syncTopbarButton(topbarDom.measureBtn, isMeasureTopbarMode(), state.v12.topbarPressedAction === "mode-measure");
     syncTopbarButton(topbarDom.drawerBtn, state.v12.drawerOpen, state.v12.topbarPressedAction === "toggle-drawer");
     if (topbarDom.recordMainBadge) {
       var recordLabel = getRememberedRecordSubMode() ? formatRecordSubModeLabel(getRememberedRecordSubMode()) : "";
@@ -5643,41 +6091,28 @@
       menuEl.style.display = "none";
       menuEl.style.visibility = "visible";
       menuEl.style.pointerEvents = "auto";
+      menuEl.setAttribute("data-placement", "down");
       return;
     }
 
     var safe = 12;
     var gap = 8;
-    var vw = Math.max(1, window.innerWidth || 0);
     var vh = Math.max(1, window.innerHeight || 0);
-    var anchorRect = buttonEl.getBoundingClientRect();
+    var buttonRect = buttonEl.getBoundingClientRect();
 
     menuEl.style.display = "block";
     menuEl.style.visibility = "hidden";
     menuEl.style.pointerEvents = "none";
 
-    var menuWidth = Math.max(188, menuEl.offsetWidth || 188);
     var menuHeight = Math.max(1, menuEl.offsetHeight || 1);
-    var spaceBelow = vh - safe - (anchorRect.bottom + gap);
-    var spaceAbove = anchorRect.top - safe - gap;
-    var openUp = spaceBelow < menuHeight && spaceAbove > spaceBelow;
-    var maxHeight = Math.max(120, Math.floor(openUp ? spaceAbove : spaceBelow));
-    var top = openUp ? anchorRect.top - gap - menuHeight : anchorRect.bottom + gap;
-    var left = anchorRect.left;
+    var spaceBelow = vh - safe - (buttonRect.bottom + gap);
+    var spaceAbove = buttonRect.top - safe - gap;
+    var openUp = spaceBelow < menuHeight;
+    var availableSpace = openUp ? spaceAbove : spaceBelow;
+    var maxHeight = Math.max(1, Math.min(menuHeight, Math.floor(availableSpace)));
 
-    if (openUp && top < safe) {
-      top = safe;
-    }
-    if (!openUp && top + menuHeight > vh - safe) {
-      top = Math.max(safe, vh - safe - menuHeight);
-    }
-
-    left = clamp(left, safe, Math.max(safe, vw - safe - menuWidth));
-
-    menuEl.style.left = Math.round(left) + "px";
-    menuEl.style.top = Math.round(top) + "px";
+    menuEl.style.left = "0px";
     menuEl.style.right = "auto";
-    menuEl.style.bottom = "auto";
     menuEl.style.transform = "none";
     menuEl.style.maxHeight = maxHeight + "px";
     menuEl.style.overflowY = "auto";
@@ -5914,6 +6349,7 @@
         esc(record.targetName) +
         "</div>" +
         '<div class="v12-record-composer-category">' +
+        '<div class="v12-record-composer-category-anchor">' +
         '<button type="button" data-v12-action="toggle-category-menu" class="v12-record-composer-category-btn" aria-expanded="' +
         (state.v12.categoryMenuOpen ? "true" : "false") +
         '">' +
@@ -5949,6 +6385,7 @@
             "</button>"
           );
         }).join("") +
+        "</div>" +
         "</div>" +
         "</div>" +
         '<div class="v12-record-composer-note">' +
@@ -6086,12 +6523,17 @@
   function handleTopbarAction(action, target, e) {
     if (action === "mode-select") {
       setV12Mode("select");
+      clearMeasureSelection({ keepTopbarMode: false });
     } else if (action === "mode-record" || action === "record-main") {
+      clearMeasureSelection({ keepTopbarMode: false });
       handleRecordMainAction();
     } else if (action === "record-menu-toggle") {
       handleRecordArrowAction();
     } else if (action === "mode-measure") {
-      schedule();
+      if (!isSelectMode()) {
+        setV12Mode("select");
+      }
+      setMeasureTopbarMode(!isMeasureTopbarMode());
     } else if (action === "toggle-drawer") {
       toggleV12Drawer();
     }
@@ -6440,6 +6882,60 @@
     }
   }
 
+  function addMeasureLabel(layer, x, y, text, options) {
+    var opts = options || {};
+    var tag = document.createElement("div");
+    tag.textContent = text;
+    tag.style.position = "fixed";
+    tag.style.pointerEvents = "none";
+    tag.style.padding = "3px 8px";
+    tag.style.borderRadius = "999px";
+    tag.style.background = opts.background || "rgba(15,23,42,.92)";
+    tag.style.border = "1px solid " + (opts.borderColor || "rgba(255,255,255,.12)");
+    tag.style.color = opts.color || "#F8FAFC";
+    tag.style.font = "11px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif";
+    tag.style.fontWeight = "700";
+    tag.style.boxShadow = "0 6px 16px rgba(0,0,0,.18)";
+    tag.style.whiteSpace = "nowrap";
+    layer.appendChild(tag);
+    var width = opts.width || 58;
+    var height = opts.height || 24;
+    var pos = safeTagPos(x - width / 2, y - height / 2, width, height);
+    tag.style.left = pos.x + "px";
+    tag.style.top = pos.y + "px";
+  }
+
+  function addMeasureRangeBlock(layer, rect, color, opacity) {
+    if (!rect || rect.width <= 0 || rect.height <= 0) return;
+    var block = document.createElement("div");
+    block.style.position = "fixed";
+    block.style.pointerEvents = "none";
+    block.style.left = rect.left + "px";
+    block.style.top = rect.top + "px";
+    block.style.width = rect.width + "px";
+    block.style.height = rect.height + "px";
+    block.style.background = color;
+    block.style.opacity = opacity == null ? "0.18" : String(opacity);
+    block.style.borderRadius = "8px";
+    layer.appendChild(block);
+  }
+
+  function addMeasureInsetBox(layer, rect, color, background) {
+    if (!rect || rect.width <= 0 || rect.height <= 0) return;
+    var box = document.createElement("div");
+    box.style.position = "fixed";
+    box.style.pointerEvents = "none";
+    box.style.left = rect.left + "px";
+    box.style.top = rect.top + "px";
+    box.style.width = rect.width + "px";
+    box.style.height = rect.height + "px";
+    box.style.border = "1px dashed " + color;
+    box.style.background = background || "transparent";
+    box.style.borderRadius = "8px";
+    box.style.boxSizing = "border-box";
+    layer.appendChild(box);
+  }
+
   function updateBox(box, el) {
     if (!el) {
       box.style.display = "none";
@@ -6452,6 +6948,85 @@
     box.style.transform = "translate(" + r.left + "px," + r.top + "px)";
     box.style.width = r.width + "px";
     box.style.height = r.height + "px";
+  }
+
+  function renderMeasurePaddingGuides(layer, paddingData) {
+    if (!paddingData || !paddingData.bands || !paddingData.bands.length) return;
+    addMeasureInsetBox(layer, paddingData.contentRect, "rgba(85,168,255,.85)", "rgba(85,168,255,.03)");
+    paddingData.bands.forEach(function (band) {
+      addMeasureRangeBlock(layer, band.rect, "rgba(85,168,255,.9)", 0.12);
+      addMeasureLabel(
+        layer,
+        band.anchorX,
+        band.anchorY,
+        spacingValueText(band.value),
+        {
+          background: "rgba(85,168,255,.94)",
+          borderColor: "rgba(255,255,255,.18)",
+          color: "#0F172A"
+        }
+      );
+    });
+  }
+
+  function renderMeasureStructureGuides(layer, structureData) {
+    if (!structureData || !structureData.items || !structureData.items.length) return;
+    structureData.gaps.forEach(function (gap) {
+      addMeasureRangeBlock(layer, gap.rect, gap.axis === "x" ? CONFIG.colors.measureX : CONFIG.colors.measureY, 0.16);
+      addMeasureLabel(
+        layer,
+        gap.rect.left + gap.rect.width / 2,
+        gap.rect.top + gap.rect.height / 2,
+        gap.label,
+        {
+          background: "rgba(15,23,42,.92)",
+          borderColor: gap.axis === "x" ? "rgba(255,176,32,.36)" : "rgba(20,209,155,.34)"
+        }
+      );
+    });
+
+    [structureData.leading, structureData.trailing].forEach(function (segment) {
+      if (!segment) return;
+      addMeasureRangeBlock(layer, segment.rect, "rgba(62,213,152,.95)", 0.12);
+      addMeasureLabel(
+        layer,
+        segment.rect.left + segment.rect.width / 2,
+        segment.rect.top + segment.rect.height / 2,
+        segment.label,
+        {
+          background: "rgba(15,23,42,.92)",
+          borderColor: "rgba(62,213,152,.34)"
+        }
+      );
+    });
+
+    renderMeasurePaddingGuides(spacingLayer, structureData.padding);
+  }
+
+  function renderMeasureLeafGuides(layer, leafData, isVisible) {
+    if (!leafData || !leafData.rect || !isVisible) return;
+    addMeasureLabel(
+      layer,
+      leafData.rect.right,
+      leafData.rect.top,
+      leafData.label,
+      {
+        background: leafData.isTextLike ? "rgba(15,23,42,.92)" : "rgba(85,168,255,.94)",
+        borderColor: leafData.isTextLike ? "rgba(255,255,255,.12)" : "rgba(255,255,255,.18)",
+        color: leafData.isTextLike ? "#F8FAFC" : "#0F172A"
+      }
+    );
+  }
+
+  function renderMeasureSingleGuides(measureState) {
+    clearLayer(spacingLayer);
+    clearLayer(measureLayer);
+    if (!measureState || !measureState.data) return;
+    if (measureState.kind === "structure") {
+      renderMeasureStructureGuides(measureLayer, measureState.data);
+      return;
+    }
+    renderMeasureLeafGuides(measureLayer, measureState.data, !!measureState.hoveringSelf);
   }
 
   function getPrimaryHoverMeasureTarget() {
@@ -6516,12 +7091,7 @@
   }
 
   function addAuxMeasureGuides() {
-    if (state.primaryMeasure) return;
-    if (!(state.measureMode && state.measureA && state.measureB)) return;
-    var m = getMeasureData(state.measureA, state.measureB);
-    if (!m) return;
-    if (m.horizontal !== null) addMarkedLine(measureLayer, m.ax, m.ay, m.bx, m.by, CONFIG.colors.measureX, m.horizontal + "px");
-    if (m.vertical !== null) addMarkedLine(measureLayer, m.ax, m.ay, m.bx, m.by, CONFIG.colors.measureY, m.vertical + "px");
+    return;
   }
 
   function updateHighlight(el) {
@@ -6546,6 +7116,12 @@
       highlight.style.borderColor = "var(--qa-accent)";
       highlight.style.background = "var(--qa-accent-hover)";
       highlight.style.boxShadow = "0 0 0 1px var(--qa-accent-ring-soft) inset, 0 0 0 4px var(--qa-accent-shadow-soft)";
+      return;
+    }
+    if (isMeasureTopbarMode()) {
+      highlight.style.borderColor = CONFIG.colors.highlight;
+      highlight.style.background = "rgba(47,123,255,.08)";
+      highlight.style.boxShadow = "0 0 0 1px rgba(255,255,255,.35) inset";
       return;
     }
     highlight.style.borderColor = hasSelectedEl() ? CONFIG.colors.frozen : CONFIG.colors.highlight;
@@ -6813,6 +7389,7 @@
     updatePanelChrome();
     syncTopbar();
     var collapsed = state.panelCollapsed;
+    var measureSingleState = !collapsed && isMeasureTopbarMode() ? resolveMeasureSingleState(state.measureA) : null;
     if (collapsed) {
       tooltip.style.display = "none";
       topbar.style.display = "none";
@@ -6828,7 +7405,7 @@
       spacingLayer.style.display = "none";
       measureLayer.style.display = "none";
     } else {
-      tooltip.style.display = isRecordMode() || state.v12.drawerOpen ? "none" : "block";
+      tooltip.style.display = isRecordMode() || state.v12.drawerOpen || isMeasureTopbarMode() ? "none" : "block";
       topbar.style.display = "flex";
       highlight.style.display = shouldShowHoverHighlight() && getActiveEl() ? "block" : "none";
       spacingLayer.style.display = isRecordMode() ? "none" : "block";
@@ -6842,10 +7419,10 @@
     }
     renderDrawerStub();
     var el = getActiveEl();
-    state.primaryMeasure = collapsed ? null : isRecordMode() ? null : hasSelectedEl() ? resolvePrimaryMeasure(state.mouseX, state.mouseY, state.hoveredEl) : null;
+    state.primaryMeasure = collapsed || isRecordMode() || isMeasureTopbarMode() ? null : hasSelectedEl() ? resolvePrimaryMeasure(state.mouseX, state.mouseY, state.hoveredEl) : null;
     updateHighlight(el);
-    updateBox(selectA, !collapsed && !isRecordMode() && state.measureMode && !state.primaryMeasure ? state.measureA : null);
-    updateBox(selectB, !collapsed && !isRecordMode() ? getPrimaryHoverMeasureTarget() || (state.measureMode && !state.primaryMeasure ? state.measureB : null) : null);
+    updateBox(selectA, !collapsed && !isRecordMode() && isMeasureTopbarMode() ? state.measureA : null);
+    updateBox(selectB, !collapsed && !isRecordMode() ? (isMeasureTopbarMode() ? (measureSingleState ? measureSingleState.secondaryHighlightEl : null) : getPrimaryHoverMeasureTarget()) : null);
     if (!isEditingPanel()) renderTooltip(el);
     if (shouldShowSelectedPanel()) {
       positionSelectedPanel(getSelectedEl());
@@ -6853,10 +7430,13 @@
       positionHoverTooltip();
     }
     syncRecordComposerFocus();
-    addPrimaryMeasureGuides(state.primaryMeasure);
-    addAuxMeasureGuides();
+    if (isMeasureTopbarMode()) {
+      renderMeasureSingleGuides(measureSingleState);
+    } else {
+      addPrimaryMeasureGuides(state.primaryMeasure);
+    }
     btnMeasure.textContent = "辅助测距";
-    btnMeasure.style.background = state.measureMode ? "#FF8A00" : "#1F6BFF";
+    btnMeasure.style.background = isMeasureTopbarMode() ? "#FF8A00" : "#1F6BFF";
   }
 
   function schedule() {
@@ -7001,14 +7581,9 @@
       return;
     }
 
-    if (state.measureMode) {
+    if (isMeasureTopbarMode()) {
       if (!el) return;
-      state.measureA = getSelectedEl();
-      if (!state.measureB || state.measureB === el) {
-        state.measureB = el;
-      } else if (el !== state.measureA) {
-        state.measureB = el;
-      }
+      handleMeasureModeClick(el);
       schedule();
       e.preventDefault();
       e.stopPropagation();
@@ -7035,18 +7610,10 @@
   }
 
   function toggleMeasure() {
-    state.measureMode = !state.measureMode;
-    if (state.measureMode) {
-      if (!getSelectedEl()) {
-        setSelectedEl(state.hoveredEl || state.lastPageEl || state.frozenEl);
-      }
-      state.measureA = getSelectedEl();
-      state.measureB = null;
-    } else {
-      state.measureA = null;
-      state.measureB = null;
+    if (!isSelectMode()) {
+      setV12Mode("select");
     }
-    schedule();
+    setMeasureTopbarMode(!isMeasureTopbarMode());
   }
 
   function toggleFreeze() {
@@ -7074,9 +7641,7 @@
   }
 
   function clearMeasure() {
-    state.measureMode = false;
-    state.measureA = null;
-    state.measureB = null;
+    clearMeasureSelection({ keepTopbarMode: false });
     schedule();
   }
 
@@ -7121,6 +7686,13 @@
       e.preventDefault();
       e.stopImmediatePropagation();
       closeRecordPreview();
+      return;
+    }
+    if (isMeasureTopbarMode() && (key === CONFIG.hotkeys.exit || key === "esc") && (state.measureA || state.measureB)) {
+      e.__visualQAHandled = true;
+      clearMeasureSelection({ keepTopbarMode: true });
+      e.preventDefault();
+      e.stopImmediatePropagation();
       return;
     }
     if (key === CONFIG.hotkeys.exit || key === "esc") {
