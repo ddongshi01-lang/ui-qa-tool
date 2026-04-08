@@ -1588,6 +1588,16 @@
     }
     clearLayer(spacingLayer);
     clearLayer(measureLayer);
+    if (selectA) {
+      selectA.style.display = "none";
+      selectA.style.width = "0";
+      selectA.style.height = "0";
+    }
+    if (selectB) {
+      selectB.style.display = "none";
+      selectB.style.width = "0";
+      selectB.style.height = "0";
+    }
   }
 
   function setMeasureTopbarMode(enabled) {
@@ -1596,6 +1606,9 @@
       state.measureA = null;
       state.measureB = null;
       state.primaryMeasure = null;
+      clearLayer(spacingLayer);
+      clearLayer(measureLayer);
+      if (selectB) selectB.style.display = "none";
     } else {
       clearMeasureSelection({ keepTopbarMode: false });
     }
@@ -4988,7 +5001,11 @@
         kind: "pair",
         pairKind: "containment",
         measurement: getInnerElementMeasureData(measureA, measureB),
-        secondaryHighlightEl: measureB
+        secondaryHighlightEl: measureB,
+        containment: {
+          outerEl: measureA,
+          innerEl: measureB
+        }
       };
     }
 
@@ -4997,15 +5014,151 @@
         kind: "pair",
         pairKind: "containment",
         measurement: getInnerElementMeasureData(measureB, measureA),
-        secondaryHighlightEl: measureB
+        secondaryHighlightEl: measureB,
+        containment: {
+          outerEl: measureB,
+          innerEl: measureA
+        }
       };
+    }
+
+    var aRect = measureA.getBoundingClientRect();
+    var bRect = measureB.getBoundingClientRect();
+    var horizontalRelation = "overlap";
+    var verticalRelation = "overlap";
+    var startEdgeMidpoints = {
+      horizontal: null,
+      vertical: null
+    };
+    var targetGuideSide = {
+      horizontal: null,
+      vertical: null
+    };
+
+    if (aRect.right <= bRect.left) {
+      horizontalRelation = "a-before-b";
+      startEdgeMidpoints.horizontal = {
+        side: "right",
+        x: Math.round(aRect.right),
+        y: Math.round((aRect.top + aRect.bottom) / 2)
+      };
+      targetGuideSide.horizontal = "left";
+    } else if (bRect.right <= aRect.left) {
+      horizontalRelation = "a-after-b";
+      startEdgeMidpoints.horizontal = {
+        side: "left",
+        x: Math.round(aRect.left),
+        y: Math.round((aRect.top + aRect.bottom) / 2)
+      };
+      targetGuideSide.horizontal = "right";
+    }
+
+    if (aRect.bottom <= bRect.top) {
+      verticalRelation = "a-before-b";
+      startEdgeMidpoints.vertical = {
+        side: "bottom",
+        x: Math.round((aRect.left + aRect.right) / 2),
+        y: Math.round(aRect.bottom)
+      };
+      targetGuideSide.vertical = "top";
+    } else if (bRect.bottom <= aRect.top) {
+      verticalRelation = "a-after-b";
+      startEdgeMidpoints.vertical = {
+        side: "top",
+        x: Math.round((aRect.left + aRect.right) / 2),
+        y: Math.round(aRect.top)
+      };
+      targetGuideSide.vertical = "bottom";
+    }
+
+    var strictOrthogonalContainment = null;
+    var enhancedOrthogonalSegments = [];
+    var isHorizontalStrictContainment =
+      (aRect.left >= bRect.left && aRect.right <= bRect.right) ||
+      (bRect.left >= aRect.left && bRect.right <= aRect.right);
+    var isVerticalStrictContainment =
+      (aRect.top >= bRect.top && aRect.bottom <= bRect.bottom) ||
+      (bRect.top >= aRect.top && bRect.bottom <= aRect.bottom);
+
+    if (verticalRelation !== "overlap" && horizontalRelation === "overlap" && isHorizontalStrictContainment) {
+      strictOrthogonalContainment = {
+        axis: "horizontal",
+        relation: (aRect.left >= bRect.left && aRect.right <= bRect.right) ? "a-inside-b" : "b-inside-a"
+      };
+      enhancedOrthogonalSegments = [
+        {
+          axis: "horizontal",
+          side: "left",
+          value: Math.round(Math.abs(aRect.left - bRect.left)),
+          main: {
+            x1: Math.round(aRect.left),
+            y1: Math.round((aRect.top + aRect.bottom) / 2),
+            x2: Math.round(bRect.left),
+            y2: Math.round((aRect.top + aRect.bottom) / 2)
+          }
+        },
+        {
+          axis: "horizontal",
+          side: "right",
+          value: Math.round(Math.abs(bRect.right - aRect.right)),
+          main: {
+            x1: Math.round(aRect.right),
+            y1: Math.round((aRect.top + aRect.bottom) / 2),
+            x2: Math.round(bRect.right),
+            y2: Math.round((aRect.top + aRect.bottom) / 2)
+          }
+        }
+      ].filter(function (segment) {
+        return segment.value > 0;
+      });
+    } else if (horizontalRelation !== "overlap" && verticalRelation === "overlap" && isVerticalStrictContainment) {
+      strictOrthogonalContainment = {
+        axis: "vertical",
+        relation: (aRect.top >= bRect.top && aRect.bottom <= bRect.bottom) ? "a-inside-b" : "b-inside-a"
+      };
+      enhancedOrthogonalSegments = [
+        {
+          axis: "vertical",
+          side: "top",
+          value: Math.round(Math.abs(aRect.top - bRect.top)),
+          main: {
+            x1: Math.round((aRect.left + aRect.right) / 2),
+            y1: Math.round(aRect.top),
+            x2: Math.round((aRect.left + aRect.right) / 2),
+            y2: Math.round(bRect.top)
+          }
+        },
+        {
+          axis: "vertical",
+          side: "bottom",
+          value: Math.round(Math.abs(bRect.bottom - aRect.bottom)),
+          main: {
+            x1: Math.round((aRect.left + aRect.right) / 2),
+            y1: Math.round(aRect.bottom),
+            x2: Math.round((aRect.left + aRect.right) / 2),
+            y2: Math.round(bRect.bottom)
+          }
+        }
+      ].filter(function (segment) {
+        return segment.value > 0;
+      });
     }
 
     return {
       kind: "pair",
       pairKind: "edge-to-edge",
       measurement: getPairEdgeToEdgeMeasureData(measureA, measureB),
-      secondaryHighlightEl: measureB
+      secondaryHighlightEl: measureB,
+      horizontalRelation: horizontalRelation,
+      verticalRelation: verticalRelation,
+      overlapFlags: {
+        horizontal: horizontalRelation === "overlap",
+        vertical: verticalRelation === "overlap"
+      },
+      startEdgeMidpoints: startEdgeMidpoints,
+      targetGuideSide: targetGuideSide,
+      strictOrthogonalContainment: strictOrthogonalContainment,
+      enhancedOrthogonalSegments: enhancedOrthogonalSegments
     };
   }
 
@@ -5067,6 +5220,310 @@
     }
 
     layer.appendChild(line);
+  }
+
+  function getPairMeasureLabelSize(text) {
+    var width = Math.max(60, Math.min(96, Math.round(String(text).length * 8 + 18)));
+    return {
+      width: width,
+      height: 24
+    };
+  }
+
+  function getPairMeasureLabelRect(x, y, text) {
+    var size = getPairMeasureLabelSize(text);
+    return {
+      left: x - size.width / 2,
+      top: y - size.height / 2,
+      right: x + size.width / 2,
+      bottom: y + size.height / 2,
+      width: size.width,
+      height: size.height
+    };
+  }
+
+  function addPairMeasureLabelAt(layer, x, y, text) {
+    var size = getPairMeasureLabelSize(text);
+    addMeasureLabel(layer, x, y, text, {
+      background: "rgba(17,24,39,.96)",
+      borderColor: "rgba(139,92,246,.38)",
+      color: "#F8FAFC",
+      width: size.width,
+      height: size.height
+    });
+  }
+
+  function resolveSeparatedPairAxisSegments(pairState, axis) {
+    if (!pairState || !pairState.measurement || pairState.pairKind !== "edge-to-edge") return null;
+    var measurement = pairState.measurement;
+    var aRect = measurement.selectedEl && measurement.selectedEl.getBoundingClientRect ? measurement.selectedEl.getBoundingClientRect() : null;
+    var bRect = measurement.targetEl && measurement.targetEl.getBoundingClientRect ? measurement.targetEl.getBoundingClientRect() : null;
+    if (!aRect || !bRect) return null;
+    var distances = measurement.distances || {};
+
+    if (axis === "horizontal") {
+      var startH = pairState.startEdgeMidpoints && pairState.startEdgeMidpoints.horizontal;
+      var sideH = pairState.targetGuideSide && pairState.targetGuideSide.horizontal;
+      var valueH = sideH === "left" ? distances.right : sideH === "right" ? distances.left : null;
+      if (!startH || !sideH || valueH == null) return null;
+      return {
+        axis: "horizontal",
+        value: valueH,
+        main: {
+          x1: startH.x,
+          y1: startH.y,
+          x2: sideH === "left" ? Math.round(bRect.left) : Math.round(bRect.right),
+          y2: startH.y
+        }
+      };
+    }
+
+    var startV = pairState.startEdgeMidpoints && pairState.startEdgeMidpoints.vertical;
+    var sideV = pairState.targetGuideSide && pairState.targetGuideSide.vertical;
+    var valueV = sideV === "top" ? distances.bottom : sideV === "bottom" ? distances.top : null;
+    if (!startV || !sideV || valueV == null) return null;
+    return {
+      axis: "vertical",
+      value: valueV,
+      main: {
+        x1: startV.x,
+        y1: startV.y,
+        x2: startV.x,
+        y2: sideV === "top" ? Math.round(bRect.top) : Math.round(bRect.bottom)
+      }
+    };
+  }
+
+  function resolveSeparatedPairEnhancedSegments(pairState) {
+    if (!pairState || pairState.pairKind !== "edge-to-edge") return [];
+    var segments = pairState.enhancedOrthogonalSegments || [];
+    return segments.filter(function (segment) {
+      return !!(segment && segment.main && segment.value > 0);
+    }).slice(0, 2);
+  }
+
+  function resolveSeparatedPairLabelPlacement(segment, occupiedRects) {
+    if (!segment || !segment.main) return null;
+    var text = segment.value + "px";
+    var main = segment.main;
+    var centerX = Math.round((main.x1 + main.x2) / 2);
+    var centerY = Math.round((main.y1 + main.y2) / 2);
+    var length = segment.axis === "horizontal" ? Math.abs(main.x2 - main.x1) : Math.abs(main.y2 - main.y1);
+    var candidates = [];
+
+    if (segment.axis === "horizontal") {
+      candidates.push({ x: centerX, y: centerY - 18 });
+      candidates.push({ x: centerX, y: centerY + 18 });
+      if (length < 72) {
+        candidates.push({ x: Math.min(main.x1, main.x2) - 34, y: centerY - 18 });
+        candidates.push({ x: Math.max(main.x1, main.x2) + 34, y: centerY - 18 });
+        candidates.push({ x: Math.min(main.x1, main.x2) - 34, y: centerY + 18 });
+        candidates.push({ x: Math.max(main.x1, main.x2) + 34, y: centerY + 18 });
+      }
+    } else {
+      candidates.push({ x: centerX + 18, y: centerY });
+      candidates.push({ x: centerX - 18, y: centerY });
+      candidates.push({ x: centerX + 30, y: centerY });
+      candidates.push({ x: centerX - 30, y: centerY });
+      if (length < 72) {
+        candidates.push({ x: centerX + 18, y: Math.min(main.y1, main.y2) - 20 });
+        candidates.push({ x: centerX - 18, y: Math.min(main.y1, main.y2) - 20 });
+        candidates.push({ x: centerX + 18, y: Math.max(main.y1, main.y2) + 20 });
+        candidates.push({ x: centerX - 18, y: Math.max(main.y1, main.y2) + 20 });
+      }
+    }
+
+    for (var i = 0; i < candidates.length; i++) {
+      var rect = getPairMeasureLabelRect(candidates[i].x, candidates[i].y, text);
+      var collides = (occupiedRects || []).some(function (occupied) {
+        return rectsOverlap(rect, occupied);
+      });
+      if (!collides) {
+        return {
+          x: candidates[i].x,
+          y: candidates[i].y,
+          text: text,
+          rect: rect
+        };
+      }
+    }
+
+    var fallback = candidates[0];
+    return {
+      x: fallback.x,
+      y: fallback.y,
+      text: text,
+      rect: getPairMeasureLabelRect(fallback.x, fallback.y, text)
+    };
+  }
+
+  function renderSeparatedPairMeasurementGuides(layer, pairState) {
+    if (!pairState || pairState.pairKind !== "edge-to-edge") return;
+    var occupiedLabelRects = [];
+    var horizontalSegment = resolveSeparatedPairAxisSegments(pairState, "horizontal");
+    var verticalSegment = resolveSeparatedPairAxisSegments(pairState, "vertical");
+    var enhancedSegments = resolveSeparatedPairEnhancedSegments(pairState);
+
+    if (horizontalSegment && horizontalSegment.main) {
+      addPairMeasureSolidLine(layer, horizontalSegment.main.x1, horizontalSegment.main.y1, horizontalSegment.main.x2, horizontalSegment.main.y2);
+      var horizontalLabel = resolveSeparatedPairLabelPlacement(horizontalSegment, occupiedLabelRects);
+      if (horizontalLabel) {
+        addPairMeasureLabelAt(layer, horizontalLabel.x, horizontalLabel.y, horizontalLabel.text);
+        occupiedLabelRects.push(horizontalLabel.rect);
+      }
+    }
+
+    if (verticalSegment && verticalSegment.main) {
+      addPairMeasureSolidLine(layer, verticalSegment.main.x1, verticalSegment.main.y1, verticalSegment.main.x2, verticalSegment.main.y2);
+      var verticalLabel = resolveSeparatedPairLabelPlacement(verticalSegment, occupiedLabelRects);
+      if (verticalLabel) {
+        addPairMeasureLabelAt(layer, verticalLabel.x, verticalLabel.y, verticalLabel.text);
+        occupiedLabelRects.push(verticalLabel.rect);
+      }
+    }
+
+    enhancedSegments.forEach(function (segment) {
+      addPairMeasureSolidLine(layer, segment.main.x1, segment.main.y1, segment.main.x2, segment.main.y2);
+      var enhancedLabel = resolveSeparatedPairLabelPlacement(segment, occupiedLabelRects);
+      if (enhancedLabel) {
+        addPairMeasureLabelAt(layer, enhancedLabel.x, enhancedLabel.y, enhancedLabel.text);
+        occupiedLabelRects.push(enhancedLabel.rect);
+      }
+    });
+  }
+
+  function resolveContainmentPairSegments(pairState) {
+    if (!pairState || pairState.pairKind !== "containment" || !pairState.measurement || !pairState.containment) return [];
+    var outerEl = pairState.containment.outerEl;
+    var innerEl = pairState.containment.innerEl;
+    if (!outerEl || !innerEl) return [];
+    var outerRect = outerEl.getBoundingClientRect();
+    var innerRect = innerEl.getBoundingClientRect();
+    var distances = pairState.measurement.distances || {};
+    var segments = [];
+
+    if (distances.left != null) {
+      segments.push({
+        side: "left",
+        value: distances.left,
+        main: {
+          x1: Math.round(innerRect.left),
+          y1: Math.round((innerRect.top + innerRect.bottom) / 2),
+          x2: Math.round(outerRect.left),
+          y2: Math.round((innerRect.top + innerRect.bottom) / 2)
+        }
+      });
+    }
+    if (distances.right != null) {
+      segments.push({
+        side: "right",
+        value: distances.right,
+        main: {
+          x1: Math.round(innerRect.right),
+          y1: Math.round((innerRect.top + innerRect.bottom) / 2),
+          x2: Math.round(outerRect.right),
+          y2: Math.round((innerRect.top + innerRect.bottom) / 2)
+        }
+      });
+    }
+    if (distances.top != null) {
+      segments.push({
+        side: "top",
+        value: distances.top,
+        main: {
+          x1: Math.round((innerRect.left + innerRect.right) / 2),
+          y1: Math.round(innerRect.top),
+          x2: Math.round((innerRect.left + innerRect.right) / 2),
+          y2: Math.round(outerRect.top)
+        }
+      });
+    }
+    if (distances.bottom != null) {
+      segments.push({
+        side: "bottom",
+        value: distances.bottom,
+        main: {
+          x1: Math.round((innerRect.left + innerRect.right) / 2),
+          y1: Math.round(innerRect.bottom),
+          x2: Math.round((innerRect.left + innerRect.right) / 2),
+          y2: Math.round(outerRect.bottom)
+        }
+      });
+    }
+
+    return segments;
+  }
+
+  function resolveContainmentLabelPlacement(segment, occupiedRects) {
+    if (!segment || !segment.main) return null;
+    var text = segment.value + "px";
+    var centerX = Math.round((segment.main.x1 + segment.main.x2) / 2);
+    var centerY = Math.round((segment.main.y1 + segment.main.y2) / 2);
+    var length = segment.side === "left" || segment.side === "right"
+      ? Math.abs(segment.main.x2 - segment.main.x1)
+      : Math.abs(segment.main.y2 - segment.main.y1);
+    var candidates = [];
+
+    if (segment.side === "left") {
+      candidates.push({ x: centerX, y: centerY - 18 });
+      candidates.push({ x: centerX, y: centerY + 18 });
+    } else if (segment.side === "right") {
+      candidates.push({ x: centerX, y: centerY - 18 });
+      candidates.push({ x: centerX, y: centerY + 18 });
+    } else if (segment.side === "top") {
+      candidates.push({ x: centerX + 18, y: centerY });
+      candidates.push({ x: centerX - 18, y: centerY });
+    } else if (segment.side === "bottom") {
+      candidates.push({ x: centerX + 18, y: centerY });
+      candidates.push({ x: centerX - 18, y: centerY });
+    }
+
+    if (length < 72) {
+      if (segment.side === "left" || segment.side === "right") {
+        candidates.push({ x: Math.min(segment.main.x1, segment.main.x2) - 34, y: centerY });
+        candidates.push({ x: Math.max(segment.main.x1, segment.main.x2) + 34, y: centerY });
+      } else {
+        candidates.push({ x: centerX, y: Math.min(segment.main.y1, segment.main.y2) - 20 });
+        candidates.push({ x: centerX, y: Math.max(segment.main.y1, segment.main.y2) + 20 });
+      }
+    }
+
+    for (var i = 0; i < candidates.length; i++) {
+      var rect = getPairMeasureLabelRect(candidates[i].x, candidates[i].y, text);
+      var collides = (occupiedRects || []).some(function (occupied) {
+        return rectsOverlap(rect, occupied);
+      });
+      if (!collides) {
+        return {
+          x: candidates[i].x,
+          y: candidates[i].y,
+          text: text,
+          rect: rect
+        };
+      }
+    }
+
+    var fallback = candidates[0] || { x: centerX, y: centerY };
+    return {
+      x: fallback.x,
+      y: fallback.y,
+      text: text,
+      rect: getPairMeasureLabelRect(fallback.x, fallback.y, text)
+    };
+  }
+
+  function renderContainmentPairMeasurementGuides(layer, pairState) {
+    if (!pairState || pairState.pairKind !== "containment") return;
+    var occupiedLabelRects = [];
+    var segments = resolveContainmentPairSegments(pairState);
+    segments.forEach(function (segment) {
+      addPairMeasureSolidLine(layer, segment.main.x1, segment.main.y1, segment.main.x2, segment.main.y2);
+      var label = resolveContainmentLabelPlacement(segment, occupiedLabelRects);
+      if (label) {
+        addPairMeasureLabelAt(layer, label.x, label.y, label.text);
+        occupiedLabelRects.push(label.rect);
+      }
+    });
   }
 
   function getPairCrossAxisMid(a, b, axis) {
@@ -7753,6 +8210,39 @@
     layer.appendChild(box);
   }
 
+  function addMeasureReferenceGuideLine(layer, axis, position, color) {
+    if (!layer) return;
+    var line = document.createElement("div");
+    line.style.position = "fixed";
+    line.style.pointerEvents = "none";
+    line.style.boxSizing = "border-box";
+    line.style.opacity = "0.82";
+    if (axis === "x") {
+      line.style.left = Math.max(0, Math.round(position) - 1) + "px";
+      line.style.top = "0";
+      line.style.width = "0";
+      line.style.height = Math.max(window.innerHeight || 0, 0) + "px";
+      line.style.borderLeft = "2px dashed " + color;
+    } else {
+      line.style.left = "0";
+      line.style.top = Math.max(0, Math.round(position) - 1) + "px";
+      line.style.width = Math.max(window.innerWidth || 0, 0) + "px";
+      line.style.height = "0";
+      line.style.borderTop = "2px dashed " + color;
+    }
+    layer.appendChild(line);
+  }
+
+  function renderMeasureHoverTargetReferenceGuides(layer, targetEl) {
+    if (!layer || !targetEl) return;
+    var rect = targetEl.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || rect.height <= 0) return;
+    addMeasureReferenceGuideLine(layer, "x", rect.left, CONFIG.colors.measurePair);
+    addMeasureReferenceGuideLine(layer, "x", rect.right, CONFIG.colors.measurePair);
+    addMeasureReferenceGuideLine(layer, "y", rect.top, CONFIG.colors.measurePair);
+    addMeasureReferenceGuideLine(layer, "y", rect.bottom, CONFIG.colors.measurePair);
+  }
+
   function updateBox(box, el) {
     if (!el) {
       box.style.display = "none";
@@ -7936,7 +8426,19 @@
 
   function renderMeasurePairGuides(pairState) {
     clearLayer(measureLayer);
-    if (!pairState || !pairState.measurement) return;
+    if (!pairState) return;
+    if (pairState.secondaryHighlightEl) {
+      renderMeasureHoverTargetReferenceGuides(measureLayer, pairState.secondaryHighlightEl);
+    }
+    if (pairState.pairKind === "edge-to-edge") {
+      renderSeparatedPairMeasurementGuides(measureLayer, pairState);
+      return;
+    }
+    if (pairState.pairKind === "containment") {
+      renderContainmentPairMeasurementGuides(measureLayer, pairState);
+      return;
+    }
+    if (!pairState.measurement) return;
     renderPairMeasurementGuides(measureLayer, pairState.measurement);
   }
 
@@ -8334,7 +8836,7 @@
     state.primaryMeasure = collapsed || isRecordMode() || isMeasureTopbarMode() ? null : hasSelectedEl() ? resolvePrimaryMeasure(state.mouseX, state.mouseY, state.hoveredEl) : null;
     updateHighlight(el);
     updateBox(selectA, !collapsed && !isRecordMode() && isMeasureTopbarMode() ? state.measureA : null);
-    updateBox(selectB, !collapsed && !isRecordMode() ? (isMeasureTopbarMode() ? (measurePairState ? measurePairState.secondaryHighlightEl : null) : getPrimaryHoverMeasureTarget()) : null);
+    updateBox(selectB, !collapsed && !isRecordMode() ? (isMeasureTopbarMode() ? state.measureB : getPrimaryHoverMeasureTarget()) : null);
     if (isMeasureTopbarMode()) {
       if (measurePairState) {
         selectB.style.border = "1px dashed " + CONFIG.colors.measurePair;
@@ -8358,7 +8860,7 @@
       if (measurePairState) {
         renderMeasurePairGuides(measurePairState);
       } else {
-        renderMeasureSingleHoverGuides(measureSingleState);
+        clearLayer(measureLayer);
       }
     } else {
       addPrimaryMeasureGuides(state.primaryMeasure);
