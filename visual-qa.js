@@ -1522,19 +1522,19 @@
   }
 
   function isRecordMode() {
-    return state.v12.mode === "record";
+    return state.v12.mode === "record-element" || state.v12.mode === "record-region";
   }
 
   function isRecordElementMode() {
-    return isRecordMode() && state.v12.recordSubMode === "element";
+    return state.v12.mode === "record-element";
   }
 
   function isRecordRegionMode() {
-    return isRecordMode() && state.v12.recordSubMode === "region";
+    return state.v12.mode === "record-region";
   }
 
   function getRecordSubModeLabel() {
-    return formatRecordSubModeLabel(state.v12.recordSubMode);
+    return isRecordRegionMode() ? "区域" : "元素";
   }
 
   function getRecordTargetEl() {
@@ -1562,17 +1562,16 @@
   }
 
   function setV12Mode(mode) {
-    if (mode !== "select" && mode !== "record") return;
-    if (mode === "record") {
+    if (mode !== "select" && mode !== "record-element" && mode !== "record-region") return;
+    if (mode !== "select") {
       clearMeasureSelection({ keepTopbarMode: false });
     }
-    if (mode !== "record") {
+    if (mode === "select") {
       if (state.v12.pendingRecord) discardPendingShotCapture(state.v12.pendingRecord.id);
       state.v12.mode = mode;
       cleanupRecordInteractionState();
     } else {
       state.v12.mode = mode;
-      state.v12.drawerOpen = false;
       cleanupRecordInteractionState({ keepPendingRecord: true });
     }
     schedule();
@@ -1631,8 +1630,7 @@
   }
 
   function toggleRecordMenu() {
-    state.v12.recordMenuOpen = !state.v12.recordMenuOpen;
-    schedule();
+    state.v12.recordMenuOpen = false;
   }
 
   function enterRecordModeWithSubMode(subMode) {
@@ -1640,33 +1638,27 @@
       showV12Notice("请先保存或取消当前记录");
       return;
     }
-    setRecordSubModePreference(subMode);
+    var nextMode = getRecordSubModeValue(subMode) === "region" ? "record-region" : "record-element";
     state.v12.recordMenuOpen = false;
     state.v12.categoryMenuOpen = false;
-    state.v12.drawerOpen = false;
     cleanupRecordInteractionState();
-    setV12Mode("record");
+    setV12Mode(nextMode);
   }
 
-  function handleRecordMainAction() {
+  function handleRecordElementAction() {
     if (state.v12.pendingRecord) {
       showV12Notice("请先保存或取消当前记录");
       return;
     }
-    var preferred = getRememberedRecordSubMode();
-    if (!preferred) {
-      toggleRecordMenu();
-      return;
-    }
-    enterRecordModeWithSubMode(preferred);
+    enterRecordModeWithSubMode("element");
   }
 
-  function handleRecordArrowAction() {
+  function handleRecordRegionAction() {
     if (state.v12.pendingRecord) {
       showV12Notice("请先保存或取消当前记录");
       return;
     }
-    toggleRecordMenu();
+    enterRecordModeWithSubMode("region");
   }
 
   function toggleV12Drawer() {
@@ -6836,13 +6828,10 @@
   var topbarDom = {
     ready: false,
     selectBtn: null,
-    recordSplit: null,
-    recordMainBtn: null,
-    recordMainBadge: null,
-    recordArrowBtn: null,
     measureBtn: null,
+    recordElementBtn: null,
+    recordRegionBtn: null,
     drawerBtn: null,
-    drawerBadge: null
   };
 
   function modeButtonHtml(id, labelText, active, badgeText, extraClass) {
@@ -6883,18 +6872,11 @@
       ".v12-topbar-label{pointer-events:none;}" +
       ".v12-topbar-btn > span{pointer-events:none;}" +
       ".v12-topbar-badge{pointer-events:none;min-width:20px;height:20px;padding:0 6px;border-radius:999px;background:rgba(255,255,255,.1);color:rgba(255,255,255,.9);display:inline-flex;align-items:center;justify-content:center;font-size:11px;line-height:1;}" +
-      ".v12-record-split{display:inline-flex;align-items:stretch;overflow:hidden;border-radius:999px;border:1px solid rgba(255,255,255,.10);background:transparent;box-shadow:none;}" +
-      ".v12-record-split[data-active=\"true\"]{border-color:#ffffff;background:#ffffff;box-shadow:0 0 0 1px rgba(255,255,255,.08) inset;}" +
-      ".v12-record-main{border-radius:999px 0 0 999px;gap:8px;padding:10px 14px 10px 14px;}" +
-      ".v12-record-arrow{width:36px;min-width:36px;justify-content:center;padding:0;border-radius:0;border-left:1px solid rgba(255,255,255,.08);background:transparent;color:rgba(255,255,255,.78);font:12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;}" +
-      ".v12-record-arrow:hover{background:rgba(255,255,255,.075);}" +
-      ".v12-record-arrow:active,.v12-record-arrow[data-pressed=\"true\"]{background:rgba(255,255,255,.14);transform:translateY(1px);}" +
-      ".v12-record-split[data-active=\"true\"] .v12-record-main{background:#ffffff;color:#111827;font-weight:700;}" +
-      ".v12-record-split[data-active=\"true\"] .v12-record-arrow{background:rgba(17,24,39,.05);border-left-color:rgba(17,24,39,.12);color:#111827;}" +
-      ".v12-record-split[data-active=\"true\"] .v12-record-main:hover{background:#ffffff;}" +
-      ".v12-record-split[data-active=\"true\"] .v12-record-arrow:hover{background:rgba(17,24,39,.08);}" +
-      ".v12-record-split[data-active=\"true\"] .v12-record-main:active,.v12-record-split[data-active=\"true\"] .v12-record-main[data-pressed=\"true\"]{background:#f3f4f6;transform:translateY(1px);}" +
-      ".v12-record-split[data-active=\"true\"] .v12-record-arrow:active,.v12-record-split[data-active=\"true\"] .v12-record-arrow[data-pressed=\"true\"]{background:rgba(17,24,39,.1);transform:translateY(1px);}";
+      ".v12-topbar-btn.v12-drawer-entry{min-width:40px;justify-content:center;padding:10px 12px;font-variant-numeric:tabular-nums;}" +
+      ".v12-topbar-btn.v12-drawer-entry .v12-topbar-label{min-width:1ch;text-align:center;}" +
+      ".v12-topbar-btn.v12-drawer-entry[data-active=\"true\"]{background:#ffffff;color:#111827;font-weight:700;}" +
+      ".v12-topbar-btn.v12-drawer-entry[data-active=\"true\"]:hover{background:#ffffff;}" +
+      ".v12-topbar-btn.v12-drawer-entry[data-active=\"true\"]:active,.v12-topbar-btn.v12-drawer-entry[data-active=\"true\"][data-pressed=\"true\"]{background:#f3f4f6;transform:translateY(1px);}";
     document.head.appendChild(style);
   }
 
@@ -7031,34 +7013,21 @@
     if (topbarDom.ready) return;
     topbar.innerHTML =
       modeButtonHtml("mode-select", "选择", isSelectMode(), null) +
-      '<div class="v12-record-split" data-active="' +
-      (isRecordMode() ? "true" : "false") +
-      '">' +
-      '<button type="button" class="v12-topbar-btn v12-record-main" data-v12-action="record-main" data-active="' +
-      (isRecordMode() ? "true" : "false") +
-      '" data-pressed="' +
-      (state.v12.topbarPressedAction === "record-main" ? "true" : "false") +
-      '"><span class="v12-topbar-label">记录</span><span class="v12-topbar-badge"></span></button>' +
-      '<button type="button" class="v12-topbar-btn v12-record-arrow" data-v12-action="record-menu-toggle" aria-label="打开记录模式菜单" data-active="' +
-      (isRecordMode() ? "true" : "false") +
-      '" data-pressed="' +
-      (state.v12.topbarPressedAction === "record-menu-toggle" ? "true" : "false") +
-      '"><span class="v12-topbar-label">▾</span></button>' +
-      "</div>" +
       modeButtonHtml("mode-measure", "测量", false, null) +
-      '<button type="button" class="v12-topbar-btn" data-v12-action="toggle-drawer" data-active="' +
+      modeButtonHtml("record-element", "记录元素", isRecordElementMode(), null) +
+      modeButtonHtml("record-region", "记录区域", isRecordRegionMode(), null) +
+      '<button type="button" class="v12-topbar-btn v12-drawer-entry" data-v12-action="toggle-drawer" data-active="' +
       (state.v12.drawerOpen ? "true" : "false") +
       '" data-pressed="' +
       (state.v12.topbarPressedAction === "toggle-drawer" ? "true" : "false") +
-      '"><span class="v12-topbar-label">记录列表</span><span class="v12-topbar-badge"></span></button>';
+      '"><span class="v12-topbar-label">' +
+      esc(String(getV12RecordCount())) +
+      "</span></button>";
     topbarDom.selectBtn = topbar.querySelector('[data-v12-action="mode-select"]');
-    topbarDom.recordSplit = topbar.querySelector(".v12-record-split");
-    topbarDom.recordMainBtn = topbar.querySelector('[data-v12-action="record-main"]');
-    topbarDom.recordMainBadge = topbarDom.recordMainBtn ? topbarDom.recordMainBtn.querySelector(".v12-topbar-badge") : null;
-    topbarDom.recordArrowBtn = topbar.querySelector('[data-v12-action="record-menu-toggle"]');
     topbarDom.measureBtn = topbar.querySelector('[data-v12-action="mode-measure"]');
+    topbarDom.recordElementBtn = topbar.querySelector('[data-v12-action="record-element"]');
+    topbarDom.recordRegionBtn = topbar.querySelector('[data-v12-action="record-region"]');
     topbarDom.drawerBtn = topbar.querySelector('[data-v12-action="toggle-drawer"]');
-    topbarDom.drawerBadge = topbarDom.drawerBtn ? topbarDom.drawerBtn.querySelector(".v12-topbar-badge") : null;
     topbarDom.ready = true;
   }
 
@@ -7071,22 +7040,13 @@
   function syncTopbar() {
     ensureTopbarDom();
     syncTopbarButton(topbarDom.selectBtn, isPlainSelectMode(), state.v12.topbarPressedAction === "mode-select");
-    if (topbarDom.recordSplit) {
-      topbarDom.recordSplit.setAttribute("data-active", isRecordMode() ? "true" : "false");
-    }
-    syncTopbarButton(topbarDom.recordMainBtn, isRecordMode(), state.v12.topbarPressedAction === "record-main");
-    syncTopbarButton(topbarDom.recordArrowBtn, isRecordMode(), state.v12.topbarPressedAction === "record-menu-toggle");
     syncTopbarButton(topbarDom.measureBtn, isMeasureTopbarMode(), state.v12.topbarPressedAction === "mode-measure");
+    syncTopbarButton(topbarDom.recordElementBtn, isRecordElementMode(), state.v12.topbarPressedAction === "record-element");
+    syncTopbarButton(topbarDom.recordRegionBtn, isRecordRegionMode(), state.v12.topbarPressedAction === "record-region");
     syncTopbarButton(topbarDom.drawerBtn, state.v12.drawerOpen, state.v12.topbarPressedAction === "toggle-drawer");
-    if (topbarDom.recordMainBadge) {
-      var recordLabel = getRememberedRecordSubMode() ? formatRecordSubModeLabel(getRememberedRecordSubMode()) : "";
-      topbarDom.recordMainBadge.textContent = recordLabel;
-      topbarDom.recordMainBadge.style.display = recordLabel ? "inline-flex" : "none";
-    }
-    if (topbarDom.drawerBadge) {
-      var recordCount = getV12RecordCount();
-      topbarDom.drawerBadge.textContent = recordCount ? String(recordCount) : "";
-      topbarDom.drawerBadge.style.display = recordCount ? "inline-flex" : "none";
+    if (topbarDom.drawerBtn) {
+      var drawerLabel = topbarDom.drawerBtn.querySelector(".v12-topbar-label");
+      if (drawerLabel) drawerLabel.textContent = String(getV12RecordCount());
     }
   }
 
@@ -7127,16 +7087,7 @@
   }
 
   function renderRecordMenu() {
-    if (!state.v12.recordMenuOpen) {
-      recordMenu.style.display = "none";
-      return;
-    }
-
-    recordMenu.style.display = "block";
-    ensureRecordMenuDom();
-    var selectedSubMode = getPreferredRecordSubMode();
-    syncRecordMenuButton(recordMenuDom.elementBtn, recordMenuDom.elementCheck, selectedSubMode === "element");
-    syncRecordMenuButton(recordMenuDom.regionBtn, recordMenuDom.regionCheck, selectedSubMode === "region");
+    recordMenu.style.display = "none";
   }
 
   function renderDrawerStub() {
@@ -7751,9 +7702,9 @@
   function isTopbarAction(action) {
     return (
       action === "mode-select" ||
-      action === "record-main" ||
-      action === "record-menu-toggle" ||
       action === "mode-measure" ||
+      action === "record-element" ||
+      action === "record-region" ||
       action === "toggle-drawer"
     );
   }
@@ -7777,16 +7728,17 @@
     if (action === "mode-select") {
       setV12Mode("select");
       clearMeasureSelection({ keepTopbarMode: false });
-    } else if (action === "mode-record" || action === "record-main") {
-      clearMeasureSelection({ keepTopbarMode: false });
-      handleRecordMainAction();
-    } else if (action === "record-menu-toggle") {
-      handleRecordArrowAction();
     } else if (action === "mode-measure") {
       if (!isSelectMode()) {
         setV12Mode("select");
       }
       setMeasureTopbarMode(!isMeasureTopbarMode());
+    } else if (action === "record-element") {
+      clearMeasureSelection({ keepTopbarMode: false });
+      handleRecordElementAction();
+    } else if (action === "record-region") {
+      clearMeasureSelection({ keepTopbarMode: false });
+      handleRecordRegionAction();
     } else if (action === "toggle-drawer") {
       toggleV12Drawer();
     }
@@ -8233,14 +8185,164 @@
     layer.appendChild(line);
   }
 
-  function renderMeasureHoverTargetReferenceGuides(layer, targetEl) {
-    if (!layer || !targetEl) return;
-    var rect = targetEl.getBoundingClientRect();
-    if (!rect || rect.width <= 0 || rect.height <= 0) return;
-    addMeasureReferenceGuideLine(layer, "x", rect.left, CONFIG.colors.measurePair);
-    addMeasureReferenceGuideLine(layer, "x", rect.right, CONFIG.colors.measurePair);
-    addMeasureReferenceGuideLine(layer, "y", rect.top, CONFIG.colors.measurePair);
-    addMeasureReferenceGuideLine(layer, "y", rect.bottom, CONFIG.colors.measurePair);
+  function addMeasureReferenceGuideSegment(layer, axis, position, start, end, color) {
+    if (!layer) return;
+    if (start == null || end == null) return;
+    var span = Math.abs(end - start);
+    if (span <= 0) return;
+    var line = document.createElement("div");
+    line.style.position = "fixed";
+    line.style.pointerEvents = "none";
+    line.style.boxSizing = "border-box";
+    line.style.opacity = "0.82";
+    line.style.background = "transparent";
+    if (axis === "x") {
+      line.style.left = Math.max(0, Math.round(position) - 1) + "px";
+      line.style.top = Math.min(start, end) + "px";
+      line.style.width = "0";
+      line.style.height = span + "px";
+      line.style.borderLeft = "2px dashed " + color;
+    } else {
+      line.style.left = Math.min(start, end) + "px";
+      line.style.top = Math.max(0, Math.round(position) - 1) + "px";
+      line.style.width = span + "px";
+      line.style.height = "0";
+      line.style.borderTop = "2px dashed " + color;
+    }
+    layer.appendChild(line);
+  }
+
+  function resolveActiveBGuideSegments(pairState) {
+    if (!pairState || pairState.kind !== "pair") return [];
+    var guideSegments = [];
+    var aRect = null;
+    var bRect = null;
+    var overlapFlags = pairState.pairKind === "containment"
+      ? { horizontal: true, vertical: true }
+      : (pairState.overlapFlags || { horizontal: false, vertical: false });
+
+    if (pairState.pairKind === "edge-to-edge" && pairState.measurement && pairState.measurement.selectedEl && pairState.measurement.targetEl) {
+      aRect = pairState.measurement.selectedEl.getBoundingClientRect();
+      bRect = pairState.measurement.targetEl.getBoundingClientRect();
+    } else if (pairState.pairKind === "containment" && pairState.containment && pairState.containment.outerEl && pairState.containment.innerEl) {
+      aRect = pairState.containment.innerEl.getBoundingClientRect();
+      bRect = pairState.containment.outerEl.getBoundingClientRect();
+    } else {
+      return [];
+    }
+
+    if (!aRect || !bRect) return [];
+
+    function shouldKeepGuideSegment(guideFor, axis) {
+      if (guideFor === "primary-axis" || guideFor === "containment") return true;
+      if (guideFor === "enhancement-axis") {
+        if (axis === "x") return !overlapFlags.vertical;
+        return !overlapFlags.horizontal;
+      }
+      return true;
+    }
+
+    function pickEdgeAnchor(axis, contactCoord, rect) {
+      if (!rect) return contactCoord;
+      if (axis === "x") {
+        var topDist = Math.abs(contactCoord - rect.top);
+        var bottomDist = Math.abs(rect.bottom - contactCoord);
+        return topDist <= bottomDist ? rect.top : rect.bottom;
+      }
+      var leftDist = Math.abs(contactCoord - rect.left);
+      var rightDist = Math.abs(rect.right - contactCoord);
+      return leftDist <= rightDist ? rect.left : rect.right;
+    }
+
+    function pushSegment(axis, position, anchor, contact, side, guideFor) {
+      if (position == null || anchor == null || contact == null) return;
+      if (!shouldKeepGuideSegment(guideFor, axis)) return;
+      guideSegments.push({
+        axis: axis,
+        position: Math.round(position),
+        start: Math.round(Math.min(anchor, contact)),
+        end: Math.round(Math.max(anchor, contact)),
+        side: side || "",
+        guideFor: guideFor || "primary-axis"
+      });
+    }
+
+    if (pairState.pairKind === "edge-to-edge") {
+      var targetGuideSide = pairState.targetGuideSide || {};
+      var startEdgeMidpoints = pairState.startEdgeMidpoints || {};
+      var enhancedSegments = pairState.enhancedOrthogonalSegments || [];
+
+      if (pairState.measurement && pairState.measurement.distances) {
+        if (pairState.measurement.distances.right != null && targetGuideSide.horizontal === "left" && startEdgeMidpoints.horizontal) {
+          pushSegment("x", bRect.left, pickEdgeAnchor("x", startEdgeMidpoints.horizontal.y, bRect), startEdgeMidpoints.horizontal.y, "left", "primary-axis");
+        }
+        if (pairState.measurement.distances.left != null && targetGuideSide.horizontal === "right" && startEdgeMidpoints.horizontal) {
+          pushSegment("x", bRect.right, pickEdgeAnchor("x", startEdgeMidpoints.horizontal.y, bRect), startEdgeMidpoints.horizontal.y, "right", "primary-axis");
+        }
+        if (pairState.measurement.distances.bottom != null && targetGuideSide.vertical === "top" && startEdgeMidpoints.vertical) {
+          pushSegment("y", bRect.top, pickEdgeAnchor("y", startEdgeMidpoints.vertical.x, bRect), startEdgeMidpoints.vertical.x, "top", "primary-axis");
+        }
+        if (pairState.measurement.distances.top != null && targetGuideSide.vertical === "bottom" && startEdgeMidpoints.vertical) {
+          pushSegment("y", bRect.bottom, pickEdgeAnchor("y", startEdgeMidpoints.vertical.x, bRect), startEdgeMidpoints.vertical.x, "bottom", "primary-axis");
+        }
+      }
+
+      enhancedSegments.forEach(function (segment) {
+        if (!segment || !segment.main) return;
+        if (segment.axis === "horizontal") {
+          if (segment.side === "left") {
+            pushSegment("x", bRect.left, pickEdgeAnchor("x", segment.main.y1, bRect), segment.main.y1, "left", "enhancement-axis");
+          } else if (segment.side === "right") {
+            pushSegment("x", bRect.right, pickEdgeAnchor("x", segment.main.y1, bRect), segment.main.y1, "right", "enhancement-axis");
+          }
+        } else if (segment.axis === "vertical") {
+          if (segment.side === "top") {
+            pushSegment("y", bRect.top, pickEdgeAnchor("y", segment.main.x1, bRect), segment.main.x1, "top", "enhancement-axis");
+          } else if (segment.side === "bottom") {
+            pushSegment("y", bRect.bottom, pickEdgeAnchor("y", segment.main.x1, bRect), segment.main.x1, "bottom", "enhancement-axis");
+          }
+        }
+      });
+    } else if (pairState.pairKind === "containment") {
+      var outerRect = bRect;
+      var innerRect = aRect;
+      var distances = pairState.measurement && pairState.measurement.distances ? pairState.measurement.distances : {};
+      var innerMidX = Math.round((innerRect.left + innerRect.right) / 2);
+      var innerMidY = Math.round((innerRect.top + innerRect.bottom) / 2);
+
+      if (distances.left != null) pushSegment("x", outerRect.left, pickEdgeAnchor("x", innerMidY, outerRect), innerMidY, "left", "containment");
+      if (distances.right != null) pushSegment("x", outerRect.right, pickEdgeAnchor("x", innerMidY, outerRect), innerMidY, "right", "containment");
+      if (distances.top != null) pushSegment("y", outerRect.top, pickEdgeAnchor("y", innerMidX, outerRect), innerMidX, "top", "containment");
+      if (distances.bottom != null) pushSegment("y", outerRect.bottom, pickEdgeAnchor("y", innerMidX, outerRect), innerMidX, "bottom", "containment");
+    }
+
+    var merged = {};
+    guideSegments.forEach(function (segment) {
+      var key = segment.axis + ":" + segment.position;
+      if (!merged[key]) {
+        merged[key] = {
+          axis: segment.axis,
+          position: segment.position,
+          start: segment.start,
+          end: segment.end
+        };
+        return;
+      }
+      merged[key].start = Math.min(merged[key].start, segment.start, segment.end);
+      merged[key].end = Math.max(merged[key].start, merged[key].end, segment.start, segment.end);
+    });
+
+    return Object.keys(merged).map(function (key) {
+      return merged[key];
+    });
+  }
+
+  function renderMeasureHoverTargetReferenceGuides(layer, pairState) {
+    if (!layer || !pairState) return;
+    var segments = resolveActiveBGuideSegments(pairState);
+    segments.forEach(function (segment) {
+      addMeasureReferenceGuideSegment(layer, segment.axis, segment.position, segment.start, segment.end, CONFIG.colors.measurePair);
+    });
   }
 
   function updateBox(box, el) {
@@ -8283,6 +8385,12 @@
     if (!measureA || !hovered) return false;
     if (hovered === measureA) return true;
     return !!(measureA.contains && measureA.contains(hovered));
+  }
+
+  function isHitWithinMeasureA(measureA, el) {
+    if (!measureA || !el) return false;
+    if (el === measureA) return true;
+    return !!(measureA.contains && measureA.contains(el));
   }
 
   function renderMeasureStructureGapGuides(layer, siblingGaps) {
@@ -8392,11 +8500,13 @@
       contentRectPresent: !!(leafData && leafData.contentRect),
       bandsLen: leafData && leafData.bands && leafData.bands.length
     });
-    if (!leafData || !leafData.rect || (!isVisible && leafData.kind !== "box-leaf")) return;
+    if (!leafData || !leafData.rect) return;
     if (leafData.kind === "box-leaf") {
-      if (isVisible) renderMeasureBoxLeafHoverGuides(layer, leafData);
+      if (!isVisible || !leafData.contentRect) return;
+      renderMeasureBoxLeafHoverGuides(layer, leafData);
       return;
     }
+    if (!leafData.label) return;
     addHoverInfoLabel(layer, leafData.rect, leafData.label, {
       background: leafData.isTextLike ? "rgba(15,23,42,.92)" : "rgba(85,168,255,.94)",
       borderColor: leafData.isTextLike ? "rgba(255,255,255,.12)" : "rgba(255,255,255,.18)",
@@ -8415,21 +8525,59 @@
   }
 
   function renderMeasureSingleHoverGuides(measureState) {
+    console.log('[render single hover enter]', {
+      singleType: measureState && measureState.type,
+      singleKind: measureState && measureState.kind,
+      role: measureState && measureState.data && measureState.data.structureKind,
+      label: measureState && measureState.data && (measureState.data.label || measureState.data.contentLabel),
+      rect: measureState && measureState.data && (measureState.data.rect || measureState.data.containerRect)
+    });
     clearLayer(measureLayer);
-    if (!measureState || !measureState.data) return;
-    if (measureState.kind === "structure") {
-      renderMeasureStructureHoverGuides(measureLayer, measureState.data, isHoverWithinMeasureA(measureState.data && measureState.data.measureA));
+    if (!measureState || !measureState.data) {
+      console.log('[render single hover skipped]', {
+        reason: '!measureState || !measureState.data',
+        singleType: measureState && measureState.type,
+        rect: measureState && measureState.data && (measureState.data.rect || measureState.data.containerRect)
+      });
       return;
     }
-    renderMeasureLeafHoverGuides(measureLayer, measureState.data, !!measureState.hoveringSelf);
+    console.log('[single hover guides]', {
+      type: measureState && measureState.kind,
+      role: measureState && measureState.data && measureState.data.structureKind,
+      raw: measureState
+    });
+    var hoverWithinA = measureState.kind === "structure"
+      ? isHoverWithinMeasureA(measureState.data && measureState.data.measureA)
+      : true;
+    if (measureState.kind === "structure") {
+      renderMeasureStructureHoverGuides(measureLayer, measureState.data, hoverWithinA);
+      console.log('[render single hover mounted]', {
+        text: measureState.data && measureState.data.containerRect ? px(measureState.data.containerRect.width) + " × " + px(measureState.data.containerRect.height) : null,
+        left: measureState.data && measureState.data.containerRect && measureState.data.containerRect.left,
+        top: measureState.data && measureState.data.containerRect && measureState.data.containerRect.top,
+        width: measureState.data && measureState.data.containerRect && measureState.data.containerRect.width,
+        height: measureState.data && measureState.data.containerRect && measureState.data.containerRect.height
+      });
+      return;
+    }
+    renderMeasureLeafHoverGuides(measureLayer, measureState.data, hoverWithinA);
+    console.log('[render single hover mounted]', {
+      text: measureState.data && (measureState.data.label || measureState.data.contentLabel),
+      left: measureState.data && measureState.data.rect && measureState.data.rect.left,
+      top: measureState.data && measureState.data.rect && measureState.data.rect.top,
+      width: measureState.data && measureState.data.rect && measureState.data.rect.width,
+      height: measureState.data && measureState.data.rect && measureState.data.rect.height
+    });
   }
 
   function renderMeasurePairGuides(pairState) {
     clearLayer(measureLayer);
     if (!pairState) return;
-    if (pairState.secondaryHighlightEl) {
-      renderMeasureHoverTargetReferenceGuides(measureLayer, pairState.secondaryHighlightEl);
-    }
+    console.log('[pair guides]', {
+      kind: pairState && pairState.pairKind,
+      raw: pairState
+    });
+    renderMeasureHoverTargetReferenceGuides(measureLayer, pairState);
     if (pairState.pairKind === "edge-to-edge") {
       renderSeparatedPairMeasurementGuides(measureLayer, pairState);
       return;
@@ -8802,7 +8950,10 @@
     updatePanelChrome();
     syncTopbar();
     var collapsed = state.panelCollapsed;
-    var measureSingleState = !collapsed && isMeasureTopbarMode() && state.measureA ? resolveMeasureSingleState(state.measureA) : null;
+    var measureHoverEl = state.hoveredEl || null;
+    var measureSingleState = !collapsed && isMeasureTopbarMode()
+      ? (state.measureA ? resolveMeasureSingleState(state.measureA) : (measureHoverEl ? resolveMeasureSingleState(measureHoverEl) : null))
+      : null;
     var measurePairState = !collapsed && isMeasureTopbarMode() && state.measureA && state.measureB ? resolveMeasurePairState(state.measureA, state.measureB) : null;
     if (collapsed) {
       tooltip.style.display = "none";
@@ -8824,7 +8975,7 @@
       highlight.style.display = shouldShowHoverHighlight() && getActiveEl() ? "block" : "none";
       spacingLayer.style.display = isRecordMode() ? "none" : "block";
       measureLayer.style.display = isRecordMode() ? "none" : "block";
-      renderRecordMenu();
+      recordMenu.style.display = "none";
       renderRegionCaptureOverlay();
       renderRecordComposer();
       renderV12Notice();
@@ -8855,10 +9006,42 @@
       positionHoverTooltip();
     }
     syncRecordComposerFocus();
+    var measureHitWithinA = !!(measureSingleState && state.measureA && measureHoverEl && isHitWithinMeasureA(state.measureA, measureHoverEl));
+    var measureBranch = null;
     if (isMeasureTopbarMode()) {
-      renderMeasureSinglePersistentGuides(measureSingleState);
+      measureBranch = !state.measureA
+        ? (measureSingleState ? 'noA-hover' : 'neither')
+        : (measurePairState ? 'hitB' : (measureHitWithinA ? 'hitA' : 'neither'));
+      console.log('[measure refresh]', {
+        hasA: !!state.measureA,
+        hasB: !!state.measureB,
+        hitWithinA: state.measureA ? measureHitWithinA : null,
+        hoverEl: measureHoverEl,
+        branch: measureBranch
+      });
+    }
+    if (isMeasureTopbarMode()) {
+      renderMeasureSinglePersistentGuides(state.measureA ? measureSingleState : null);
       if (measurePairState) {
         renderMeasurePairGuides(measurePairState);
+      } else if (!state.measureA) {
+        if (measureSingleState) {
+          console.log('[noA hover branch]', {
+            elTag: measureHoverEl && measureHoverEl.tagName,
+            elClass: measureHoverEl && measureHoverEl.className
+          });
+          renderMeasureSingleHoverGuides(measureSingleState);
+        } else {
+          clearLayer(measureLayer);
+        }
+      } else if (measureHitWithinA) {
+        console.log('[hitA branch]', {
+          hasA: !!state.measureA,
+          hasB: !!state.measureB,
+          elTag: el && el.tagName,
+          elClass: el && el.className
+        });
+        renderMeasureSingleHoverGuides(measureSingleState);
       } else {
         clearLayer(measureLayer);
       }
@@ -8904,8 +9087,15 @@
 
     var el = fromPoint(e.clientX, e.clientY);
     setPageHover(el);
+    console.log('[measure move]', {
+      hitTag: el && el.tagName,
+      hitClass: el && el.className,
+      hasA: !!state.measureA,
+      hasB: !!state.measureB,
+      hitWithinA: state.measureA ? isHitWithinMeasureA(state.measureA, el) : null
+    });
     if (isMeasureTopbarMode()) {
-      if (state.measureA && el && el !== state.measureA) {
+      if (state.measureA && el && !isHitWithinMeasureA(state.measureA, el)) {
         state.measureB = el;
       } else {
         state.measureB = null;
@@ -9109,14 +9299,6 @@
       e.preventDefault();
       e.stopImmediatePropagation();
       clearDrawerClearConfirm();
-      return;
-    }
-    if (state.v12.recordMenuOpen && (key === CONFIG.hotkeys.exit || key === "esc")) {
-      e.__visualQAHandled = true;
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      closeRecordMenu();
-      schedule();
       return;
     }
     if (shouldSuppressGlobalHotkeys(e)) return;
