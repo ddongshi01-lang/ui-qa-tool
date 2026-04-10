@@ -121,7 +121,7 @@
     dragOffsetX: 0,
     dragOffsetY: 0,
     spacingSide: "top",
-    spacingExpanded: { padding: false, margin: false },
+    spacingExpanded: { padding: false, margin: false, radius: false },
     editingFieldId: null,
     draftInputs: {},
     skipNextBlurCommitFieldId: "",
@@ -1550,11 +1550,11 @@
   }
 
   function shouldShowSelectedPanel() {
-    return !isRecordMode() && !state.v12.drawerOpen && !isMeasureTopbarMode() && hasSelectedEl();
+    return !isRecordMode() && !state.v12.drawerOpen && isPlainSelectMode() && !!getSelectedPanelTarget();
   }
 
   function shouldShowHoverCard() {
-    return !isRecordMode() && !state.v12.drawerOpen && !isMeasureTopbarMode();
+    return !isRecordMode() && !state.v12.drawerOpen && !isMeasureTopbarMode() && !isPlainSelectMode();
   }
 
   function shouldShowHoverHighlight() {
@@ -3150,6 +3150,10 @@
     fontSize: true,
     lineHeight: true,
     borderRadius: true,
+    borderTopLeftRadius: true,
+    borderTopRightRadius: true,
+    borderBottomRightRadius: true,
+    borderBottomLeftRadius: true,
     paddingTop: true,
     paddingRight: true,
     paddingBottom: true,
@@ -3165,11 +3169,29 @@
     backgroundColor: true
   };
 
+  var FONT_FAMILY_PRESETS = [
+    "PingFang SC",
+    "Microsoft YaHei",
+    "Noto Sans SC",
+    "Source Han Sans SC",
+    "Helvetica Neue",
+    "Arial",
+    "Georgia",
+    "Times New Roman",
+    "monospace"
+  ];
+
+  var FONT_WEIGHT_OPTIONS = ["400", "500", "600", "700", "800", "900"];
+
   var scrubProps = {
     width: { min: 0, max: null },
     height: { min: 0, max: null },
     opacity: { min: 0, max: 100 },
     borderRadius: { min: 0, max: null },
+    borderTopLeftRadius: { min: 0, max: null },
+    borderTopRightRadius: { min: 0, max: null },
+    borderBottomRightRadius: { min: 0, max: null },
+    borderBottomLeftRadius: { min: 0, max: null },
     fontSize: { min: 1, max: null },
     lineHeight: { min: 1, max: null },
     paddingTop: { min: 0, max: null },
@@ -3198,10 +3220,58 @@
     return v;
   }
 
+  function parsePercentValue(v) {
+    var text = String(v == null ? "" : v).trim();
+    if (!text) return "";
+    var n = parseFloat(text.replace(/%/g, ""));
+    if (isNaN(n)) return "";
+    return clamp(Math.round(n), 0, 100);
+  }
+
   function formatOpacityPercent(v) {
     var n = parseFloat(v);
     if (isNaN(n)) n = 1;
     return String(Math.round(clamp(n, 0, 1) * 100));
+  }
+
+  function formatOpacityDisplay(v, fallbackPercent) {
+    var parsed = parseOpacityPercent(v);
+    if (parsed === "") parsed = fallbackPercent != null ? fallbackPercent : 100;
+    return formatOpacityPercent(parsed) + "%";
+  }
+
+  function getPercentInputProp(input) {
+    if (!input) return "";
+    var alphaProp = input.getAttribute("data-color-alpha-prop");
+    if (alphaProp) return alphaProp;
+    return input.getAttribute("data-prop") === "opacity" ? "opacity" : "";
+  }
+
+  function isPercentInput(input) {
+    return !!getPercentInputProp(input);
+  }
+
+  function getPercentInputValue(input) {
+    if (!input) return 100;
+    var raw = String(input.value == null ? "" : input.value).trim();
+    var parsed = parsePercentValue(raw);
+    if (parsed === "") return getPercentInputFallback(input);
+    return parsed;
+  }
+
+  function formatPercentInputValue(value) {
+    var parsed = parsePercentValue(value);
+    if (parsed === "") parsed = 100;
+    return String(clamp(parsed, 0, 100)) + "%";
+  }
+
+  function getPercentInputFallback(input) {
+    var prop = getPercentInputProp(input);
+    var el = getEditableTargetEl();
+    if (!prop || !el) return 100;
+    var style = getComputedStyle(el);
+    if (prop === "opacity") return parsePercentValue(formatOpacityPercent(style.opacity));
+    return getColorComponents(style[prop]).alpha;
   }
 
   function parseOpacityPercent(v) {
@@ -3223,6 +3293,10 @@
     return target.getAttribute("data-field-id") || target.getAttribute("data-prop") || target.getAttribute("data-box-summary") || "";
   }
 
+  function getNodeTagName(target) {
+    return target && target.tagName ? target.tagName.toLowerCase() : "";
+  }
+
   function isLengthProp(prop) {
     return !!unitProps[prop];
   }
@@ -3241,9 +3315,8 @@
 
   function getFieldNumericValue(prop, value) {
     if (prop === "opacity") {
-      var opacityText = formatOpacityPercent(value);
-      var opacityNumber = parseFloat(opacityText);
-      return isNaN(opacityNumber) ? 100 : opacityNumber;
+      var opacityValue = parsePercentValue(value);
+      return opacityValue === "" ? 100 : opacityValue;
     }
     var numeric = parseFloat(displayNumericValue(value));
     return isNaN(numeric) ? 0 : numeric;
@@ -3270,11 +3343,12 @@
   }
 
   function formatScrubDisplayValue(prop, value) {
+    if (prop === "opacity") return String(Math.round(clamp(value, 0, 100))) + "%";
     return String(Math.round(value));
   }
 
   function previewFieldValue(prop, rawValue) {
-    var el = getSelectedEl();
+    var el = getEditableTargetEl();
     if (!el) return;
     if (prop === "opacity") {
       var opacityValue = parseOpacityPercent(rawValue);
@@ -3284,8 +3358,223 @@
     el.style[prop] = normalizeValue(prop, rawValue);
   }
 
+  function previewPercentInputValue(input, value) {
+    var percentProp = getPercentInputProp(input);
+    if (!percentProp) return;
+    var percentValue = parsePercentValue(value);
+    if (percentValue === "") percentValue = getPercentInputValue(input);
+    if (input) input.value = String(percentValue) + "%";
+    if (percentProp === "opacity") {
+      applyStyle("opacity", String(clamp(percentValue / 100, 0, 1)));
+      return;
+    }
+    applyColorWithAlpha(percentProp, getColorDraftMeta(percentProp).hex, percentValue);
+  }
+
+  function stepPercentInputValue(input, direction, isBig) {
+    if (!input) return;
+    var percentProp = getPercentInputProp(input);
+    if (!percentProp) return;
+    var base = getPercentInputValue(input);
+    var step = isBig ? 10 : 1;
+    var nextValue = clamp(base + (direction === "up" ? step : -step), 0, 100);
+    var displayValue = String(nextValue) + "%";
+    input.value = displayValue;
+    var fieldId = getFieldId(input) || percentProp;
+    state.editingFieldId = fieldId;
+    state.draftInputs[fieldId] = displayValue;
+    if (percentProp === "opacity") {
+      applyStyle("opacity", String(clamp(nextValue / 100, 0, 1)));
+    } else {
+      applyColorWithAlpha(percentProp, getColorDraftMeta(percentProp).hex, nextValue);
+    }
+    schedule();
+    if (input.focus) input.focus();
+  }
+
+  function getMarginEdgeItems(box) {
+    if (!box) return [];
+    var items = [
+      { side: "左", prop: "marginLeft", value: num(box.l) },
+      { side: "右", prop: "marginRight", value: num(box.r) },
+      { side: "上", prop: "marginTop", value: num(box.t) },
+      { side: "下", prop: "marginBottom", value: num(box.b) }
+    ].filter(function (item) {
+      return item.value !== 0;
+    });
+    if (!items.length) {
+      items = [{ side: "左", prop: "marginLeft", value: num(box.l) }];
+    }
+    return items.slice(0, 2);
+  }
+
+  function renderMarginEdgeCell(edge) {
+    return (
+      '<div style="display:grid;gap:5px;min-width:0;">' +
+      '<div style="color:' +
+      PANEL_UI.labelColor +
+      ';font-size:11px;line-height:1.2;">' +
+      esc(edge.side) +
+      "</div>" +
+      editableFieldControl(edge.prop, edge.value) +
+      "</div>"
+    );
+  }
+
+  function getColorComponents(value) {
+    var text = String(value == null ? "" : value).trim();
+    if (!text || text === "transparent") return { hex: "", alpha: 0 };
+    if (text.charAt(0) === "#") {
+      return { hex: toHexColor(text), alpha: 100 };
+    }
+    var match = text.match(/rgba?\(([^)]+)\)/i);
+    if (!match) return { hex: toHexColor(text), alpha: 100 };
+    var parts = match[1].split(",").map(function (item) {
+      return item.trim();
+    });
+    var alpha = parts.length > 3 ? parseFloat(parts[3]) : 1;
+    if (isNaN(alpha)) alpha = 1;
+    return {
+      hex: toHexColor(text),
+      alpha: Math.round(clamp(alpha, 0, 1) * 100)
+    };
+  }
+
+  function rgbaFromHexAndAlpha(hex, alphaPercent) {
+    var colorHex = toHexColor(hex);
+    if (!colorHex) return "";
+    var alpha = parsePercentValue(alphaPercent);
+    if (alpha === "") alpha = 100;
+    var expanded = colorHex.length === 4
+      ? "#" + colorHex.charAt(1) + colorHex.charAt(1) + colorHex.charAt(2) + colorHex.charAt(2) + colorHex.charAt(3) + colorHex.charAt(3)
+      : colorHex;
+    var r = parseInt(expanded.slice(1, 3), 16);
+    var g = parseInt(expanded.slice(3, 5), 16);
+    var b = parseInt(expanded.slice(5, 7), 16);
+    return "rgba(" + r + ", " + g + ", " + b + ", " + clamp(alpha / 100, 0, 1) + ")";
+  }
+
+  function getColorDraftMeta(prop) {
+    var el = getEditableTargetEl();
+    if (!el) return { hex: "", alpha: 100 };
+    var style = getComputedStyle(el);
+    var computed = getColorComponents(style[prop]);
+    var hexField = tooltip.querySelector('input[data-prop="' + prop + '"]');
+    var alphaField = tooltip.querySelector('input[data-color-alpha-prop="' + prop + '"]');
+    var draftHex = hexField ? String(hexField.value || "").trim() : "";
+    var draftAlpha = alphaField ? String(alphaField.value || "").trim() : "";
+    return {
+      hex: draftHex || computed.hex,
+      alpha: draftAlpha ? parsePercentValue(draftAlpha) : computed.alpha
+    };
+  }
+
+  function previewColorWithAlpha(prop, hexValue, alphaValue) {
+    var el = getEditableTargetEl();
+    if (!el) return;
+    var next = rgbaFromHexAndAlpha(hexValue, alphaValue);
+    el.style[prop] = next || "";
+  }
+
+  function applyColorWithAlpha(prop, hexValue, alphaValue) {
+    var next = rgbaFromHexAndAlpha(hexValue, alphaValue);
+    applyStyle(prop, next || "");
+  }
+
+  function syncColorUi(prop, hexValue) {
+    var normalized = toHexColor(hexValue);
+    if (!normalized) return;
+    var colorInput = tooltip.querySelector('input[data-color-prop="' + prop + '"]');
+    if (colorInput) colorInput.value = normalized;
+    var swatchBox = tooltip.querySelector('div[data-color-swatch="' + prop + '"]');
+    if (swatchBox) swatchBox.style.background = normalized;
+  }
+
+  function isMixedSpacingValue(box, axis) {
+    if (!box) return false;
+    if (axis === "horizontal") return num(box.l) !== num(box.r);
+    if (axis === "vertical") return num(box.t) !== num(box.b);
+    return false;
+  }
+
+  function getSymmetricBoxDisplayValue(box, axis) {
+    if (!box || isMixedSpacingValue(box, axis)) return "";
+    if (axis === "horizontal") return spacingValueText(box.l);
+    if (axis === "vertical") return spacingValueText(box.t);
+    return "";
+  }
+
+  function collectDirectTextNodes(el) {
+    if (!el || !el.childNodes) return [];
+    return Array.prototype.filter.call(el.childNodes, function (node) {
+      return node && node.nodeType === 3 && String(node.textContent || "").trim();
+    });
+  }
+
+  function countDirectElementChildren(el) {
+    if (!el || !el.childNodes) return 0;
+    var count = 0;
+    Array.prototype.forEach.call(el.childNodes, function (node) {
+      if (node && node.nodeType === 1) count += 1;
+    });
+    return count;
+  }
+
+  function isStableTextEditableTarget(el) {
+    if (!el || !el.tagName) return false;
+    var tag = el.tagName.toLowerCase();
+    if (/^(input|textarea)$/i.test(tag)) return true;
+    var directTextNodes = collectDirectTextNodes(el);
+    var elementChildCount = countDirectElementChildren(el);
+    if (el.isContentEditable) {
+      return directTextNodes.length === 1 && elementChildCount === 0;
+    }
+    return directTextNodes.length === 1 && elementChildCount === 0;
+  }
+
+  function getEditableTextValue(el) {
+    if (!el || !el.tagName) return "";
+    var tag = el.tagName.toLowerCase();
+    if (/^(input|textarea)$/i.test(tag)) return String(el.value == null ? "" : el.value);
+    var directTextNodes = collectDirectTextNodes(el);
+    if (directTextNodes.length === 1) return String(directTextNodes[0].textContent || "");
+    return String(el.textContent || "");
+  }
+
+  function applyTextContentDraft(rawValue) {
+    var el = getEditableTargetEl();
+    if (!el || !isStableTextEditableTarget(el)) return;
+    var value = String(rawValue == null ? "" : rawValue);
+    var tag = el.tagName ? el.tagName.toLowerCase() : "";
+    if (/^(input|textarea)$/i.test(tag)) {
+      el.value = value;
+      return;
+    }
+    var directTextNodes = collectDirectTextNodes(el);
+    if (directTextNodes.length === 1) {
+      directTextNodes[0].textContent = value;
+      return;
+    }
+    if (el.isContentEditable) {
+      el.textContent = value;
+    }
+  }
+
+  function syncTextareaAutoHeight(textarea) {
+    if (!textarea) return;
+    var style = window.getComputedStyle ? window.getComputedStyle(textarea) : null;
+    var lineHeight = style ? parseFloat(style.lineHeight) : 18;
+    if (!lineHeight || isNaN(lineHeight)) lineHeight = 18;
+    var minHeight = Math.max(lineHeight + 10, 34);
+    var maxHeight = Math.round(lineHeight * 3 + 10);
+    textarea.style.height = "auto";
+    var nextHeight = Math.max(minHeight, Math.min(textarea.scrollHeight || minHeight, maxHeight));
+    textarea.style.height = nextHeight + "px";
+    textarea.style.overflowY = (textarea.scrollHeight || 0) > maxHeight ? "auto" : "hidden";
+  }
+
   function previewBoxValues(prefix, box) {
-    var el = getSelectedEl();
+    var el = getEditableTargetEl();
     if (!el || !box) return;
     ["Top", "Right", "Bottom", "Left"].forEach(function (suffix, index) {
       var value = [box.t, box.r, box.b, box.l][index];
@@ -3295,21 +3584,71 @@
 
   function setScrubDraftValue(input, value) {
     if (!input) return;
+    if (isPercentInput(input)) {
+      var percentProp = getPercentInputProp(input);
+      var nextPercentValue = String(Math.round(clamp(value, 0, 100))) + "%";
+      state.editingFieldId = getFieldId(input);
+      state.draftInputs[state.editingFieldId] = nextPercentValue;
+      if (input.value !== nextPercentValue) input.value = nextPercentValue;
+      if (percentProp === "opacity") {
+        applyStyle("opacity", String(clamp(parseFloat(nextPercentValue) / 100, 0, 1)));
+      } else {
+        applyColorWithAlpha(percentProp, getColorDraftMeta(percentProp).hex, parsePercentValue(nextPercentValue));
+      }
+      return;
+    }
     var boxSummary = input.getAttribute("data-box-summary");
     if (boxSummary) {
       return setBoxSummaryScrubDraftValue(input, value);
     }
     var fieldId = getFieldId(input);
     if (!fieldId) return;
-    var nextValue = formatScrubDisplayValue(input.getAttribute("data-prop") || "", value);
+    var prop = input.getAttribute("data-prop") || "";
+    var nextValue = formatScrubDisplayValue(prop, value);
     state.editingFieldId = fieldId;
     state.draftInputs[fieldId] = nextValue;
     if (input.value !== nextValue) input.value = nextValue;
-    previewFieldValue(input.getAttribute("data-prop") || "", nextValue);
+    previewFieldValue(prop, nextValue);
   }
 
   function getBoxSummaryScrubMeta(boxSummary) {
     var current;
+    if (boxSummary === "margin-horizontal") {
+      current = currentBoxValues("margin");
+      if (isMixedSpacingValue(current, "horizontal")) {
+        return {
+          enabled: false,
+          locked: true,
+          lockedReason: "当前左右外边距为混合值，请输入新值后一次性覆盖左右。"
+        };
+      }
+      return {
+        enabled: true,
+        mode: "margin-horizontal",
+        value: Math.round(num(current.l)),
+        applyBox: function (next) {
+          return { t: current.t, r: next, b: current.b, l: next };
+        }
+      };
+    }
+    if (boxSummary === "margin-vertical") {
+      current = currentBoxValues("margin");
+      if (isMixedSpacingValue(current, "vertical")) {
+        return {
+          enabled: false,
+          locked: true,
+          lockedReason: "当前上下外边距为混合值，请输入新值后一次性覆盖上下。"
+        };
+      }
+      return {
+        enabled: true,
+        mode: "margin-vertical",
+        value: Math.round(num(current.t)),
+        applyBox: function (next) {
+          return { t: next, r: current.r, b: next, l: current.l };
+        }
+      };
+    }
     if (boxSummary === "padding-horizontal") {
       current = currentBoxValues("padding");
       return {
@@ -3343,7 +3682,7 @@
     var meta = getBoxSummaryScrubMeta(boxSummary);
     var next = Math.round(parseFloat(rawValue));
     if (!meta || !meta.enabled || isNaN(next)) return;
-    if (boxSummary === "margin") {
+    if (boxSummary === "margin" || boxSummary === "margin-horizontal" || boxSummary === "margin-vertical") {
       previewBoxValues("margin", meta.applyBox(next));
       return;
     }
@@ -3406,20 +3745,25 @@
 
   function startNumericScrub(input, e) {
     var prop = input && input.getAttribute("data-prop");
+    var percentProp = input && getPercentInputProp(input);
     var boxSummary = input && input.getAttribute("data-box-summary");
     if (!input || input.getAttribute("data-scrub-enabled") !== "true") return false;
     state.scrub.active = true;
     state.scrub.input = input;
     state.scrub.fieldId = getFieldId(input);
-    state.scrub.prop = prop || "";
+    state.scrub.prop = percentProp ? "opacity" : (prop || "");
     state.scrub.startX = e.clientX;
     if (boxSummary) {
       var boxMeta = getBoxSummaryScrubMeta(boxSummary);
       if (!boxMeta || !boxMeta.enabled) return false;
       state.scrub.startValue = boxMeta.value;
     } else {
-      if (!prop) return false;
-      state.scrub.startValue = getFieldNumericValue(prop, state.draftInputs[state.scrub.fieldId] != null ? state.draftInputs[state.scrub.fieldId] : input.value);
+      if (percentProp) {
+        state.scrub.startValue = getPercentInputValue(input);
+      } else {
+        if (!prop) return false;
+        state.scrub.startValue = getFieldNumericValue(prop, state.draftInputs[state.scrub.fieldId] != null ? state.draftInputs[state.scrub.fieldId] : input.value);
+      }
     }
     state.editingFieldId = state.scrub.fieldId;
     if (input.focus) input.focus({ preventScroll: true });
@@ -3457,7 +3801,7 @@
 
   function getScrubInputFromTarget(target) {
     if (!target || !tooltip.contains(target) || !target.closest) return null;
-    var input = target.closest('input[data-prop], input[data-box-summary]');
+    var input = target.closest('input[data-prop], input[data-box-summary], input[data-color-alpha-prop]');
     if (!input || !tooltip.contains(input)) return null;
     if (input.getAttribute("data-scrub-enabled") !== "true") return null;
     return input.disabled ? null : input;
@@ -3465,7 +3809,7 @@
 
   function getScrubHoverTarget(target) {
     if (!target || !tooltip.contains(target) || !target.closest) return null;
-    var input = target.closest('input[data-prop], input[data-box-summary]');
+    var input = target.closest('input[data-prop], input[data-box-summary], input[data-color-alpha-prop]');
     if (!input || !tooltip.contains(input)) return null;
     return input.disabled ? null : input;
   }
@@ -3489,6 +3833,8 @@
     var prop = target.getAttribute("data-prop") || "";
     var value = String(target.value == null ? "" : target.value);
     if (colorProps[prop]) return value.toUpperCase();
+    if (target.getAttribute("data-color-alpha-prop")) return formatOpacityDisplay(value, getPercentInputFallback(target));
+    if (prop === "opacity") return formatOpacityDisplay(value, getPercentInputFallback(target));
     if (isNumericField(prop)) {
       return displayNumericValue(value);
     }
@@ -3520,12 +3866,31 @@
       return true;
     }
 
+    var colorAlphaProp = target.getAttribute("data-color-alpha-prop");
+    if (colorAlphaProp) {
+      var alphaPercent = parsePercentValue(rawValue);
+      if (alphaPercent === "") alphaPercent = getColorComponents(getComputedStyle(getEditableTargetEl())[colorAlphaProp]).alpha;
+      target.value = String(alphaPercent) + "%";
+      var colorMeta = getColorDraftMeta(colorAlphaProp);
+      applyColorWithAlpha(colorAlphaProp, colorMeta.hex, alphaPercent);
+      clearEditingState();
+      if (!options.silent) schedule();
+      return true;
+    }
+
     var prop = target.getAttribute("data-prop") || "";
     if (!prop) return false;
 
+    if (fieldId === "text-content") {
+      applyTextContentDraft(rawValue);
+      clearEditingState();
+      if (!options.silent) schedule();
+      return true;
+    }
+
     if (!rawValue) {
       if (prop === "opacity") {
-        target.value = "100";
+        target.value = formatOpacityDisplay("", getPercentInputFallback(target));
         applyStyle(prop, "1");
       } else {
         target.value = "";
@@ -3538,8 +3903,8 @@
 
     if (prop === "opacity") {
       var opacityValue = parseOpacityPercent(rawValue);
-      if (!opacityValue) opacityValue = "1";
-      target.value = formatOpacityPercent(opacityValue);
+      if (!opacityValue) opacityValue = String(clamp(getPercentInputFallback(target) / 100, 0, 1));
+      target.value = formatOpacityDisplay(opacityValue, getPercentInputFallback(target));
       applyStyle(prop, opacityValue);
       clearEditingState();
       if (!options.silent) schedule();
@@ -3549,11 +3914,10 @@
     if (colorProps[prop]) {
       var colorValue = normalizeValue(prop, rawValue);
       if (target.value !== colorValue) target.value = colorValue;
-      var colorInput = tooltip.querySelector('input[data-color-prop="' + prop + '"]');
-      if (colorInput && /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(colorValue)) colorInput.value = colorValue;
-      var swatchBox = tooltip.querySelector('div[data-color-swatch="' + prop + '"]');
-      if (swatchBox && /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(colorValue)) swatchBox.style.background = colorValue;
-      applyStyle(prop, colorValue);
+      syncColorUi(prop, colorValue);
+      var colorAlphaInput = tooltip.querySelector('input[data-color-alpha-prop="' + prop + '"]');
+      var colorAlpha = colorAlphaInput ? parsePercentValue(colorAlphaInput.value) : getColorComponents(getComputedStyle(getEditableTargetEl())[prop]).alpha;
+      applyColorWithAlpha(prop, colorValue, colorAlpha);
     } else {
       var normalized = normalizeValue(prop, rawValue);
       var displayValue = isNumericField(prop) ? displayNumericValue(normalized) : normalized;
@@ -3567,7 +3931,7 @@
   }
 
   function applyStyle(prop, value) {
-    var el = getSelectedEl();
+    var el = getEditableTargetEl();
     if (!el) return;
     el.style[prop] = value;
     state.modifiedProps[prop] = true;
@@ -3575,7 +3939,7 @@
   }
 
   function clearEditedStyles() {
-    var el = getSelectedEl();
+    var el = getEditableTargetEl();
     if (!el) return;
     Object.keys(state.modifiedProps).forEach(function (prop) {
       el.style[prop] = "";
@@ -3592,7 +3956,19 @@
     var fieldId = getFieldId(target);
     if (fieldId) {
       syncFieldDraft(target);
-      if (!target.getAttribute("data-color-prop")) return;
+      if (getNodeTagName(target) === "select") {
+        commitFieldDraft(target, { silent: false });
+        return;
+      }
+      if (fieldId === "text-content" && getNodeTagName(target) === "textarea") {
+        syncTextareaAutoHeight(target);
+        applyTextContentDraft(target.value);
+        return;
+      }
+      if (isPercentInput(target)) {
+        previewPercentInputValue(target, target.value);
+        return;
+      }
     }
     var boxSummary = target.getAttribute("data-box-summary");
     if (boxSummary) {
@@ -3605,7 +3981,7 @@
       if (textInput) textInput.value = hex;
       var swatch = tooltip.querySelector('div[data-color-swatch="' + colorProp + '"]');
       if (swatch) swatch.style.background = hex;
-      applyStyle(colorProp, hex);
+      applyColorWithAlpha(colorProp, hex, getColorDraftMeta(colorProp).alpha);
       schedule();
       return;
     }
@@ -3613,6 +3989,10 @@
 
   function stepInputValue(input, direction, isBig) {
     if (!input) return;
+    if (isPercentInput(input)) {
+      stepPercentInputValue(input, direction, isBig);
+      return;
+    }
     var prop = input.getAttribute("data-prop");
     if (!prop) return;
     var raw = String(input.value || "").trim();
@@ -3621,18 +4001,6 @@
     var step = isBig ? 10 : 1;
     var next = direction === "up" ? base + step : base - step;
     var nextValue = String(Math.round(next));
-    if (prop === "opacity") {
-      var nextOpacity = clamp((base || 0) + (direction === "up" ? step : -step), 0, 100);
-      nextValue = String(nextOpacity);
-      input.value = nextValue;
-      var fieldId = getFieldId(input) || prop;
-      state.editingFieldId = fieldId;
-      state.draftInputs[fieldId] = nextValue;
-      applyStyle(prop, String(clamp(nextOpacity / 100, 0, 1)));
-      schedule();
-      if (input.focus) input.focus();
-      return;
-    }
     input.value = nextValue;
     var fieldId = getFieldId(input) || prop;
     state.editingFieldId = fieldId;
@@ -3645,16 +4013,19 @@
   function onPanelKeyDown(e) {
     var target = e.target;
     if (!target || !tooltip.contains(target)) return;
+    var tagName = getNodeTagName(target);
     var fieldId = getFieldId(target);
     var prop = target.getAttribute("data-prop");
     if (!fieldId) return;
     if (e.key === "Enter") {
+      if (tagName === "textarea" && !e.metaKey && !e.ctrlKey) return;
       state.skipNextBlurCommitFieldId = fieldId;
       commitFieldDraft(target);
       e.preventDefault();
       if (target.blur) target.blur();
       return;
     }
+    if (tagName === "select" || tagName === "textarea") return;
     if (!prop) return;
     if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
     stepInputValue(target, e.key === "ArrowUp" ? "up" : "down", e.shiftKey);
@@ -3738,6 +4109,12 @@
       e.preventDefault();
       return;
     }
+    if (action === "toggle-radius") {
+      state.spacingExpanded.radius = !state.spacingExpanded.radius;
+      schedule();
+      e.preventDefault();
+      return;
+    }
     if (action === "toggle-margin") {
       state.spacingExpanded.margin = !state.spacingExpanded.margin;
       schedule();
@@ -3768,7 +4145,7 @@
   }
 
   function currentBoxValues(prefix) {
-    var el = getSelectedEl();
+    var el = getEditableTargetEl();
     if (!el) return { t: 0, r: 0, b: 0, l: 0 };
     var style = getComputedStyle(el);
     return boxValues(style, prefix);
@@ -3869,7 +4246,17 @@
 
   function applyBoxSummaryInput(target, boxSummary) {
     var raw = String(target.value || "").trim();
-    var current = currentBoxValues(boxSummary === "margin" ? "margin" : "padding");
+    var current = currentBoxValues(/^margin/.test(boxSummary) ? "margin" : "padding");
+    if (boxSummary === "margin-horizontal") {
+      if (!raw) return;
+      applyBoxValues("margin", { t: current.t, r: raw, b: current.b, l: raw });
+      return;
+    }
+    if (boxSummary === "margin-vertical") {
+      if (!raw) return;
+      applyBoxValues("margin", { t: raw, r: current.r, b: raw, l: current.l });
+      return;
+    }
     if (boxSummary === "margin") {
       var scrubMode = target.getAttribute("data-scrub-mode") || "";
       var scrubNumber = Math.round(parseFloat(raw));
@@ -3971,23 +4358,30 @@
   function editableFieldControl(prop, v, type, opts) {
     opts = opts || {};
     var isColor = type === "color";
+    var controlType = opts.controlType || "text";
     var fieldId = prop;
     var draftValue = state.editingFieldId === fieldId && state.draftInputs[fieldId] != null ? state.draftInputs[fieldId] : null;
     var displayValue =
       draftValue != null
-        ? isNumericField(prop)
-          ? displayNumericValue(draftValue)
-          : draftValue
+        ? prop === "opacity"
+          ? formatOpacityDisplay(draftValue)
+          : prop === "borderRadius"
+            ? displayRadiusValue(draftValue)
+            : isNumericField(prop)
+              ? displayNumericValue(draftValue)
+              : draftValue
         : prop === "opacity"
-          ? formatOpacityPercent(v)
+          ? formatOpacityDisplay(v)
+          : prop === "borderRadius"
+            ? displayRadiusValue(v)
           : isColor
             ? (toHexColor(v) || v || "")
             : displayNumericValue(v);
-    var inputMode = isColor ? "text" : isNumericField(prop) ? "decimal" : "text";
+    var inputMode = isColor ? "text" : prop === "opacity" ? "decimal" : isNumericField(prop) ? "decimal" : "text";
     var compactWidth = !isColor && !isLengthProp(prop) && prop !== "fontSize" && prop !== "lineHeight" && prop !== "opacity" ? "max-width:180px;" : "";
     var safe = esc(displayValue);
     var disabled = !!opts.disabled;
-    var scrubEnabled = isScrubbableField(prop, disabled);
+    var scrubEnabled = controlType === "text" && isScrubbableField(prop, disabled);
     var inputStyle =
       "width:100%;height:" +
       PANEL_UI.controlHeight +
@@ -4002,6 +4396,64 @@
       ";font:12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;outline:none;box-shadow:none;";
     if (disabled) {
       inputStyle += ";cursor:not-allowed;opacity:.65;";
+    }
+    if (controlType === "select") {
+      var selectOptions = (opts.options || []).map(function (option) {
+        var value = typeof option === "string" ? option : option && option.value;
+        var label = typeof option === "string" ? option : option && option.label;
+        return '<option value="' + esc(value || "") + '"' + (String(displayValue) === String(value) ? " selected" : "") + ">" + esc(label || value || "") + "</option>";
+      }).join("");
+      return (
+        '<div style="position:relative;min-width:0;width:100%;' +
+        compactWidth +
+        '">' +
+        '<select data-field-id="' +
+        esc(fieldId) +
+        '" data-prop="' +
+        esc(prop) +
+        '" data-type="' +
+        esc(type || "text") +
+        '"' +
+        (disabled ? ' disabled aria-disabled="true"' : "") +
+        ' style="' +
+        inputStyle +
+        'padding:0 28px 0 9px;appearance:none;-webkit-appearance:none;-moz-appearance:none;cursor:' +
+        (disabled ? "not-allowed" : "pointer") +
+        ';">' +
+        selectOptions +
+        "</select>" +
+        '<div style="position:absolute;right:10px;top:50%;transform:translateY(-50%);color:' +
+        PANEL_UI.labelColor +
+        ';font-size:10px;pointer-events:none;">▼</div>' +
+        "</div>"
+      );
+    }
+    if (controlType === "textarea") {
+      return (
+        '<div style="position:relative;min-width:0;width:100%;">' +
+        '<textarea autocomplete="off" spellcheck="false" data-field-id="' +
+        esc(fieldId) +
+        '" data-prop="' +
+        esc(prop) +
+        '" data-type="' +
+        esc(type || "text") +
+        '"' +
+        (disabled ? ' readonly disabled aria-disabled="true"' : "") +
+        ' rows="1" style="width:100%;min-height:' +
+        PANEL_UI.controlHeight +
+        ";max-height:72px;box-sizing:border-box;padding:8px 9px;border-radius:" +
+        PANEL_UI.inputRadius +
+        ";border:1px solid " +
+        PANEL_UI.inputBorder +
+        ";background:" +
+        (disabled ? "rgba(255,255,255,.02)" : PANEL_UI.inputBg) +
+        ";color:" +
+        (disabled ? "rgba(232,238,244,.5)" : CONFIG.colors.text) +
+        ';font:12px/1.5 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;outline:none;box-shadow:none;resize:none;overflow-y:hidden;">' +
+        esc(displayValue) +
+        "</textarea>" +
+        "</div>"
+      );
     }
     var colorPicker =
       isColor
@@ -4044,6 +4496,7 @@
   }
 
   function summaryInput(value, boxSummaryKind, extraAttr) {
+    var placeholder = arguments.length > 3 ? arguments[3] : "";
     var scrubMeta = getBoxSummaryScrubMeta(boxSummaryKind);
     var fieldId = "box-summary:" + boxSummaryKind;
     var draftValue = state.editingFieldId === fieldId && state.draftInputs[fieldId] != null ? state.draftInputs[fieldId] : null;
@@ -4067,6 +4520,8 @@
       (extraAttr ? " " + extraAttr : "") +
       ' value="' +
       esc(displayValue) +
+      '" placeholder="' +
+      esc(placeholder) +
       '" title="' +
       esc(titleText) +
       '" style="width:100%;height:' +
@@ -4164,6 +4619,121 @@
 
   function readOnlyFieldBlock(v, fullText) {
     return '<div style="width:100%;min-width:0;">' + readOnlyField(v, fullText) + "</div>";
+  }
+
+  function renderTextEditorRow(value) {
+    return (
+      '<div style="min-width:0;width:100%;">' +
+      editableFieldControl("text-content", value, "text", { controlType: "textarea" }) +
+      "</div>"
+    );
+  }
+
+  function renderMarginVisibleRow(labelText, box) {
+    var items = getMarginEdgeItems(box);
+    var contentHtml = items.length
+      ? '<div style="display:grid;grid-template-columns:repeat(' + items.length + ', minmax(0,1fr));gap:' + PANEL_UI.rowGap + ';">' +
+        items.map(function (item) {
+          return renderMarginEdgeCell(item);
+        }).join("") +
+        "</div>"
+      : "";
+    return (
+      '<div style="display:grid;grid-template-columns:' +
+      PANEL_UI.labelWidth +
+      ' minmax(0,1fr);gap:' +
+      PANEL_UI.rowGap +
+      ';align-items:start;">' +
+      '<div style="color:' +
+      PANEL_UI.labelColor +
+      ';font-size:11px;line-height:1.25;">' +
+      esc(labelText) +
+      "</div>" +
+      '<div style="min-width:0;width:100%;">' +
+      contentHtml +
+      "</div>" +
+      "</div>"
+    );
+  }
+
+  function renderColorAlphaRow(labelText, prop, colorValue, opts) {
+    opts = opts || {};
+    var colorMeta = getColorComponents(colorValue);
+    var controlGrid =
+      '<div style="display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,.9fr);gap:' +
+      PANEL_UI.rowGap +
+      ';">' +
+      editableFieldControl(prop, colorMeta.hex, "color") +
+      '<div style="position:relative;min-width:0;">' +
+      '<input type="text" inputmode="decimal" autocomplete="off" spellcheck="false" data-field-id="' +
+      esc(prop + "-alpha") +
+      '" data-color-alpha-prop="' +
+      esc(prop) +
+      '" data-scrub-enabled="true" data-scrub-locked="false" data-prop="opacity" value="' +
+      esc(String(colorMeta.alpha) + "%") +
+      '" style="width:100%;height:' +
+      PANEL_UI.controlHeight +
+      ';box-sizing:border-box;padding:0 9px;border-radius:' +
+      PANEL_UI.inputRadius +
+      ';border:1px solid ' +
+      PANEL_UI.inputBorder +
+      ';background:' +
+      PANEL_UI.inputBg +
+      ';color:' +
+      CONFIG.colors.text +
+      ';font:12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;outline:none;box-shadow:none;">' +
+      "</div>" +
+      "</div>";
+    if (opts.hideLabel) return controlGrid;
+    return (
+      '<div style="display:grid;grid-template-columns:' +
+      PANEL_UI.labelWidth +
+      ' minmax(0,1fr);gap:' +
+      PANEL_UI.rowGap +
+      ';align-items:start;">' +
+      '<div style="color:' +
+      PANEL_UI.labelColor +
+      ';font-size:11px;line-height:1.25;">' +
+      esc(labelText) +
+      "</div>" +
+      '<div style="min-width:0;width:100%;">' +
+      controlGrid +
+      "</div>" +
+      "</div>"
+    );
+  }
+
+  function displayRadiusValue(v) {
+    if (v == null || v === "") return "";
+    return String(v).trim().replace(/(-?\d+(?:\.\d+)?)px\b/gi, "$1");
+  }
+
+  function radiusCornerFields(style, disabled) {
+    if (!style) return "";
+    function cell(label, prop, value) {
+      return (
+        '<div style="display:flex;align-items:center;gap:6px;min-width:0;">' +
+        '<div style="min-width:16px;color:' +
+        PANEL_UI.labelColor +
+        ';font-size:11px;">' +
+        label +
+        "</div>" +
+        '<div style="flex:1;min-width:0;">' +
+        editableFieldControl(prop, value, null, { disabled: !!disabled }) +
+        "</div>" +
+        "</div>"
+      );
+    }
+    return (
+      '<div style="display:grid;grid-template-columns:repeat(2, minmax(0,1fr));gap:' +
+      PANEL_UI.rowGap +
+      ';">' +
+      cell("左上", "borderTopLeftRadius", style.borderTopLeftRadius) +
+      cell("右上", "borderTopRightRadius", style.borderTopRightRadius) +
+      cell("右下", "borderBottomRightRadius", style.borderBottomRightRadius) +
+      cell("左下", "borderBottomLeftRadius", style.borderBottomLeftRadius) +
+      "</div>"
+    );
   }
 
   function boxEditorFields(box, prefix) {
@@ -4402,7 +4972,17 @@
   function isTransparentColor(value) {
     if (!value) return true;
     var text = String(value).trim().toLowerCase();
-    return text === "transparent" || text === "rgba(0, 0, 0, 0)" || text === "rgba(0,0,0,0)";
+    if (text === "transparent") return true;
+    if (/^rgba?\(/i.test(text)) {
+      var parts = text.slice(text.indexOf("(") + 1, text.lastIndexOf(")")).split(",").map(function (item) {
+        return item.trim();
+      });
+      if (parts.length > 3) {
+        var alpha = parseFloat(parts[3]);
+        return !isNaN(alpha) && alpha <= 0;
+      }
+    }
+    return text === "rgba(0, 0, 0, 0)" || text === "rgba(0,0,0,0)";
   }
 
   function hasVisibleBorder(style) {
@@ -4445,7 +5025,11 @@
         hasBoxVisual: false,
         canEditRadius: false,
         canEditFill: false,
-        canEditStroke: false
+        canEditStroke: false,
+        canEditTextContent: false,
+        fontFamilyPrimary: "",
+        fontFamilyOptions: [],
+        fontWeightOptions: FONT_WEIGHT_OPTIONS.slice()
       };
     }
     var targetKind = classifyTarget(el);
@@ -4462,13 +5046,18 @@
     var hasBoxVisual = !!(hasBackground || hasBorder || hasRadius || hasShadow || hasPadding || hasSizedBox || supportsBoxLayout || boxSemantic);
     var hasTextStyles = !!(hasDirectTextSemantic(el) || targetKind === "text-like" || targetKind === "icon-font-like");
     var canEditRadius = hasBoxVisual;
+    var fontFamilyPrimary = primaryFontFamily(style.fontFamily);
     return {
       targetKind: targetKind,
       hasTextStyles: hasTextStyles,
       hasBoxVisual: hasBoxVisual,
       canEditRadius: canEditRadius,
       canEditFill: hasBoxVisual,
-      canEditStroke: hasBoxVisual
+      canEditStroke: hasBoxVisual,
+      canEditTextContent: isStableTextEditableTarget(el),
+      fontFamilyPrimary: fontFamilyPrimary,
+      fontFamilyOptions: buildFontFamilyOptions(fontFamilyPrimary),
+      fontWeightOptions: FONT_WEIGHT_OPTIONS.slice()
     };
   }
 
@@ -4563,7 +5152,21 @@
       token += ch;
     }
     pushToken();
-    return families.join(", ");
+    return families.length ? families[0] : "";
+  }
+
+  function buildFontFamilyOptions(currentPrimary) {
+    var seen = {};
+    var result = [];
+    [currentPrimary].concat(FONT_FAMILY_PRESETS).forEach(function (item) {
+      var value = String(item || "").trim();
+      if (!value) return;
+      var key = value.toLowerCase();
+      if (seen[key]) return;
+      seen[key] = true;
+      result.push(value);
+    });
+    return result;
   }
 
   function boxValues(style, prefix) {
@@ -4804,6 +5407,17 @@
     return !!getSelectedEl();
   }
 
+  function getSelectedPanelTarget() {
+    if (isPlainSelectMode() && state.measureA) return state.measureA;
+    return getSelectedEl();
+  }
+
+  function getEditableTargetEl() {
+    if (isPlainSelectMode() && state.measureA) return state.measureA;
+    if (!isMeasureTopbarMode()) return getSelectedEl();
+    return null;
+  }
+
   function setSelectedEl(el) {
     var prevSelected = state.selectedA;
     if (state.editingFieldId) {
@@ -4818,7 +5432,7 @@
       clearMeasureSelection({ keepTopbarMode: false });
       state.modifiedProps = {};
       state.editedProps = state.modifiedProps;
-      state.spacingExpanded = { padding: false, margin: false };
+      state.spacingExpanded = { padding: false, margin: false, radius: false };
       clearEditingState();
       state.panelNeedsPlacement = false;
       state.panelManualPosition = false;
@@ -4828,7 +5442,7 @@
       state.panelNeedsPlacement = true;
     }
     if (prevSelected !== state.selectedA) {
-      state.spacingExpanded = { padding: false, margin: false };
+      state.spacingExpanded = { padding: false, margin: false, radius: false };
     }
   }
 
@@ -7971,9 +8585,10 @@
 
   function initFloatingPos() {
     if (state.floatX != null && state.floatY != null) return;
-    var x = window.innerWidth - 60;
+    var width = floating.offsetWidth || parseInt(PANEL_UI.panelMinWidth, 10) || 304;
+    var x = window.innerWidth - width - 90;
     var y = window.innerHeight - 120;
-    setFloatingPos(clamp(x, 8, window.innerWidth - 52), clamp(y, 8, window.innerHeight - 52));
+    setFloatingPos(clamp(x, 8, window.innerWidth - width - 8), clamp(y, 8, window.innerHeight - 52));
   }
 
   function setCollapsed(next) {
@@ -8720,10 +9335,8 @@
     }
     var style = getComputedStyle(el);
     var capabilities = buildSelectedCapabilities(el, style);
-    var targetKind = capabilities.targetKind;
     var padding = boxValues(style, "padding");
     var margin = boxValues(style, "margin");
-    var parentGap = getParentGap(el);
     var modifiedCount = Object.keys(state.modifiedProps).length;
     var resetDisabled = !modifiedCount;
 
@@ -8735,76 +9348,88 @@
     btnReset.style.cursor = resetDisabled ? "default" : "pointer";
     btnReset.title = "重置本次修改";
 
-    var marginMain = summaryInput(formatMarginSummary(margin), "margin");
+    var textValue = capabilities.canEditTextContent ? getEditableTextValue(el) : "";
+    var showTextEditor = capabilities.canEditTextContent && !!String(textValue || "").trim();
     var paddingMain =
-      '<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:' +
-      PANEL_UI.rowGap +
-      ';">' +
-      '<div style="display:grid;gap:5px;min-width:0;">' +
-      '<div style="color:' +
-      PANEL_UI.labelColor +
-      ';font-size:11px;line-height:1.2;">水平</div>' +
-      summaryInput(formatPaddingHorizontalSummary(padding), "padding-horizontal") +
-      "</div>" +
-      '<div style="display:grid;gap:5px;min-width:0;">' +
-      '<div style="color:' +
-      PANEL_UI.labelColor +
-      ';font-size:11px;line-height:1.2;">垂直</div>' +
-      summaryInput(formatPaddingVerticalSummary(padding), "padding-vertical") +
-      "</div>" +
-      "</div>";
+      state.spacingExpanded.padding
+        ? ""
+        : '<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:' +
+          PANEL_UI.rowGap +
+          ';">' +
+          '<div style="display:grid;gap:5px;min-width:0;">' +
+          '<div style="color:' +
+          PANEL_UI.labelColor +
+          ';font-size:11px;line-height:1.2;">水平</div>' +
+          summaryInput(formatPaddingHorizontalSummary(padding), "padding-horizontal") +
+          "</div>" +
+          '<div style="display:grid;gap:5px;min-width:0;">' +
+          '<div style="color:' +
+          PANEL_UI.labelColor +
+          ';font-size:11px;line-height:1.2;">垂直</div>' +
+          summaryInput(formatPaddingVerticalSummary(padding), "padding-vertical") +
+          "</div>" +
+          "</div>";
 
     body.innerHTML =
       section(
         "布局",
         [
+          showTextEditor ? renderTextEditorRow(textValue) : "",
           rowPairEditable("宽", style.width, "width", "高", style.height, "height"),
-          renderMainRow("外边距", marginMain, "toggle-margin", state.spacingExpanded.margin),
-          state.spacingExpanded.margin ? renderExpandedBlock(boxEditorFields(margin, "margin")) : "",
+          renderMarginVisibleRow("外边距", margin),
           renderMainRow("内边距", paddingMain, "toggle-padding", state.spacingExpanded.padding),
-          state.spacingExpanded.padding ? renderExpandedBlock(boxEditorFields(padding, "padding")) : "",
-          renderRelationSummaryRow("父级间距：", formatParentGapSummary(parentGap))
+          state.spacingExpanded.padding ? renderExpandedBlock(boxEditorFields(padding, "padding")) : ""
         ]
       ) +
       section(
         "外观",
         [
-          fontTwoColRow(
-            "透明度",
-            editableFieldControl("opacity", style.opacity, "opacity"),
+          rowEditable("整体透明度", style.opacity, "opacity"),
+          renderMainRow(
             "圆角",
             editableFieldControl("borderRadius", style.borderRadius, null, {
               disabled: !capabilities.canEditRadius
-            })
-          )
+            }),
+            "toggle-radius",
+            state.spacingExpanded.radius
+          ),
+          state.spacingExpanded.radius ? renderExpandedBlock(radiusCornerFields(style, !capabilities.canEditRadius)) : ""
         ]
       ) +
       section(
         "字体",
         capabilities.hasTextStyles
           ? [
-              fontFieldCell("字族", readOnlyFieldBlock(primaryFontFamily(style.fontFamily), style.fontFamily)),
+              fontTwoColRow(
+                "字族",
+                editableFieldControl("fontFamily", capabilities.fontFamilyPrimary, null, {
+                  controlType: "select",
+                  options: capabilities.fontFamilyOptions
+                }),
+                "字重",
+                editableFieldControl("fontWeight", style.fontWeight, null, {
+                  controlType: "select",
+                  options: capabilities.fontWeightOptions
+                })
+              ),
               fontTwoColRow(
                 "字号",
                 editableFieldControl("fontSize", style.fontSize),
                 "行高",
                 editableFieldControl("lineHeight", style.lineHeight)
               ),
-              fontTwoColRow(
-                "字重",
-                editableFieldControl("fontWeight", style.fontWeight),
-                "字色",
-                editableFieldControl("color", toHexColor(style.color), "color")
-              )
+              renderColorAlphaRow("字色", "color", style.color, { hideLabel: true })
             ]
           : []
       ) +
       section(
         "填充",
         [
-          capabilities.canEditFill ? rowEditable("背景色", toHexColor(style.backgroundColor), "backgroundColor", "color") : ""
+          !isTransparentColor(style.backgroundColor) ? renderColorAlphaRow("背景色", "backgroundColor", style.backgroundColor) : ""
         ]
       );
+    var textEditor = tooltip.querySelector('textarea[data-field-id="text-content"]');
+    if (textEditor) syncTextareaAutoHeight(textEditor);
     logTargetDebug("render-selected-panel", el);
   }
 
@@ -8812,7 +9437,7 @@
     if (!shouldShowHoverCard() && !shouldShowSelectedPanel()) return;
     if (shouldShowSelectedPanel()) {
       if (isEditingPanel()) return;
-      renderSelectedPanel(getSelectedEl());
+      renderSelectedPanel(getSelectedPanelTarget());
       return;
     }
     renderHoverCard(el);
@@ -8931,10 +9556,14 @@
       var manualClamped = clampPanelPosition(state.panelX, state.panelY, tooltip.getBoundingClientRect());
       state.panelX = manualClamped.x;
       state.panelY = manualClamped.y;
-    } else if (selectedEl) {
-      var nextPos = resolveSelectedPanelPosition(selectedEl);
-      state.panelX = nextPos.x;
-      state.panelY = nextPos.y;
+    } else if (state.panelNeedsPlacement || state.panelX == null || state.panelY == null) {
+      var rect = tooltip.getBoundingClientRect();
+      var panelWidth = rect.width || tooltip.offsetWidth || parseInt(PANEL_UI.panelMinWidth, 10) || 304;
+      var panelHeight = rect.height || tooltip.offsetHeight || 420;
+      var defaultX = window.innerWidth - panelWidth - 90;
+      var defaultY = 12;
+      state.panelX = clamp(defaultX, 8, window.innerWidth - panelWidth - 8);
+      state.panelY = clamp(defaultY, 8, window.innerHeight - panelHeight - 8);
       state.panelNeedsPlacement = false;
     } else {
       var clamped = clampPanelPosition(state.panelX, state.panelY, tooltip.getBoundingClientRect());
@@ -8950,11 +9579,12 @@
     updatePanelChrome();
     syncTopbar();
     var collapsed = state.panelCollapsed;
+    var measurementModeActive = isMeasureTopbarMode() || isPlainSelectMode();
     var measureHoverEl = state.hoveredEl || null;
-    var measureSingleState = !collapsed && isMeasureTopbarMode()
+    var measureSingleState = !collapsed && measurementModeActive
       ? (state.measureA ? resolveMeasureSingleState(state.measureA) : (measureHoverEl ? resolveMeasureSingleState(measureHoverEl) : null))
       : null;
-    var measurePairState = !collapsed && isMeasureTopbarMode() && state.measureA && state.measureB ? resolveMeasurePairState(state.measureA, state.measureB) : null;
+    var measurePairState = !collapsed && measurementModeActive && state.measureA && state.measureB ? resolveMeasurePairState(state.measureA, state.measureB) : null;
     if (collapsed) {
       tooltip.style.display = "none";
       topbar.style.display = "none";
@@ -8970,7 +9600,13 @@
       spacingLayer.style.display = "none";
       measureLayer.style.display = "none";
     } else {
-      tooltip.style.display = isRecordMode() || state.v12.drawerOpen || isMeasureTopbarMode() ? "none" : "block";
+      tooltip.style.display =
+        isRecordMode() ||
+        state.v12.drawerOpen ||
+        isMeasureTopbarMode() ||
+        (!shouldShowSelectedPanel() && !shouldShowHoverCard())
+          ? "none"
+          : "block";
       topbar.style.display = "flex";
       highlight.style.display = shouldShowHoverHighlight() && getActiveEl() ? "block" : "none";
       spacingLayer.style.display = isRecordMode() ? "none" : "block";
@@ -8984,11 +9620,11 @@
     }
     renderDrawerStub();
     var el = getActiveEl();
-    state.primaryMeasure = collapsed || isRecordMode() || isMeasureTopbarMode() ? null : hasSelectedEl() ? resolvePrimaryMeasure(state.mouseX, state.mouseY, state.hoveredEl) : null;
+    state.primaryMeasure = collapsed || isRecordMode() || measurementModeActive ? null : hasSelectedEl() ? resolvePrimaryMeasure(state.mouseX, state.mouseY, state.hoveredEl) : null;
     updateHighlight(el);
-    updateBox(selectA, !collapsed && !isRecordMode() && isMeasureTopbarMode() ? state.measureA : null);
-    updateBox(selectB, !collapsed && !isRecordMode() ? (isMeasureTopbarMode() ? state.measureB : getPrimaryHoverMeasureTarget()) : null);
-    if (isMeasureTopbarMode()) {
+    updateBox(selectA, !collapsed && !isRecordMode() && measurementModeActive ? state.measureA : null);
+    updateBox(selectB, !collapsed && !isRecordMode() ? (measurementModeActive ? state.measureB : getPrimaryHoverMeasureTarget()) : null);
+    if (measurementModeActive) {
       if (measurePairState) {
         selectB.style.border = "1px dashed " + CONFIG.colors.measurePair;
         selectB.style.background = "rgba(139,92,246,.05)";
@@ -9001,14 +9637,14 @@
     }
     if (!isEditingPanel()) renderTooltip(el);
     if (shouldShowSelectedPanel()) {
-      positionSelectedPanel(getSelectedEl());
+      positionSelectedPanel(getSelectedPanelTarget());
     } else if (shouldShowHoverCard()) {
       positionHoverTooltip();
     }
     syncRecordComposerFocus();
     var measureHitWithinA = !!(measureSingleState && state.measureA && measureHoverEl && isHitWithinMeasureA(state.measureA, measureHoverEl));
     var measureBranch = null;
-    if (isMeasureTopbarMode()) {
+    if (measurementModeActive) {
       measureBranch = !state.measureA
         ? (measureSingleState ? 'noA-hover' : 'neither')
         : (measurePairState ? 'hitB' : (measureHitWithinA ? 'hitA' : 'neither'));
@@ -9020,7 +9656,7 @@
         branch: measureBranch
       });
     }
-    if (isMeasureTopbarMode()) {
+    if (measurementModeActive) {
       renderMeasureSinglePersistentGuides(state.measureA ? measureSingleState : null);
       if (measurePairState) {
         renderMeasurePairGuides(measurePairState);
@@ -9094,7 +9730,7 @@
       hasB: !!state.measureB,
       hitWithinA: state.measureA ? isHitWithinMeasureA(state.measureA, el) : null
     });
-    if (isMeasureTopbarMode()) {
+    if (isMeasureTopbarMode() || isPlainSelectMode()) {
       if (state.measureA && el && !isHitWithinMeasureA(state.measureA, el)) {
         state.measureB = el;
       } else {
@@ -9103,8 +9739,9 @@
     } else if (state.measureB) {
       state.measureB = null;
     }
-    if (!isRecordMode() && hasSelectedEl() && getSelectedEl()) {
-      state.spacingSide = nearestSide(getSelectedEl(), e.clientX, e.clientY);
+    var panelTargetEl = getSelectedPanelTarget();
+    if (!isRecordMode() && panelTargetEl) {
+      state.spacingSide = nearestSide(panelTargetEl, e.clientX, e.clientY);
     } else if (!isRecordMode() && el) {
       state.spacingSide = nearestSide(el, e.clientX, e.clientY);
     }
@@ -9210,9 +9847,24 @@
       return;
     }
 
-    if (isMeasureTopbarMode()) {
+    if (isMeasureTopbarMode() || isPlainSelectMode()) {
       if (!el) return;
+      if (isPlainSelectMode() && state.editingFieldId) {
+        var activeInput = tooltip.querySelector('[data-field-id="' + state.editingFieldId + '"]');
+        if (activeInput) commitFieldDraft(activeInput, { silent: true });
+        clearEditingState();
+      }
       handleMeasureModeClick(el);
+      if (isPlainSelectMode()) {
+        state.modifiedProps = {};
+        state.editedProps = state.modifiedProps;
+      state.spacingExpanded = { padding: false, margin: false, radius: false };
+        state.panelNeedsPlacement = true;
+        if (!state.panelPinned) {
+          state.panelManualPosition = false;
+        }
+        state.spacingSide = nearestSide(el, e.clientX, e.clientY);
+      }
       schedule();
       e.preventDefault();
       e.stopPropagation();
@@ -9309,9 +9961,17 @@
       closeRecordPreview();
       return;
     }
-    if (isMeasureTopbarMode() && (key === CONFIG.hotkeys.exit || key === "esc") && (state.measureA || state.measureB)) {
+    if ((isMeasureTopbarMode() || isPlainSelectMode()) && (key === CONFIG.hotkeys.exit || key === "esc") && (state.measureA || state.measureB)) {
       e.__visualQAHandled = true;
-      clearMeasureSelection({ keepTopbarMode: true });
+      clearMeasureSelection({ keepTopbarMode: isMeasureTopbarMode() });
+      if (isPlainSelectMode()) {
+        state.modifiedProps = {};
+        state.editedProps = state.modifiedProps;
+      state.spacingExpanded = { padding: false, margin: false, radius: false };
+        clearEditingState();
+        state.panelNeedsPlacement = false;
+        state.panelManualPosition = false;
+      }
       e.preventDefault();
       e.stopImmediatePropagation();
       return;
