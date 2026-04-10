@@ -88,6 +88,15 @@ function downloadHtmlFile(html, filename) {
   });
 }
 
+function getTopbarIconUrls() {
+  return {
+    select: chrome.runtime.getURL("assets/ui/topbar/select.svg"),
+    measure: chrome.runtime.getURL("assets/ui/topbar/measure.svg"),
+    recordElement: chrome.runtime.getURL("assets/ui/topbar/record-element.svg"),
+    recordRegion: chrome.runtime.getURL("assets/ui/topbar/record-region.svg")
+  };
+}
+
 chrome.action.onClicked.addListener(async (tab) => {
   if (!tab || !tab.id) return;
 
@@ -171,6 +180,11 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
         ok: true,
         downloadId: await downloadHtmlFile(message.html, message.filename)
       });
+      return;
+    }
+
+    if (action === "get-topbar-icon-urls") {
+      sendResponse({ ok: true, iconUrls: getTopbarIconUrls() });
       return;
     }
 

@@ -41,15 +41,15 @@
   };
 
   var PANEL_UI = {
-    panelMinWidth: "304px",
-    panelMaxWidth: "352px",
-    hoverMaxWidth: "240px",
-    radius: "12px",
-    sectionGap: "12px",
-    rowGap: "8px",
-    labelWidth: "78px",
-    controlHeight: "28px",
-    inputRadius: "8px",
+    panelMinWidth: "286px",
+    panelMaxWidth: "304px",
+    hoverMaxWidth: "224px",
+    radius: "10px",
+    sectionGap: "8px",
+    rowGap: "6px",
+    labelWidth: "66px",
+    controlHeight: "30px",
+    inputRadius: "7px",
     panelBorder: "rgba(255,255,255,.08)",
     panelShadow: "0 18px 44px rgba(0,0,0,.34)",
     headBg: "linear-gradient(180deg,rgba(255,255,255,.035),rgba(255,255,255,.01))",
@@ -164,6 +164,7 @@
       bridgeReady: false,
       recordMenuOpen: false,
       categoryMenuOpen: false,
+      recordPopoverOpen: false,
       pendingRecord: null,
       recordTargetEl: null,
       composerFocusPending: false,
@@ -173,6 +174,13 @@
       topbarPressedPointerId: -1,
       topbarActivationAction: "",
       topbarActivationAt: 0,
+      topbarTooltip: {
+        visible: false,
+        key: "",
+        label: "",
+        shortcut: "",
+        anchorRect: null
+      },
       noticeText: "",
       draftPersisting: false,
       regionSelection: {
@@ -211,6 +219,7 @@
     elementCheck: null,
     regionCheck: null
   };
+  var topbarTooltipHideTimerId = 0;
   var recordComposerRenderKey = "";
   var drawerRenderKey = "";
   var draftPersistTimer = 0;
@@ -229,9 +238,47 @@
   var RECORD_SOURCE_LONG_EDGE = 900;
   var RECORD_THUMB_LONG_EDGE = 320;
   var RECORD_EXPORT_LONG_EDGE = 900;
+  var TOPBAR_TOOLTIP_META = {
+    "mode-select": { label: "选择", shortcut: "V" },
+    "mode-measure": { label: "测量", shortcut: "C" },
+    "record-element": { label: "记录元素", shortcut: "O" },
+    "record-region": { label: "记录框选", shortcut: "R" },
+    "toggle-drawer": { label: "记录抽屉", shortcut: "M" }
+  };
+  var TOPBAR_ICON_URLS = null;
+  var TOPBAR_ICON_URLS_READY = false;
+  var topbarIconUrlsPromise = null;
 
   function clamp(v, min, max) {
     return Math.max(min, Math.min(max, v));
+  }
+
+  function getTopbarIconUrlsFromBridge() {
+    if (TOPBAR_ICON_URLS_READY && TOPBAR_ICON_URLS) return Promise.resolve(TOPBAR_ICON_URLS);
+    if (topbarIconUrlsPromise) return topbarIconUrlsPromise;
+    topbarIconUrlsPromise = bridgeRequest("get-topbar-icon-urls", {}, 3000)
+      .then(function (response) {
+        var iconUrls = response && response.iconUrls ? response.iconUrls : null;
+        if (
+          !iconUrls ||
+          !iconUrls.select ||
+          !iconUrls.measure ||
+          !iconUrls.recordElement ||
+          !iconUrls.recordRegion
+        ) {
+          throw new Error("Missing topbar icon urls");
+        }
+        TOPBAR_ICON_URLS = iconUrls;
+        TOPBAR_ICON_URLS_READY = true;
+        return iconUrls;
+      })
+      .catch(function (err) {
+        topbarIconUrlsPromise = null;
+        TOPBAR_ICON_URLS = null;
+        TOPBAR_ICON_URLS_READY = false;
+        throw err;
+      });
+    return topbarIconUrlsPromise;
   }
 
   function isInspectorAlive() {
@@ -1151,7 +1198,7 @@
       ';flex-direction:column;gap:10px;">' +
       '<textarea data-v12-action="drawer-note" data-record-id="' +
       esc(recordId) +
-      '" data-v12-drawer-note-textarea="1" placeholder="写一句备注" style="width:100%;min-height:86px;max-height:170px;padding:10px 0;border:0;border-radius:0;background:transparent;color:rgba(255,255,255,.96);font:13px/1.7 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;resize:none;box-sizing:border-box;outline:none;overflow-y:auto;">' +
+      '" data-v12-drawer-note-textarea="1" data-editable="1" data-drawer-input="1" data-note-input="1" placeholder="写一句备注" style="width:100%;min-height:86px;max-height:170px;padding:10px 0;border:0;border-radius:0;background:transparent;color:rgba(255,255,255,.96);font:13px/1.7 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;resize:none;box-sizing:border-box;outline:none;overflow-y:auto;">' +
       esc(noteValue) +
       "</textarea>" +
       '<div style="display:flex;justify-content:flex-end;gap:10px;flex:0 0 auto;">' +
@@ -1498,6 +1545,7 @@
     draft.records = nextRecords;
     if (state.v12.pendingRecord && state.v12.pendingRecord.id === recordId) {
       state.v12.pendingRecord = null;
+      state.v12.recordPopoverOpen = false;
     }
     if (state.v12.drawerMenuRecordId === recordId) {
       state.v12.drawerMenuRecordId = "";
@@ -1709,6 +1757,7 @@
     state.v12.suppressNextClick = false;
     if (!keepPendingRecord) {
       state.v12.pendingRecord = null;
+      state.v12.recordPopoverOpen = false;
     }
     resetRegionSelection();
     clearRecordTarget();
@@ -3021,6 +3070,7 @@
 
   function openPendingRecord(record) {
     state.v12.pendingRecord = record;
+    state.v12.recordPopoverOpen = true;
     state.v12.drawerOpen = false;
     state.v12.composerFocusPending = true;
     state.v12.noteSelectionStart = record && record.note ? String(record.note).length : 0;
@@ -3040,6 +3090,7 @@
       delete recordComposerPlacementById[state.v12.pendingRecord.id];
     }
     cleanupRecordInteractionState();
+    state.v12.recordPopoverOpen = false;
     state.v12.composerFocusPending = false;
     state.v12.noteSelectionStart = 0;
     state.v12.noteSelectionEnd = 0;
@@ -3052,6 +3103,7 @@
       delete recordComposerPlacementById[state.v12.pendingRecord.id];
     }
     cleanupRecordInteractionState();
+    state.v12.recordPopoverOpen = false;
     state.v12.composerFocusPending = false;
     state.v12.noteSelectionStart = 0;
     state.v12.noteSelectionEnd = 0;
@@ -4411,7 +4463,7 @@
         esc(fieldId) +
         '" data-prop="' +
         esc(prop) +
-        '" data-type="' +
+        '" data-editable="1" data-type="' +
         esc(type || "text") +
         '"' +
         (disabled ? ' disabled aria-disabled="true"' : "") +
@@ -4435,7 +4487,7 @@
         esc(fieldId) +
         '" data-prop="' +
         esc(prop) +
-        '" data-type="' +
+        '" data-editable="1" data-note-input="1" data-type="' +
         esc(type || "text") +
         '"' +
         (disabled ? ' readonly disabled aria-disabled="true"' : "") +
@@ -4473,7 +4525,7 @@
       esc(fieldId) +
       '" data-prop="' +
       esc(prop) +
-      '" data-type="' +
+      '" data-editable="1" data-type="' +
       esc(type || "text") +
       '" data-scrub-enabled="' +
       (scrubEnabled ? "true" : "false") +
@@ -4510,7 +4562,7 @@
       esc(fieldId) +
       '" data-box-summary="' +
       esc(boxSummaryKind) +
-      '" data-scrub-enabled="' +
+      '" data-editable="1" data-scrub-enabled="' +
       (scrubEnabled ? "true" : "false") +
       '" data-scrub-mode="' +
       esc(scrubMeta && scrubMeta.mode ? scrubMeta.mode : "") +
@@ -4541,9 +4593,52 @@
     );
   }
 
+  function panelFieldLabel(labelText) {
+    return (
+      '<div style="color:' +
+      PANEL_UI.labelColor +
+      ';font-size:10px;line-height:1.15;min-width:0;letter-spacing:.01em;">' +
+      esc(labelText) +
+      "</div>"
+    );
+  }
+
+  function panelFieldRow(labelText, contentHtml, opts) {
+    opts = opts || {};
+    return (
+      '<div data-vqa-field-row="' +
+      esc(labelText) +
+      '" style="display:grid;grid-template-columns:' +
+      PANEL_UI.labelWidth +
+      ' minmax(0,1fr);gap:8px;align-items:' +
+      (opts.alignTop ? "start" : "center") +
+      ';min-width:0;padding:8px 8px 9px;border:1px solid ' +
+      PANEL_UI.sectionBorder +
+      ';background:rgba(255,255,255,.022);border-radius:10px;box-sizing:border-box;">' +
+      panelFieldLabel(labelText) +
+      '<div style="min-width:0;width:100%;display:flex;align-items:' +
+      (opts.alignTop ? "flex-start" : "center") +
+      ';">' +
+      contentHtml +
+      "</div>" +
+      "</div>"
+    );
+  }
+
+  function panelTwoColFieldRow(leftLabel, leftFieldHtml, rightLabel, rightFieldHtml) {
+    return (
+      '<div data-vqa-field-grid="2" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:' +
+      PANEL_UI.rowGap +
+      ';align-items:start;">' +
+      fontFieldCell(leftLabel, leftFieldHtml) +
+      fontFieldCell(rightLabel, rightFieldHtml) +
+      "</div>"
+    );
+  }
+
   function rowPairEditable(leftLabel, leftValue, leftProp, rightLabel, rightValue, rightProp) {
     return (
-      '<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:' +
+      '<div data-vqa-field-grid="2" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:' +
       PANEL_UI.rowGap +
       ';align-items:start;">' +
       '<div style="display:grid;gap:5px;min-width:0;">' +
@@ -4577,43 +4672,38 @@
   function rowEditable(k, v, prop, type) {
     if (v == null || v === "") return "";
     var isWideField = type === "color" || prop === "fontFamily" || prop === "opacity";
-    return (
-      '<div style="display:grid;grid-template-columns:' +
-      PANEL_UI.labelWidth +
-      ' minmax(0,1fr);gap:' +
-      PANEL_UI.rowGap +
-      ';align-items:center;">' +
-      '<div style="color:' +
-      PANEL_UI.labelColor +
-      ';font-size:11px;line-height:1.25;">' +
-      esc(k) +
-      "</div>" +
-      '<div style="min-width:0;width:100%;' + (isWideField ? "" : "max-width:180px;") + '">' + editableFieldControl(prop, v, type) + "</div>" +
-      "</div>"
+    return panelFieldRow(
+      k,
+      '<div style="min-width:0;width:100%;' + (isWideField ? "" : "max-width:180px;") + '">' + editableFieldControl(prop, v, type) + "</div>",
+      { alignCenter: true }
     );
   }
 
   function fontFieldCell(labelText, fieldHtml) {
     return (
-      '<div style="display:grid;gap:5px;min-width:0;align-items:start;">' +
+      '<div style="display:flex;flex-direction:column;gap:6px;min-width:0;padding:8px 8px 9px;border:1px solid ' +
+      PANEL_UI.sectionBorder +
+      ';background:rgba(255,255,255,.022);border-radius:10px;box-sizing:border-box;min-height:58px;">' +
       '<div style="color:' +
       PANEL_UI.labelColor +
-      ';font-size:11px;line-height:1.2;">' +
+      ';font-size:10px;line-height:1.1;letter-spacing:.01em;">' +
       esc(labelText) +
       "</div>" +
-      '<div style="min-width:0;width:100%;">' + fieldHtml + "</div>" +
+      '<div style="min-width:0;width:100%;flex:1 1 auto;display:flex;align-items:stretch;">' + fieldHtml + "</div>" +
       "</div>"
     );
   }
 
   function fontTwoColRow(leftLabel, leftFieldHtml, rightLabel, rightFieldHtml) {
-    return (
-      '<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:' +
-      PANEL_UI.rowGap +
-      ';align-items:start;">' +
-      fontFieldCell(leftLabel, leftFieldHtml) +
-      fontFieldCell(rightLabel, rightFieldHtml) +
-      "</div>"
+    return panelTwoColFieldRow(leftLabel, leftFieldHtml, rightLabel, rightFieldHtml);
+  }
+
+  function panelReadOnlyPair(labelTextA, valueA, labelTextB, valueB) {
+    return panelTwoColFieldRow(
+      labelTextA,
+      readOnlyFieldBlock(valueA, valueA),
+      labelTextB,
+      readOnlyFieldBlock(valueB, valueB)
     );
   }
 
@@ -4623,9 +4713,13 @@
 
   function renderTextEditorRow(value) {
     return (
-      '<div style="min-width:0;width:100%;">' +
+      panelFieldRow(
+        "内容",
+        '<div data-vqa-field="text-content" style="min-width:0;width:100%;">' +
       editableFieldControl("text-content", value, "text", { controlType: "textarea" }) +
-      "</div>"
+      "</div>",
+        { alignTop: true }
+      )
     );
   }
 
@@ -4638,38 +4732,38 @@
         }).join("") +
         "</div>"
       : "";
-    return (
-      '<div style="display:grid;grid-template-columns:' +
-      PANEL_UI.labelWidth +
-      ' minmax(0,1fr);gap:' +
-      PANEL_UI.rowGap +
-      ';align-items:start;">' +
-      '<div style="color:' +
-      PANEL_UI.labelColor +
-      ';font-size:11px;line-height:1.25;">' +
-      esc(labelText) +
-      "</div>" +
-      '<div style="min-width:0;width:100%;">' +
-      contentHtml +
-      "</div>" +
-      "</div>"
-    );
+    return panelFieldRow(labelText, contentHtml, { alignTop: true });
   }
 
   function renderColorAlphaRow(labelText, prop, colorValue, opts) {
     opts = opts || {};
     var colorMeta = getColorComponents(colorValue);
     var controlGrid =
-      '<div style="display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,.9fr);gap:' +
+      '<div data-vqa-field="color-alpha" style="display:grid;grid-template-columns:minmax(0,1.25fr) minmax(96px,.75fr);gap:' +
       PANEL_UI.rowGap +
-      ';">' +
-      editableFieldControl(prop, colorMeta.hex, "color") +
-      '<div style="position:relative;min-width:0;">' +
+      ';align-items:stretch;">' +
+      '<div style="display:flex;flex-direction:column;gap:6px;min-width:0;padding:8px 8px 9px;border:1px solid ' +
+      PANEL_UI.sectionBorder +
+      ';background:rgba(255,255,255,.022);border-radius:10px;box-sizing:border-box;min-height:58px;">' +
+      '<div style="color:' +
+      PANEL_UI.labelColor +
+      ';font-size:10px;line-height:1.1;letter-spacing:.01em;">色值</div>' +
+      '<div style="min-width:0;width:100%;flex:1 1 auto;display:flex;align-items:stretch;">' +
+        editableFieldControl(prop, colorMeta.hex, "color") +
+      "</div>" +
+      "</div>" +
+      '<div style="display:flex;flex-direction:column;gap:6px;min-width:0;padding:8px 8px 9px;border:1px solid ' +
+      PANEL_UI.sectionBorder +
+      ';background:rgba(255,255,255,.022);border-radius:10px;box-sizing:border-box;min-height:58px;">' +
+      '<div style="color:' +
+      PANEL_UI.labelColor +
+      ';font-size:10px;line-height:1.1;letter-spacing:.01em;">透明度</div>' +
+      '<div style="position:relative;min-width:0;flex:1 1 auto;">' +
       '<input type="text" inputmode="decimal" autocomplete="off" spellcheck="false" data-field-id="' +
       esc(prop + "-alpha") +
       '" data-color-alpha-prop="' +
       esc(prop) +
-      '" data-scrub-enabled="true" data-scrub-locked="false" data-prop="opacity" value="' +
+      '" data-editable="1" data-scrub-enabled="true" data-scrub-locked="false" data-prop="opacity" value="' +
       esc(String(colorMeta.alpha) + "%") +
       '" style="width:100%;height:' +
       PANEL_UI.controlHeight +
@@ -4685,22 +4779,7 @@
       "</div>" +
       "</div>";
     if (opts.hideLabel) return controlGrid;
-    return (
-      '<div style="display:grid;grid-template-columns:' +
-      PANEL_UI.labelWidth +
-      ' minmax(0,1fr);gap:' +
-      PANEL_UI.rowGap +
-      ';align-items:start;">' +
-      '<div style="color:' +
-      PANEL_UI.labelColor +
-      ';font-size:11px;line-height:1.25;">' +
-      esc(labelText) +
-      "</div>" +
-      '<div style="min-width:0;width:100%;">' +
-      controlGrid +
-      "</div>" +
-      "</div>"
-    );
+    return panelFieldRow(labelText, controlGrid, { alignTop: true });
   }
 
   function displayRadiusValue(v) {
@@ -4712,13 +4791,15 @@
     if (!style) return "";
     function cell(label, prop, value) {
       return (
-        '<div style="display:flex;align-items:center;gap:6px;min-width:0;">' +
-        '<div style="min-width:16px;color:' +
+        '<div style="display:flex;flex-direction:column;gap:6px;min-width:0;padding:8px 8px 9px;border:1px solid ' +
+        PANEL_UI.sectionBorder +
+        ';background:rgba(255,255,255,.022);border-radius:10px;box-sizing:border-box;min-height:58px;">' +
+        '<div style="color:' +
         PANEL_UI.labelColor +
-        ';font-size:11px;">' +
+        ';font-size:10px;line-height:1.1;">' +
         label +
         "</div>" +
-        '<div style="flex:1;min-width:0;">' +
+        '<div style="min-width:0;flex:1 1 auto;display:flex;align-items:stretch;">' +
         editableFieldControl(prop, value, null, { disabled: !!disabled }) +
         "</div>" +
         "</div>"
@@ -4740,13 +4821,15 @@
     if (!box) return "";
     function cell(label, prop, value) {
       return (
-        '<div style="display:flex;align-items:center;gap:6px;min-width:0;">' +
-        '<div style="min-width:16px;color:' +
+        '<div style="display:flex;flex-direction:column;gap:6px;min-width:0;padding:8px 8px 9px;border:1px solid ' +
+        PANEL_UI.sectionBorder +
+        ';background:rgba(255,255,255,.022);border-radius:10px;box-sizing:border-box;min-height:58px;">' +
+        '<div style="color:' +
         PANEL_UI.labelColor +
-        ';font-size:11px;">' +
+        ';font-size:10px;line-height:1.1;">' +
         label +
         "</div>" +
-        '<div style="flex:1;min-width:0;">' +
+        '<div style="min-width:0;flex:1 1 auto;display:flex;align-items:stretch;">' +
         editableFieldControl(prop, value) +
         "</div>" +
         "</div>"
@@ -4782,20 +4865,20 @@
     rows = rows.filter(Boolean);
     if (!rows.length) return "";
     return (
-      '<div style="margin-top:' +
-      PANEL_UI.sectionGap +
-      ';padding-top:' +
-      PANEL_UI.sectionGap +
-      ';border-top:1px solid ' +
+      '<section data-vqa-section="' +
+      esc(title) +
+      '" style="display:flex;flex-direction:column;gap:8px;padding-top:8px;border-top:1px solid ' +
       PANEL_UI.sectionBorder +
       ';">' +
-      '<div style="margin-bottom:10px;font-size:12px;font-weight:700;letter-spacing:.01em;color:' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:11px;font-weight:700;line-height:1.1;letter-spacing:.01em;color:' +
       (color || PANEL_UI.sectionTitleColor) +
       ';">' +
       esc(title) +
       "</div>" +
+      '<div style="display:flex;flex-direction:column;gap:8px;min-width:0;">' +
       rows.join("") +
-      "</div>"
+      "</div>" +
+      "</section>"
     );
   }
 
@@ -5319,62 +5402,47 @@
 
   function renderMainRow(labelText, mainHtml, toggleAction, expanded) {
     return (
-      '<div style="display:grid;grid-template-columns:' +
+      '<div data-vqa-field-row="toggle" style="display:grid;grid-template-columns:' +
       PANEL_UI.labelWidth +
-      ' minmax(0,1fr) auto;gap:' +
-      PANEL_UI.rowGap +
-      ';align-items:center;">' +
-      '<div style="color:' +
-      PANEL_UI.labelColor +
-      ';font-size:11px;line-height:1.25;">' +
-      esc(labelText) +
-      "</div>" +
-      '<div style="min-width:0;">' +
+      ' minmax(0,1fr) 28px;gap:8px;align-items:stretch;min-width:0;">' +
+      panelFieldLabel(labelText) +
+      '<div style="min-width:0;display:flex;align-items:stretch;">' +
       mainHtml +
       "</div>" +
+      '<div style="display:flex;align-items:flex-start;justify-content:flex-end;min-width:0;padding-top:0;">' +
       '<button data-action="' +
       esc(toggleAction) +
-      '" style="height:' +
-      PANEL_UI.controlHeight +
-      ';flex:0 0 auto;border:1px solid ' +
+      '" style="height:22px;width:22px;flex:0 0 auto;border:1px solid ' +
       PANEL_UI.buttonBorder +
       ';background:' +
       PANEL_UI.buttonBg +
       ';color:' +
       PANEL_UI.buttonText +
-      ';border-radius:' +
-      PANEL_UI.inputRadius +
-      ';padding:0 10px;font:11px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;white-space:nowrap;">' +
-      (expanded ? "收起" : "展开") +
+      ';border-radius:7px;padding:0;font:10px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;white-space:nowrap;">' +
+      (expanded ? "−" : "+") +
       "</button>" +
+      "</div>" +
       "</div>"
     );
   }
 
   function renderExpandedBlock(detailHtml) {
     return (
-      '<div style="margin-top:6px;padding-left:calc(' +
+      '<div style="display:grid;grid-template-columns:' +
       PANEL_UI.labelWidth +
-      " + " +
-      PANEL_UI.rowGap +
-      ');">' +
+      ' minmax(0,1fr) 28px;gap:8px;align-items:start;">' +
+      '<div></div>' +
+      '<div style="min-width:0;">' +
       detailHtml +
+      "</div>" +
+      '<div></div>' +
       "</div>"
     );
   }
 
   function renderRelationSummaryRow(labelText, summaryText) {
-    return (
-      '<div style="display:grid;grid-template-columns:' +
-      PANEL_UI.labelWidth +
-      ' minmax(0,1fr);gap:' +
-      PANEL_UI.rowGap +
-      ';align-items:center;">' +
-      '<div style="color:' +
-      PANEL_UI.labelColor +
-      ';font-size:11px;line-height:1.25;">' +
-      esc(labelText) +
-      "</div>" +
+    return panelFieldRow(
+      labelText,
       '<div style="display:flex;align-items:center;min-width:0;min-height:' +
       PANEL_UI.controlHeight +
       ';padding:0 10px;border-radius:' +
@@ -5389,8 +5457,8 @@
       esc(summaryText) +
       '">' +
       esc(summaryText) +
-      "</div>" +
-      "</div>"
+      "</div>",
+      { alignCenter: true }
     );
   }
 
@@ -7378,9 +7446,9 @@
 
   var topbar = make(
     "div",
-    "position:fixed;left:50%;top:18px;transform:translateX(-50%);display:flex;align-items:center;gap:8px;padding:8px;border-radius:999px;background:#14161a;border:1px solid rgba(255,255,255,.08);box-shadow:0 18px 42px rgba(15,23,42,.22);z-index:" +
+    "position:fixed;left:50%;bottom:30px;transform:translateX(-50%);z-index:" +
       (CONFIG.zIndexTooltip + 2) +
-      ";color:#fff;user-select:none;"
+      ";color:#fff;user-select:none;pointer-events:auto;"
   );
 
   var recordMenu = make(
@@ -7439,8 +7507,29 @@
       ";display:none;"
   );
 
+  var topbarTooltip = make(
+    "div",
+    "position:fixed;left:0;top:0;z-index:" +
+      (CONFIG.zIndexTooltip + 6) +
+      ";pointer-events:none;opacity:0;transition:opacity 120ms ease;will-change:opacity;"
+  );
+  topbarTooltip.innerHTML =
+    '<div data-v12-topbar-tooltip-card="1" style="position:relative;display:inline-flex;align-items:center;min-width:0;max-width:212px;padding:6px 12px;border-radius:6px;background:#404040;border:0;box-shadow:0 1px 0 rgba(255,255,255,.04) inset,0 2px 6px rgba(0,0,0,.18);color:#fff;backdrop-filter:none;">' +
+    '<div data-v12-topbar-tooltip-arrow="1" style="position:absolute;left:50%;top:-4px;transform:translateX(-50%);width:0;height:0;border-left:4px solid transparent;border-right:4px solid transparent;border-bottom:4px solid #404040;filter:none;"></div>' +
+    '<div data-v12-topbar-tooltip-label="1" style="min-width:0;flex:1 1 auto;color:#fff;font:400 11px/1 \'PingFang SC\',-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;white-space:nowrap;letter-spacing:0;">选择 V</div>' +
+    '<div data-v12-topbar-tooltip-shortcut="1" style="display:none;"></div>' +
+    "</div>";
+  var topbarTooltipCard = topbarTooltip.querySelector("[data-v12-topbar-tooltip-card]");
+  var topbarTooltipLabel = topbarTooltip.querySelector("[data-v12-topbar-tooltip-label]");
+  var topbarTooltipShortcut = topbarTooltip.querySelector("[data-v12-topbar-tooltip-shortcut]");
+
   var topbarDom = {
     ready: false,
+    shell: null,
+    toolbar: null,
+    group: null,
+    divider: null,
+    drawerSlot: null,
     selectBtn: null,
     measureBtn: null,
     recordElementBtn: null,
@@ -7448,25 +7537,39 @@
     drawerBtn: null,
   };
 
-  function modeButtonHtml(id, labelText, active, badgeText, extraClass) {
+  function topbarButtonHtml(action, labelText, iconUrl, active) {
+    var iconMarkup = iconUrl
+      ? '<span class="v12-topbar-icon-slot" aria-hidden="true">' +
+        '<img class="v12-topbar-icon" src="' +
+        esc(iconUrl) +
+        '" alt="" draggable="false">' +
+        "</span>"
+      : '<span class="v12-topbar-icon-slot" aria-hidden="true"></span>';
     return (
-      '<button type="button" class="v12-topbar-btn' +
-      (extraClass ? " " + extraClass : "") +
-      '" data-v12-action="' +
-      esc(id) +
+      '<button type="button" class="v12-topbar-btn v12-topbar-icon-btn" data-v12-action="' +
+      esc(action) +
       '" data-active="' +
       (active ? "true" : "false") +
       '" data-pressed="' +
-      (state.v12.topbarPressedAction === id ? "true" : "false") +
-      '">' +
-      '<span class="v12-topbar-label">' +
+      (state.v12.topbarPressedAction === action ? "true" : "false") +
+      '" aria-label="' +
       esc(labelText) +
+      '">' +
+      iconMarkup +
+      "</button>"
+    );
+  }
+
+  function topbarDrawerEntryHtml(count, active) {
+    return (
+      '<button type="button" class="v12-topbar-btn v12-topbar-drawer-entry" data-v12-action="toggle-drawer" data-active="' +
+      (active ? "true" : "false") +
+      '" data-pressed="' +
+      (state.v12.topbarPressedAction === "toggle-drawer" ? "true" : "false") +
+      '" aria-label="记录抽屉">' +
+      '<span class="v12-topbar-count">' +
+      esc(String(count)) +
       "</span>" +
-      (badgeText == null
-        ? ""
-        : '<span class="v12-topbar-badge">' +
-          esc(String(badgeText)) +
-          "</span>") +
       "</button>"
     );
   }
@@ -7476,21 +7579,30 @@
     var style = document.createElement("style");
     style.id = "v12-topbar-styles";
     style.textContent =
-      ".v12-topbar-btn{display:inline-flex;align-items:center;gap:8px;padding:10px 14px;border:0;border-radius:999px;background:transparent;color:rgba(255,255,255,.82);font:14px/1.1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;font-weight:500;cursor:pointer;white-space:nowrap;user-select:none;transition:background-color 120ms ease,color 120ms ease,box-shadow 120ms ease,transform 120ms ease;touch-action:manipulation;}" +
-      ".v12-topbar-btn:hover{background:rgba(255,255,255,.075);}" +
-      ".v12-topbar-btn:active,.v12-topbar-btn[data-pressed=\"true\"]{background:rgba(255,255,255,.14);transform:translateY(1px);}" +
-      ".v12-topbar-btn[data-active=\"true\"]{background:#ffffff;color:#111827;font-weight:700;}" +
-      ".v12-topbar-btn[data-active=\"true\"]:hover{background:#ffffff;}" +
-      ".v12-topbar-btn[data-active=\"true\"]:active,.v12-topbar-btn[data-active=\"true\"][data-pressed=\"true\"]{background:#f3f4f6;transform:translateY(1px);}" +
-      ".v12-topbar-btn[data-active=\"true\"] .v12-topbar-badge{background:#111827;color:#fff;}" +
-      ".v12-topbar-label{pointer-events:none;}" +
-      ".v12-topbar-btn > span{pointer-events:none;}" +
-      ".v12-topbar-badge{pointer-events:none;min-width:20px;height:20px;padding:0 6px;border-radius:999px;background:rgba(255,255,255,.1);color:rgba(255,255,255,.9);display:inline-flex;align-items:center;justify-content:center;font-size:11px;line-height:1;}" +
-      ".v12-topbar-btn.v12-drawer-entry{min-width:40px;justify-content:center;padding:10px 12px;font-variant-numeric:tabular-nums;}" +
-      ".v12-topbar-btn.v12-drawer-entry .v12-topbar-label{min-width:1ch;text-align:center;}" +
-      ".v12-topbar-btn.v12-drawer-entry[data-active=\"true\"]{background:#ffffff;color:#111827;font-weight:700;}" +
-      ".v12-topbar-btn.v12-drawer-entry[data-active=\"true\"]:hover{background:#ffffff;}" +
-      ".v12-topbar-btn.v12-drawer-entry[data-active=\"true\"]:active,.v12-topbar-btn.v12-drawer-entry[data-active=\"true\"][data-pressed=\"true\"]{background:#f3f4f6;transform:translateY(1px);}";
+      ".v12-topbar-toolbar{display:inline-flex;align-items:center;gap:0;height:50px;box-sizing:border-box;padding:6.9px 8.6px 6.9px 6.9px;background:#343434;border:0;border-radius:12px;box-shadow:0 1px 0 rgba(255,255,255,.03) inset,0 8px 20px rgba(0,0,0,.18);backdrop-filter:none;}" +
+      ".v12-topbar-group{display:flex;align-items:center;gap:13.793px;}" +
+      ".v12-topbar-divider{width:1px;align-self:center;height:50px;background:rgba(255,255,255,.1);margin:0 13px;opacity:.55;}" +
+      ".v12-topbar-drawer-slot{display:flex;align-items:center;justify-content:center;margin-left:0;}" +
+      ".v12-topbar-btn{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;border:0;background:transparent;color:rgba(255,255,255,.82);cursor:pointer;user-select:none;touch-action:manipulation;transition:background-color 120ms ease,color 120ms ease,box-shadow 120ms ease,transform 120ms ease,filter 120ms ease;}" +
+      ".v12-topbar-btn:focus{outline:none;}" +
+      ".v12-topbar-icon-btn{width:36.207px;height:36.207px;border-radius:5px;}" +
+      ".v12-topbar-icon-btn:hover{background:rgba(255,255,255,.05);}" +
+      ".v12-topbar-icon-btn:active,.v12-topbar-icon-btn[data-pressed=\"true\"]{background:rgba(255,255,255,.09);transform:translateY(1px);}" +
+      ".v12-topbar-icon-btn[data-active=\"true\"]{background:#0084ff;color:#fff;box-shadow:none;}" +
+      ".v12-topbar-icon-btn[data-active=\"true\"]:hover{background:#1a8cff;}" +
+      ".v12-topbar-icon-btn[data-active=\"true\"]:active,.v12-topbar-icon-btn[data-active=\"true\"][data-pressed=\"true\"]{background:#0075e6;}" +
+      ".v12-topbar-icon-btn[data-active=\"true\"] .v12-topbar-icon{filter:brightness(0) invert(1);}" +
+      ".v12-topbar-icon-slot{display:inline-flex;align-items:center;justify-content:center;width:100%;height:100%;pointer-events:none;}" +
+      ".v12-topbar-icon{display:block;width:23.2px;height:23.2px;pointer-events:none;object-fit:contain;}" +
+      ".v12-topbar-drawer-entry{width:36.207px;height:36.207px;border-radius:5px;color:rgba(255,255,255,.84);font-variant-numeric:tabular-nums;background:#404040;}" +
+      ".v12-topbar-drawer-entry:hover{background:#4a4a4a;color:#fff;}" +
+      ".v12-topbar-drawer-entry:active,.v12-topbar-drawer-entry[data-pressed=\"true\"]{background:#4f4f4f;transform:translateY(1px);}" +
+      ".v12-topbar-drawer-entry[data-active=\"true\"]{background:#404040;color:#fff;box-shadow:none;}" +
+      ".v12-topbar-drawer-entry[data-active=\"true\"]:hover{background:#4a4a4a;}" +
+      ".v12-topbar-drawer-entry[data-active=\"true\"]:active,.v12-topbar-drawer-entry[data-active=\"true\"][data-pressed=\"true\"]{background:#4f4f4f;}" +
+      ".v12-topbar-count{display:inline-flex;align-items:center;justify-content:center;min-width:1ch;pointer-events:none;font:400 13.793px/1 'PingFang SC',-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;letter-spacing:0;}" +
+      ".v12-topbar-btn[data-v12-action]{position:relative;}" +
+      ".v12-topbar-btn[data-v12-action]::after{content:'';position:absolute;left:50%;bottom:-8px;transform:translateX(-50%);width:100%;height:16px;pointer-events:none;}";
     document.head.appendChild(style);
   }
 
@@ -7624,25 +7736,167 @@
   function ensureTopbarDom() {
     ensureFloatingControlStyles();
     ensureTopbarStyles();
+    if (!TOPBAR_ICON_URLS_READY || !TOPBAR_ICON_URLS) {
+      getTopbarIconUrlsFromBridge()
+        .then(function () {
+          if (topbarDom.ready) {
+            topbarDom.ready = false;
+            ensureTopbarDom();
+            syncTopbar();
+            if (!state.panelCollapsed) schedule();
+          }
+        })
+        .catch(function () {
+          if (!topbarDom.ready) {
+            schedule();
+          }
+        });
+    }
     if (topbarDom.ready) return;
     topbar.innerHTML =
-      modeButtonHtml("mode-select", "选择", isSelectMode(), null) +
-      modeButtonHtml("mode-measure", "测量", false, null) +
-      modeButtonHtml("record-element", "记录元素", isRecordElementMode(), null) +
-      modeButtonHtml("record-region", "记录区域", isRecordRegionMode(), null) +
-      '<button type="button" class="v12-topbar-btn v12-drawer-entry" data-v12-action="toggle-drawer" data-active="' +
-      (state.v12.drawerOpen ? "true" : "false") +
-      '" data-pressed="' +
-      (state.v12.topbarPressedAction === "toggle-drawer" ? "true" : "false") +
-      '"><span class="v12-topbar-label">' +
-      esc(String(getV12RecordCount())) +
-      "</span></button>";
+      '<div class="v12-topbar-toolbar" data-v12-topbar-shell="1" role="toolbar" aria-label="顶部栏">' +
+      '<div class="v12-topbar-group" data-v12-topbar-group="1">' +
+      topbarButtonHtml("mode-select", "选择", TOPBAR_ICON_URLS && TOPBAR_ICON_URLS.select, isSelectMode()) +
+      topbarButtonHtml("mode-measure", "测量", TOPBAR_ICON_URLS && TOPBAR_ICON_URLS.measure, false) +
+      topbarButtonHtml("record-element", "记录元素", TOPBAR_ICON_URLS && TOPBAR_ICON_URLS.recordElement, isRecordElementMode()) +
+      topbarButtonHtml("record-region", "记录框选", TOPBAR_ICON_URLS && TOPBAR_ICON_URLS.recordRegion, isRecordRegionMode()) +
+      "</div>" +
+      '<div class="v12-topbar-divider" aria-hidden="true" data-v12-topbar-divider="1"></div>' +
+      '<div class="v12-topbar-drawer-slot" data-v12-topbar-drawer-slot="1">' +
+      topbarDrawerEntryHtml(getV12RecordCount(), state.v12.drawerOpen) +
+      "</div>" +
+      "</div>";
     topbarDom.selectBtn = topbar.querySelector('[data-v12-action="mode-select"]');
     topbarDom.measureBtn = topbar.querySelector('[data-v12-action="mode-measure"]');
     topbarDom.recordElementBtn = topbar.querySelector('[data-v12-action="record-element"]');
     topbarDom.recordRegionBtn = topbar.querySelector('[data-v12-action="record-region"]');
     topbarDom.drawerBtn = topbar.querySelector('[data-v12-action="toggle-drawer"]');
+    topbarDom.shell = topbar.querySelector("[data-v12-topbar-shell]");
+    topbarDom.toolbar = topbar.querySelector(".v12-topbar-toolbar");
+    topbarDom.group = topbar.querySelector("[data-v12-topbar-group]");
+    topbarDom.divider = topbar.querySelector("[data-v12-topbar-divider]");
+    topbarDom.drawerSlot = topbar.querySelector("[data-v12-topbar-drawer-slot]");
     topbarDom.ready = true;
+  }
+
+  function getTopbarTooltipMeta(action) {
+    return TOPBAR_TOOLTIP_META[action] || null;
+  }
+
+  function getTopbarTooltipActionFromTarget(target) {
+    if (!target || !target.closest) return "";
+    var button = target.closest("[data-v12-action]");
+    if (!button || !topbar.contains(button)) return "";
+    var action = button.getAttribute("data-v12-action") || "";
+    return getTopbarTooltipMeta(action) ? action : "";
+  }
+
+  function syncTopbarTooltipGeometry(anchorRect) {
+    if (!anchorRect) return;
+    var tooltipRect = topbarTooltip.getBoundingClientRect();
+    var width = tooltipRect.width || topbarTooltip.offsetWidth || 0;
+    var height = tooltipRect.height || topbarTooltip.offsetHeight || 0;
+    var desiredLeft = anchorRect.left + anchorRect.width / 2 - width / 2;
+    var left = clamp(desiredLeft, 8, Math.max(8, window.innerWidth - width - 8));
+    var top = anchorRect.top - height - 9;
+    var placement = "above";
+    if (top < 8) {
+      top = anchorRect.bottom + 9;
+      placement = "below";
+    }
+    topbarTooltip.style.left = left + "px";
+    topbarTooltip.style.top = top + "px";
+    if (topbarTooltipCard) {
+      topbarTooltipCard.setAttribute("data-placement", placement);
+      var arrowLeft = clamp(anchorRect.left + anchorRect.width / 2 - left, 20, Math.max(20, width - 20));
+      var arrow = topbarTooltip.querySelector("[data-v12-topbar-tooltip-arrow]");
+      if (arrow) {
+        arrow.style.left = arrowLeft + "px";
+        if (placement === "above") {
+          arrow.style.top = "auto";
+          arrow.style.bottom = "-5px";
+          arrow.style.borderBottom = "0";
+          arrow.style.borderTop = "5px solid rgba(18,20,25,.96)";
+        } else {
+          arrow.style.bottom = "auto";
+          arrow.style.top = "-5px";
+          arrow.style.borderTop = "0";
+          arrow.style.borderBottom = "5px solid rgba(18,20,25,.96)";
+        }
+      }
+    }
+  }
+
+  function renderTopbarTooltip() {
+    var tooltipState = state.v12.topbarTooltip;
+    if (!tooltipState || !tooltipState.visible || !tooltipState.key) {
+      topbarTooltip.style.opacity = "0";
+      return;
+    }
+    var meta = getTopbarTooltipMeta(tooltipState.key);
+    if (!meta) {
+      topbarTooltip.style.opacity = "0";
+      return;
+    }
+    var anchor = topbar.querySelector('[data-v12-action="' + tooltipState.key + '"]');
+    if (anchor && anchor.getBoundingClientRect) {
+      var rect = anchor.getBoundingClientRect();
+      tooltipState.anchorRect = {
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+        width: rect.width,
+        height: rect.height
+      };
+    }
+    if (topbarTooltipLabel) topbarTooltipLabel.textContent = meta.label + " " + meta.shortcut;
+    if (topbarTooltipShortcut) topbarTooltipShortcut.textContent = meta.shortcut;
+    topbarTooltip.style.opacity = "1";
+    syncTopbarTooltipGeometry(tooltipState.anchorRect);
+  }
+
+  function hideTopbarTooltip(immediate) {
+    window.clearTimeout(topbarTooltipHideTimerId);
+    topbarTooltipHideTimerId = 0;
+    state.v12.topbarTooltip.visible = false;
+    state.v12.topbarTooltip.key = "";
+    state.v12.topbarTooltip.label = "";
+    state.v12.topbarTooltip.shortcut = "";
+    state.v12.topbarTooltip.anchorRect = null;
+    if (immediate) {
+      topbarTooltip.style.opacity = "0";
+      return;
+    }
+    renderTopbarTooltip();
+  }
+
+  function showTopbarTooltipForAction(action, anchorEl) {
+    var meta = getTopbarTooltipMeta(action);
+    if (!meta || !anchorEl || !anchorEl.getBoundingClientRect) return;
+    window.clearTimeout(topbarTooltipHideTimerId);
+    topbarTooltipHideTimerId = 0;
+    var rect = anchorEl.getBoundingClientRect();
+    state.v12.topbarTooltip.visible = true;
+    state.v12.topbarTooltip.key = action;
+    state.v12.topbarTooltip.label = meta.label;
+    state.v12.topbarTooltip.shortcut = meta.shortcut;
+    state.v12.topbarTooltip.anchorRect = {
+      left: rect.left,
+      top: rect.top,
+      right: rect.right,
+      bottom: rect.bottom,
+      width: rect.width,
+      height: rect.height
+    };
+    renderTopbarTooltip();
+  }
+
+  function scheduleHideTopbarTooltip() {
+    window.clearTimeout(topbarTooltipHideTimerId);
+    topbarTooltipHideTimerId = window.setTimeout(function () {
+      hideTopbarTooltip(true);
+    }, 140);
   }
 
   function syncTopbarButton(btn, active, pressed) {
@@ -7659,7 +7913,7 @@
     syncTopbarButton(topbarDom.recordRegionBtn, isRecordRegionMode(), state.v12.topbarPressedAction === "record-region");
     syncTopbarButton(topbarDom.drawerBtn, state.v12.drawerOpen, state.v12.topbarPressedAction === "toggle-drawer");
     if (topbarDom.drawerBtn) {
-      var drawerLabel = topbarDom.drawerBtn.querySelector(".v12-topbar-label");
+      var drawerLabel = topbarDom.drawerBtn.querySelector(".v12-topbar-count");
       if (drawerLabel) drawerLabel.textContent = String(getV12RecordCount());
     }
   }
@@ -8207,7 +8461,7 @@
         "</div>" +
         "</div>" +
         '<div class="v12-record-composer-note">' +
-        '<textarea data-v12-action="record-note" placeholder="写下问题说明">' +
+        '<textarea data-v12-action="record-note" data-editable="1" data-note-input="1" placeholder="写下问题说明">' +
         esc(record.note || "") +
         "</textarea>" +
         "</div>" +
@@ -8398,6 +8652,27 @@
     e.stopPropagation();
   }
 
+  function onV12TopbarPointerOver(e) {
+    if (e.pointerType && e.pointerType === "touch") return;
+    var action = getTopbarTooltipActionFromTarget(e.target);
+    if (!action) return;
+    var button = e.target && e.target.closest ? e.target.closest("[data-v12-action]") : null;
+    if (!button) return;
+    showTopbarTooltipForAction(action, button);
+  }
+
+  function onV12TopbarPointerOut(e) {
+    if (e.pointerType && e.pointerType === "touch") return;
+    var related = e.relatedTarget || null;
+    if (related && related.closest) {
+      var relatedAction = getTopbarTooltipActionFromTarget(related);
+      if (relatedAction) return;
+      if (topbar.contains(related)) return;
+      if (topbarTooltip.contains(related)) return;
+    }
+    scheduleHideTopbarTooltip();
+  }
+
   function onV12Click(e) {
     var target = e.target && e.target.closest ? e.target.closest("[data-v12-action]") : null;
     if (!target) return;
@@ -8517,12 +8792,16 @@
   }
 
   tooltip.innerHTML =
-    '<div id="vqa-head" style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;background:' +
+    '<div id="vqa-head" style="display:flex;flex-direction:column;gap:6px;padding:6px 8px 8px;background:' +
     PANEL_UI.headBg +
     ';border-bottom:1px solid ' +
     PANEL_UI.sectionBorder +
     ';cursor:move;user-select:none;white-space:nowrap;">' +
-    '<div id="vqa-title" style="min-width:0;flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:700;font-size:12px;line-height:1.2;color:' +
+    '<div style="display:flex;justify-content:center;align-items:center;height:10px;">' +
+    '<div style="width:42px;height:4px;border-radius:999px;background:rgba(255,255,255,.22);"></div>' +
+    "</div>" +
+    '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0;">' +
+    '<div id="vqa-title" style="min-width:0;flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:700;font-size:11px;line-height:1.1;color:' +
     PANEL_UI.titleColor +
     ';">视觉走查</div>' +
     '<div id="vqa-actions" style="display:flex;flex-wrap:nowrap;justify-content:flex-end;gap:6px;flex:0 0 auto;">' +
@@ -8541,7 +8820,8 @@
     "</button>" +
     "</div>" +
     "</div>" +
-    '<div id="vqa-body" style="padding:10px 10px 12px;"></div>';
+    "</div>" +
+    '<div id="vqa-body" style="padding:8px 8px 10px;"></div>';
 
   var body = tooltip.querySelector("#vqa-body");
   var head = tooltip.querySelector("#vqa-head");
@@ -8553,14 +8833,14 @@
     if (shouldShowSelectedPanel()) {
       tooltip.style.minWidth = PANEL_UI.panelMinWidth;
       tooltip.style.maxWidth = PANEL_UI.panelMaxWidth;
-      tooltip.style.borderRadius = PANEL_UI.radius;
-      head.style.padding = "8px 10px";
+      tooltip.style.borderRadius = "11px";
+      head.style.padding = "6px 8px 8px";
       head.style.display = "flex";
       head.style.cursor = "move";
       headActionsWrap.style.display = "flex";
       btnMeasure.style.display = "none";
       btnReset.style.display = "inline-flex";
-      body.style.padding = "10px 10px 12px";
+      body.style.padding = "8px 8px 10px";
       return;
     }
 
@@ -8572,7 +8852,7 @@
     headActionsWrap.style.display = "none";
     btnMeasure.style.display = "none";
     btnReset.style.display = "none";
-    body.style.padding = "9px 10px";
+    body.style.padding = "8px 8px 9px";
     headTitleEl.textContent = "视觉走查";
     headTitleEl.title = "视觉走查";
   }
@@ -9328,28 +9608,15 @@
       "</div>";
   }
 
-  function renderSelectedPanel(el) {
-    if (!el) {
-      body.innerHTML = '<div style="color:#8FA1B3;">点击页面元素后锁定为 A，查看并直接编辑完整属性。</div>';
-      return;
-    }
-    var style = getComputedStyle(el);
-    var capabilities = buildSelectedCapabilities(el, style);
-    var padding = boxValues(style, "padding");
-    var margin = boxValues(style, "margin");
-    var modifiedCount = Object.keys(state.modifiedProps).length;
-    var resetDisabled = !modifiedCount;
+  function renderSelectedElementSummarySection(el) {
+    var primaryLabel = shortHoverLabel(el) || label(el) || "元素";
+    var secondaryLabel = label(el) || primaryLabel;
+    return section("元素", [
+      panelReadOnlyPair("名称", primaryLabel, "节点", secondaryLabel)
+    ]);
+  }
 
-    var titleText = panelTitle(el);
-    headTitleEl.textContent = titleText;
-    headTitleEl.title = label(el);
-    btnReset.disabled = resetDisabled;
-    btnReset.style.opacity = resetDisabled ? "0.45" : "1";
-    btnReset.style.cursor = resetDisabled ? "default" : "pointer";
-    btnReset.title = "重置本次修改";
-
-    var textValue = capabilities.canEditTextContent ? getEditableTextValue(el) : "";
-    var showTextEditor = capabilities.canEditTextContent && !!String(textValue || "").trim();
+  function renderSelectedLayoutSection(style, padding, margin, capabilities) {
     var paddingMain =
       state.spacingExpanded.padding
         ? ""
@@ -9370,64 +9637,104 @@
           "</div>" +
           "</div>";
 
+    return section("布局", [
+      rowPairEditable("宽", style.width, "width", "高", style.height, "height"),
+      renderMarginVisibleRow("外边距", margin),
+      renderMainRow("内边距", paddingMain, "toggle-padding", state.spacingExpanded.padding),
+      state.spacingExpanded.padding ? renderExpandedBlock(boxEditorFields(padding, "padding")) : ""
+    ]);
+  }
+
+  function renderSelectedFontSection(style, capabilities) {
+    if (!capabilities.hasTextStyles) return "";
+    return section("字体", [
+      fontTwoColRow(
+        "字族",
+        editableFieldControl("fontFamily", capabilities.fontFamilyPrimary, null, {
+          controlType: "select",
+          options: capabilities.fontFamilyOptions
+        }),
+        "字重",
+        editableFieldControl("fontWeight", style.fontWeight, null, {
+          controlType: "select",
+          options: capabilities.fontWeightOptions
+        })
+      ),
+      fontTwoColRow(
+        "字号",
+        editableFieldControl("fontSize", style.fontSize),
+        "行高",
+        editableFieldControl("lineHeight", style.lineHeight)
+      ),
+      renderColorAlphaRow("字色", "color", style.color, { hideLabel: true })
+    ]);
+  }
+
+  function renderSelectedAppearanceSection(style, capabilities) {
+    return section("外观", [
+      rowEditable("整体透明度", style.opacity, "opacity"),
+      renderMainRow(
+        "圆角",
+        editableFieldControl("borderRadius", style.borderRadius, null, {
+          disabled: !capabilities.canEditRadius
+        }),
+        "toggle-radius",
+        state.spacingExpanded.radius
+      ),
+      state.spacingExpanded.radius ? renderExpandedBlock(radiusCornerFields(style, !capabilities.canEditRadius)) : ""
+    ]);
+  }
+
+  function renderSelectedFillSection(style, capabilities) {
+    if (capabilities.canEditTextContent && isTransparentColor(style.backgroundColor)) return "";
+    if (isTransparentColor(style.backgroundColor)) return "";
+    return section("背景色", [
+      renderColorAlphaRow("背景色", "backgroundColor", style.backgroundColor)
+    ]);
+  }
+
+  function buildSelectedPanelSections(el, style, capabilities, textValue) {
+    var sections = [];
+    if (capabilities.canEditTextContent) {
+      sections.push(section("文本", [renderTextEditorRow(textValue)]));
+    } else {
+      sections.push(renderSelectedElementSummarySection(el));
+    }
+    sections.push(renderSelectedLayoutSection(style, boxValues(style, "padding"), boxValues(style, "margin"), capabilities));
+    sections.push(renderSelectedFontSection(style, capabilities));
+    sections.push(renderSelectedAppearanceSection(style, capabilities));
+    sections.push(renderSelectedFillSection(style, capabilities));
+    return sections.filter(Boolean);
+  }
+
+  function renderSelectedPanel(el) {
+    if (!el) {
+      body.innerHTML = '<div style="color:#8FA1B3;">点击页面元素后锁定为 A，查看并直接编辑完整属性。</div>';
+      return;
+    }
+    var style = getComputedStyle(el);
+    var capabilities = buildSelectedCapabilities(el, style);
+    var modifiedCount = Object.keys(state.modifiedProps).length;
+    var resetDisabled = !modifiedCount;
+
+    var titleText = panelTitle(el);
+    headTitleEl.textContent = titleText;
+    headTitleEl.title = label(el);
+    btnReset.disabled = resetDisabled;
+    btnReset.style.opacity = resetDisabled ? "0.45" : "1";
+    btnReset.style.cursor = resetDisabled ? "default" : "pointer";
+    btnReset.title = "重置本次修改";
+
+    var textValue = capabilities.canEditTextContent ? getEditableTextValue(el) : "";
+    var sections = buildSelectedPanelSections(el, style, capabilities, textValue);
     body.innerHTML =
-      section(
-        "布局",
-        [
-          showTextEditor ? renderTextEditorRow(textValue) : "",
-          rowPairEditable("宽", style.width, "width", "高", style.height, "height"),
-          renderMarginVisibleRow("外边距", margin),
-          renderMainRow("内边距", paddingMain, "toggle-padding", state.spacingExpanded.padding),
-          state.spacingExpanded.padding ? renderExpandedBlock(boxEditorFields(padding, "padding")) : ""
-        ]
-      ) +
-      section(
-        "外观",
-        [
-          rowEditable("整体透明度", style.opacity, "opacity"),
-          renderMainRow(
-            "圆角",
-            editableFieldControl("borderRadius", style.borderRadius, null, {
-              disabled: !capabilities.canEditRadius
-            }),
-            "toggle-radius",
-            state.spacingExpanded.radius
-          ),
-          state.spacingExpanded.radius ? renderExpandedBlock(radiusCornerFields(style, !capabilities.canEditRadius)) : ""
-        ]
-      ) +
-      section(
-        "字体",
-        capabilities.hasTextStyles
-          ? [
-              fontTwoColRow(
-                "字族",
-                editableFieldControl("fontFamily", capabilities.fontFamilyPrimary, null, {
-                  controlType: "select",
-                  options: capabilities.fontFamilyOptions
-                }),
-                "字重",
-                editableFieldControl("fontWeight", style.fontWeight, null, {
-                  controlType: "select",
-                  options: capabilities.fontWeightOptions
-                })
-              ),
-              fontTwoColRow(
-                "字号",
-                editableFieldControl("fontSize", style.fontSize),
-                "行高",
-                editableFieldControl("lineHeight", style.lineHeight)
-              ),
-              renderColorAlphaRow("字色", "color", style.color, { hideLabel: true })
-            ]
-          : []
-      ) +
-      section(
-        "填充",
-        [
-          !isTransparentColor(style.backgroundColor) ? renderColorAlphaRow("背景色", "backgroundColor", style.backgroundColor) : ""
-        ]
-      );
+      '<div data-vqa-panel-stack data-vqa-panel-kind="' +
+      esc(capabilities.canEditTextContent ? "text" : "element") +
+      '" style="display:flex;flex-direction:column;gap:' +
+      PANEL_UI.sectionGap +
+      ';">' +
+      sections.join("") +
+      "</div>";
     var textEditor = tooltip.querySelector('textarea[data-field-id="text-content"]');
     if (textEditor) syncTextareaAutoHeight(textEditor);
     logTargetDebug("render-selected-panel", el);
@@ -9588,6 +9895,7 @@
     if (collapsed) {
       tooltip.style.display = "none";
       topbar.style.display = "none";
+      hideTopbarTooltip(true);
       recordMenu.style.display = "none";
       regionCaptureOverlay.style.display = "none";
       recordComposer.style.display = "none";
@@ -9618,6 +9926,7 @@
       renderRecordPreview();
       renderRegionSelection();
     }
+    if (!collapsed && state.v12.topbarTooltip.visible) renderTopbarTooltip();
     renderDrawerStub();
     var el = getActiveEl();
     state.primaryMeasure = collapsed || isRecordMode() || measurementModeActive ? null : hasSelectedEl() ? resolvePrimaryMeasure(state.mouseX, state.mouseY, state.hoveredEl) : null;
@@ -9926,18 +10235,39 @@
     schedule();
   }
 
-  function shouldSuppressGlobalHotkeys(e) {
-    var target = e && e.target;
-    var active = document.activeElement;
-    var activeTag = (active && active.tagName ? active.tagName : "").toLowerCase();
-    if (active && (active.isContentEditable || /input|textarea|select/.test(activeTag))) return true;
-    if (state.v12.recordMenuOpen) return true;
-    if (target && target.closest) {
-      if (target.closest("[data-v12-action=\"record-note\"]")) return true;
-      if (state.v12.categoryMenuOpen && target.closest("[data-v12-action=\"toggle-category-menu\"], [data-v12-action=\"pick-category\"]")) return true;
+  function isTypingContext(target) {
+    var el = target && target.nodeType === 1 ? target : target && target.parentElement ? target.parentElement : null;
+    while (el) {
+      var tagName = (el.tagName || "").toLowerCase();
+      if (tagName === "input" || tagName === "textarea" || tagName === "select") return true;
+      if (el.isContentEditable) return true;
+      if (el.getAttribute) {
+        if (el.getAttribute("contenteditable") === "true") return true;
+        if (el.hasAttribute("data-editable") || el.hasAttribute("data-note-input") || el.hasAttribute("data-drawer-input")) return true;
+        var action = el.getAttribute("data-v12-action");
+        if (action === "record-note" || action === "drawer-note") return true;
+      }
+      el = el.parentElement;
     }
-    if (active && state.v12.categoryMenuOpen && recordComposer.contains(active)) return true;
     return false;
+  }
+
+  function shouldIgnoreGlobalShortcuts(e) {
+    if (!e) return false;
+    if (e.isComposing) return true;
+    if (e.metaKey || e.ctrlKey || e.altKey) return true;
+    if (isTypingContext(e.target)) return true;
+    if (isTypingContext(document.activeElement)) return true;
+    if (state.editingFieldId) return true;
+    if (state.v12.drawerEditingNoteId) return true;
+    if (state.v12.recordMenuOpen) return true;
+    if (state.v12.categoryMenuOpen) return true;
+    return false;
+  }
+
+  function shouldBlockTopbarShortcuts(e, key) {
+    if (!state.v12.recordPopoverOpen) return false;
+    return key === "v" || key === "c" || key === "o" || key === "r" || key === "m";
   }
 
   function onKeyDown(e) {
@@ -9946,6 +10276,21 @@
     if (key === "alt" || key === "shift" || key === "meta" || key === "control" || key === "ctrl") {
       updateScrubHoverCursor(!!e.altKey);
     }
+    if (state.v12.recordPopoverOpen && key === CONFIG.hotkeys.exit && !e.isComposing && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      e.__visualQAHandled = true;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      closePendingRecord();
+      return;
+    }
+    if (shouldBlockTopbarShortcuts(e, key)) {
+      e.__visualQAHandled = true;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      return;
+    }
+    if (shouldIgnoreGlobalShortcuts(e)) return;
+    if (e.repeat && (key === "v" || key === "c" || key === "o" || key === "r" || key === "m")) return;
     if (state.v12.drawerClearConfirmArmed && (key === CONFIG.hotkeys.exit || key === "esc")) {
       e.__visualQAHandled = true;
       e.preventDefault();
@@ -9953,7 +10298,6 @@
       clearDrawerClearConfirm();
       return;
     }
-    if (shouldSuppressGlobalHotkeys(e)) return;
     if (isRecordPreviewOpen() && (key === CONFIG.hotkeys.exit || key === "esc")) {
       e.__visualQAHandled = true;
       e.preventDefault();
@@ -9991,29 +10335,31 @@
       return;
     }
 
-    if (key === CONFIG.hotkeys.measure) {
+    if (key === "v") {
       e.__visualQAHandled = true;
-      toggleMeasure();
+      setV12Mode("select");
+      clearMeasureSelection({ keepTopbarMode: false });
       e.preventDefault();
       e.stopImmediatePropagation();
-    } else if (key === CONFIG.hotkeys.freeze) {
+    } else if (key === "c") {
       e.__visualQAHandled = true;
-      toggleFreeze();
+      if (!isSelectMode()) setV12Mode("select");
+      setMeasureTopbarMode(true);
       e.preventDefault();
       e.stopImmediatePropagation();
-    } else if (key === CONFIG.hotkeys.clear) {
+    } else if (key === "o") {
       e.__visualQAHandled = true;
-      clearMeasure();
+      handleRecordElementAction();
       e.preventDefault();
       e.stopImmediatePropagation();
-    } else if (key === CONFIG.hotkeys.reset) {
+    } else if (key === "r") {
       e.__visualQAHandled = true;
-      clearEditedStyles();
+      handleRecordRegionAction();
       e.preventDefault();
       e.stopImmediatePropagation();
-    } else if (key === CONFIG.hotkeys.pin) {
+    } else if (key === "m") {
       e.__visualQAHandled = true;
-      togglePin();
+      toggleV12Drawer();
       e.preventDefault();
       e.stopImmediatePropagation();
     }
@@ -10056,6 +10402,8 @@
     });
     window.clearTimeout(drawerClearConfirmTimerId);
     drawerClearConfirmTimerId = 0;
+    window.clearTimeout(topbarTooltipHideTimerId);
+    topbarTooltipHideTimerId = 0;
     stopNumericScrub({ silent: true });
     resetRegionSelection();
     releasePageScrollLock();
@@ -10080,6 +10428,8 @@
     topbar.removeEventListener("pointerdown", onV12TopbarPointerDown, true);
     topbar.removeEventListener("pointerup", onV12TopbarPointerUp, true);
     topbar.removeEventListener("pointercancel", onV12TopbarPointerCancel, true);
+    topbar.removeEventListener("pointerover", onV12TopbarPointerOver, true);
+    topbar.removeEventListener("pointerout", onV12TopbarPointerOut, true);
     topbar.removeEventListener("click", onV12Click, true);
     recordMenu.removeEventListener("click", onV12Click, true);
     drawerStub.removeEventListener("click", onV12Click, true);
@@ -10103,7 +10453,7 @@
     floating.removeEventListener("mouseenter", onFloatEnter, true);
     floating.removeEventListener("mouseleave", onFloatLeave, true);
     btnMeasure.removeEventListener("click", onMeasureClick, true);
-    [highlight, selectA, selectB, tooltip, spacingLayer, measureLayer, floating, topbar, recordMenu, regionCaptureOverlay, drawerStub, regionSelectBox, recordComposer, recordPreview, v12Notice].forEach(function (el) {
+    [highlight, selectA, selectB, tooltip, topbarTooltip, spacingLayer, measureLayer, floating, topbar, recordMenu, regionCaptureOverlay, drawerStub, regionSelectBox, recordComposer, recordPreview, v12Notice].forEach(function (el) {
       if (el && el.parentNode) el.parentNode.removeChild(el);
     });
     Object.keys(bridgePending).forEach(function (requestId) {
@@ -10194,6 +10544,8 @@
   topbar.addEventListener("pointerdown", onV12TopbarPointerDown, true);
   topbar.addEventListener("pointerup", onV12TopbarPointerUp, true);
   topbar.addEventListener("pointercancel", onV12TopbarPointerCancel, true);
+  topbar.addEventListener("pointerover", onV12TopbarPointerOver, true);
+  topbar.addEventListener("pointerout", onV12TopbarPointerOut, true);
   topbar.addEventListener("click", onV12Click, true);
   recordMenu.addEventListener("click", onV12Click, true);
   drawerStub.addEventListener("click", onV12Click, true);
