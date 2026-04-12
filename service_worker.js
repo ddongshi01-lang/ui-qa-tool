@@ -97,6 +97,33 @@ function getTopbarIconUrls() {
   };
 }
 
+function getFloatingIconUrls() {
+  return {
+    "layout-width": chrome.runtime.getURL("assets/ui/fuchuang/kuandu.svg"),
+    "layout-height": chrome.runtime.getURL("assets/ui/fuchuang/gao.svg"),
+    "layout-padding-horizontal": chrome.runtime.getURL("assets/ui/fuchuang/shuiping.svg"),
+    "layout-padding-vertical": chrome.runtime.getURL("assets/ui/fuchuang/chuizhi.svg"),
+    "layout-padding-left": chrome.runtime.getURL("assets/ui/fuchuang/zuo.svg"),
+    "layout-padding-top": chrome.runtime.getURL("assets/ui/fuchuang/shang.svg"),
+    "layout-padding-right": chrome.runtime.getURL("assets/ui/fuchuang/you.svg"),
+    "layout-padding-bottom": chrome.runtime.getURL("assets/ui/fuchuang/xia.svg"),
+    "layout-margin-左": chrome.runtime.getURL("assets/ui/fuchuang/zuobian.svg"),
+    "layout-margin-右": chrome.runtime.getURL("assets/ui/fuchuang/youbian.svg"),
+    "layout-margin-上": chrome.runtime.getURL("assets/ui/fuchuang/shangbian.svg"),
+    "layout-margin-下": chrome.runtime.getURL("assets/ui/fuchuang/xiabian.svg"),
+    "layout-padding-toggle": chrome.runtime.getURL("assets/ui/fuchuang/zhankai.svg"),
+    "layout-padding-toggle-active": chrome.runtime.getURL("assets/ui/fuchuang/zhankaixuanzhong.svg"),
+    jiantou: chrome.runtime.getURL("assets/ui/fuchuang/jiantou.svg"),
+    "font-line-height": chrome.runtime.getURL("assets/ui/fuchuang/hanggao.svg"),
+    "appearance-opacity": chrome.runtime.getURL("assets/ui/fuchuang/toumingdu.svg"),
+    "appearance-radius": chrome.runtime.getURL("assets/ui/fuchuang/yuanjiao.svg"),
+    "appearance-radius-top-left": chrome.runtime.getURL("assets/ui/fuchuang/zuoyuan.svg"),
+    "appearance-radius-top-right": chrome.runtime.getURL("assets/ui/fuchuang/youyuan.svg"),
+    "appearance-radius-bottom-left": chrome.runtime.getURL("assets/ui/fuchuang/xiazuoyuan.svg"),
+    "appearance-radius-bottom-right": chrome.runtime.getURL("assets/ui/fuchuang/youxiayuan.svg")
+  };
+}
+
 chrome.action.onClicked.addListener(async (tab) => {
   if (!tab || !tab.id) return;
 
@@ -185,6 +212,11 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
 
     if (action === "get-topbar-icon-urls") {
       sendResponse({ ok: true, iconUrls: getTopbarIconUrls() });
+      return;
+    }
+
+    if (action === "get-floating-icon-urls") {
+      sendResponse({ ok: true, iconUrls: getFloatingIconUrls() });
       return;
     }
 

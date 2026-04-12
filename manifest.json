@@ -13,7 +13,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["assets/ui/topbar/*.svg"],
+      "resources": ["assets/ui/topbar/*.svg", "assets/ui/fuchuang/*.svg"],
       "matches": ["http://*/*", "https://*/*", "file://*/*"]
     }
   ],
