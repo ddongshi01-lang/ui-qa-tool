@@ -1,5 +1,21 @@
 ﻿var DRAFT_PREFIX = "vqa:draft:";
 var BRIDGE_SOURCE = "visual-qa-bridge-v12-step2";
+var ACTION_ICON_PATHS = {
+  off: {
+    16: "icons/action-off-16.png",
+    32: "icons/action-off-32.png"
+  },
+  on: {
+    16: "icons/action-on-16.png",
+    32: "icons/action-on-32.png"
+  }
+};
+var ACTION_TITLES = {
+  off: "视觉走查助手（未开启）",
+  on: "视觉走查助手（已开启）"
+};
+var ACTION_BADGE_COLOR = "#2F7BFF";
+var tabPluginState = {};
 
 function isInjectableUrl(url) {
   if (!url || typeof url !== "string") return false;
@@ -124,6 +140,36 @@ function getFloatingIconUrls() {
   };
 }
 
+async function setActionVisualState(tabId, isActive) {
+  if (typeof tabId !== "number") return;
+  var stateKey = isActive ? "on" : "off";
+  tabPluginState[tabId] = !!isActive;
+  await Promise.all([
+    chrome.action.setIcon({
+      tabId: tabId,
+      path: ACTION_ICON_PATHS[stateKey]
+    }),
+    chrome.action.setTitle({
+      tabId: tabId,
+      title: ACTION_TITLES[stateKey]
+    }),
+    chrome.action.setBadgeText({
+      tabId: tabId,
+      text: isActive ? "ON" : ""
+    }),
+    chrome.action.setBadgeBackgroundColor({
+      tabId: tabId,
+      color: ACTION_BADGE_COLOR
+    })
+  ]);
+}
+
+async function resetActionVisualState(tabId) {
+  if (typeof tabId !== "number") return;
+  delete tabPluginState[tabId];
+  await setActionVisualState(tabId, false);
+}
+
 chrome.action.onClicked.addListener(async (tab) => {
   if (!tab || !tab.id) return;
 
@@ -132,6 +178,7 @@ chrome.action.onClicked.addListener(async (tab) => {
       "[visual-qa] Current page does not allow script injection (restricted or unsupported URL):",
       tab.url
     );
+    await resetActionVisualState(tab.id);
     return;
   }
 
@@ -159,6 +206,17 @@ chrome.action.onClicked.addListener(async (tab) => {
     } catch (fallbackErr) {
       console.error("[visual-qa] Failed to inject script:", fallbackErr);
     }
+  }
+});
+
+chrome.tabs.onRemoved.addListener(function (tabId) {
+  delete tabPluginState[tabId];
+});
+
+chrome.tabs.onUpdated.addListener(function (tabId, changeInfo) {
+  if (!changeInfo) return;
+  if (changeInfo.status === "loading" || typeof changeInfo.url === "string") {
+    void resetActionVisualState(tabId);
   }
 });
 
@@ -217,6 +275,17 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
 
     if (action === "get-floating-icon-urls") {
       sendResponse({ ok: true, iconUrls: getFloatingIconUrls() });
+      return;
+    }
+
+    if (action === "set-plugin-state") {
+      var senderTabId = sender && sender.tab && typeof sender.tab.id === "number" ? sender.tab.id : null;
+      if (senderTabId == null) {
+        sendResponse({ ok: false, error: "Missing sender tab id" });
+        return;
+      }
+      await setActionVisualState(senderTabId, !!message.active);
+      sendResponse({ ok: true, active: !!message.active });
       return;
     }
 

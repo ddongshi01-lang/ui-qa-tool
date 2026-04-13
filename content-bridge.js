@@ -63,6 +63,7 @@
           requestId: data.requestId,
           action: data.action,
           pageKey: data.pageKey,
+          active: !!data.active,
           draft: data.draft || null,
           html: data.html || "",
           filename: data.filename || ""

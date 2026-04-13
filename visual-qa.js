@@ -1,7 +1,25 @@
 ﻿// Visual QA Inspector
 (function () {
+  function notifyPluginActionState(active) {
+    try {
+      window.postMessage(
+        {
+          source: "visual-qa-v12-step2",
+          requestId: "vqa-lifecycle-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8),
+          action: "set-plugin-state",
+          active: !!active
+        },
+        "*"
+      );
+    } catch (err) {}
+  }
+
   if (window.__visualQAInspectorFinal__) {
-    window.__visualQAInspectorFinal__.destroy();
+    if (typeof window.__visualQAInspectorFinal__.destroy === "function") {
+      window.__visualQAInspectorFinal__.destroy("action-click");
+    } else {
+      notifyPluginActionState(false);
+    }
     return;
   }
 
@@ -241,6 +259,17 @@
     floatMoved: false,
     floatOffsetX: 0,
     floatOffsetY: 0,
+    ui: {
+      numericScrubbing: {
+        active: false,
+        pointerId: null,
+        source: "",
+        originX: 0,
+        startValue: 0
+      },
+      suppressSelectionOnce: false,
+      suppressSelectionRafId: 0
+    },
     scrub: {
       active: false,
       input: null,
@@ -249,6 +278,7 @@
       startX: 0,
       startValue: 0,
       hoveredInput: null,
+      hoveredIcon: null,
       userSelectBody: "",
       userSelectDoc: "",
       cursorBody: "",
@@ -274,6 +304,10 @@
       recordPopoverOpen: false,
       pendingRecord: null,
       recordTargetEl: null,
+      quickRecord: {
+        targetEl: null,
+        baseline: null
+      },
       composerFocusPending: false,
       noteSelectionStart: 0,
       noteSelectionEnd: 0,
@@ -551,6 +585,7 @@
           source: BRIDGE_REQUEST_SOURCE,
           requestId: requestId,
           action: action,
+          active: !!(payload && payload.active),
           pageKey: payload && payload.pageKey ? payload.pageKey : "",
           draft: payload && payload.draft ? payload.draft : null,
           html: payload && payload.html ? payload.html : "",
@@ -911,16 +946,14 @@
     return sortRecordsByCreatedAt(records).map(function (record, index) {
       var category = getRecordCategory(record && record.category ? record.category : "layout");
       var pageInfo = buildRecordExportPageInfo(record);
+      var changeSummaryLines = getRecordChangeSummaryLines(record);
       return {
         index: index + 1,
         imageSrc: getRecordExportImageSrc(record),
         categoryLabel: category && category.label ? category.label : "布局",
         categoryColor: category && category.color ? category.color : "#94a3b8",
         note: record && record.note ? String(record.note).trim() : "",
-        targetName: record && record.targetName ? String(record.targetName).trim() : "",
-        timeText: formatExportDateTime(
-          record && (record.updatedAt || record.createdAt) ? record.updatedAt || record.createdAt : ""
-        ),
+        changeSummaryLines: changeSummaryLines,
         pageTitle: pageInfo.pageTitle,
         pageUrl: pageInfo.pageUrl
       };
@@ -932,7 +965,6 @@
     var items = buildHtmlExportRecordViewModels(records);
     var pageTitle = getReportPageTitle(draft);
     var pageUrl = getReportPageUrl(draft);
-    var exportTimeText = formatExportDateTime(exportedAt);
     var listHtml = items.length
       ? items
           .map(function (item) {
@@ -964,18 +996,22 @@
               esc(item.note || "未填写备注") +
               "</p>" +
               "</section>" +
-              '<section class="issue-field">' +
-              "<h3>目标区域名</h3>" +
-              "<p>" +
-              esc(item.targetName || "未命名区域") +
-              "</p>" +
-              "</section>" +
-              '<section class="issue-field">' +
-              "<h3>时间</h3>" +
-              "<p>" +
-              esc(item.timeText || "未知时间") +
-              "</p>" +
-              "</section>" +
+              (item.changeSummaryLines && item.changeSummaryLines.length
+                ? '<section class="issue-field issue-change-summary">' +
+                  "<h3>本次修改</h3>" +
+                  '<div class="issue-change-summary-list">' +
+                  item.changeSummaryLines.map(function (line) {
+                    return (
+                      '<div class="issue-change-summary-item">' +
+                      esc(String(line.key)) +
+                      ": " +
+                      esc(String(line.value)) +
+                      "</div>"
+                    );
+                  }).join("") +
+                  "</div>" +
+                  "</section>"
+                : "") +
               "</div>" +
               "</div>" +
               "</article>"
@@ -1011,8 +1047,8 @@
       ".section{margin-top:20px;padding:22px;}" +
       ".section h2{margin:0 0 16px;font-size:22px;line-height:1.3;}" +
       ".issue-list{display:flex;flex-direction:column;gap:18px;}" +
-      ".issue-card{display:grid;grid-template-columns:minmax(440px,56%) minmax(0,1fr);gap:22px;padding:22px;border:1px solid var(--line);border-radius:26px;background:var(--panel);}" +
-      ".issue-media{min-height:320px;border-radius:22px;border:1px solid var(--line);background:#f8fafc;overflow:hidden;display:flex;align-items:center;justify-content:center;padding:18px;}" +
+      ".issue-card{display:grid;grid-template-columns:minmax(0,500px) minmax(0,1fr);gap:22px;padding:22px;border:1px solid var(--line);border-radius:26px;background:var(--panel);}" +
+      ".issue-media{width:100%;max-width:500px;min-height:320px;border-radius:22px;border:1px solid var(--line);background:#f8fafc;overflow:hidden;display:flex;align-items:center;justify-content:center;padding:18px;}" +
       ".shot-image{display:block;width:100%;height:auto;border-radius:16px;object-fit:contain;background:#fff;box-shadow:0 10px 24px rgba(15,23,42,.08);}" +
       ".shot-empty{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:8px;width:100%;height:100%;padding:22px;background:linear-gradient(180deg,#e2e8f0 0%,#f8fafc 100%);color:#475569;}" +
       ".shot-empty strong{font-size:16px;color:#0f172a;}" +
@@ -1025,6 +1061,8 @@
       ".issue-field h3{margin:0 0 6px;font-size:12px;color:var(--muted);font-weight:700;letter-spacing:.04em;text-transform:uppercase;}" +
       ".issue-field p{margin:0;color:var(--text);word-break:break-word;white-space:pre-wrap;}" +
       ".issue-note p{font-size:16px;line-height:1.75;color:#0f172a;}" +
+      ".issue-change-summary-list{display:flex;flex-direction:column;gap:4px;}" +
+      ".issue-change-summary-item{color:#334155;font-size:13px;line-height:1.55;word-break:break-word;}" +
       ".empty-state{padding:28px;border-radius:18px;border:1px dashed var(--line-strong);background:var(--panel-soft);color:var(--muted);text-align:center;}" +
       "@media (max-width:960px){.hero-main{flex-direction:column;}.hero-meta{min-width:0;width:100%;}.issue-card{grid-template-columns:1fr;}.issue-media{min-height:200px;}.report{width:calc(100vw - 24px);}}" +
       "@media (max-width:640px){body{padding:18px 12px 32px;}.hero,.section{padding:18px;border-radius:24px;}.hero h1{font-size:24px;}.issue-card{padding:16px;border-radius:24px;}.issue-media{padding:14px;}.issue-index{font-size:16px;height:32px;}.issue-category{font-size:13px;height:32px;}.issue-note p{font-size:15px;}}" +
@@ -1044,9 +1082,6 @@
       "</p>" +
       "</div>" +
       '<div class="hero-meta">' +
-      '<div class="row"><div class="label">导出时间</div><div class="value">' +
-      esc(exportTimeText || "-") +
-      "</div></div>" +
       '<div class="row"><div class="label">记录总数</div><div class="value">' +
       esc(String(items.length)) +
       "</div></div>" +
@@ -1347,6 +1382,35 @@
     );
   }
 
+  function getRecordChangeSummaryLines(record) {
+    return record && record.changeSummary && Array.isArray(record.changeSummary.lines)
+      ? record.changeSummary.lines.filter(function (line) {
+          return !!(line && line.key && line.value != null && String(line.value).trim());
+        })
+      : [];
+  }
+
+  function getDrawerRecordChangeSummaryHtml(record) {
+    var lines = getRecordChangeSummaryLines(record);
+    if (!lines.length) return "";
+    return (
+      '<div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,.08);">' +
+      '<div style="margin-bottom:6px;color:rgba(255,255,255,.44);font-size:11px;font-weight:700;line-height:1.2;">本次修改</div>' +
+      '<div style="display:flex;flex-direction:column;gap:4px;">' +
+      lines.map(function (line) {
+        return (
+          '<div style="color:rgba(255,255,255,.72);font:12px/1.45 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;word-break:break-word;">' +
+          esc(String(line.key)) +
+          ": " +
+          esc(String(line.value)) +
+          "</div>"
+        );
+      }).join("") +
+      "</div>" +
+      "</div>"
+    );
+  }
+
   function getDrawerRecordCardHtml(record, index) {
     var category = getRecordCategory(record && record.category ? record.category : "layout");
     var note = record && record.note ? String(record.note).trim() : "";
@@ -1358,6 +1422,7 @@
     var noteValue = editingNote ? state.v12.drawerEditingNoteValue : note;
     var hasNote = !!note;
     var categoryColor = category && category.color ? category.color : "#94a3b8";
+    var changeSummaryHtml = getDrawerRecordChangeSummaryHtml(record);
     var noteHtml =
       '<div data-v12-drawer-note-view="1" style="display:block;">' +
       '<button type="button" data-v12-action="drawer-edit-note" data-record-id="' +
@@ -1423,6 +1488,7 @@
       "</span>" +
       "</div>" +
       noteHtml +
+      changeSummaryHtml +
       "</div>" +
       "</article>"
     );
@@ -1822,6 +1888,7 @@
       selectB.style.width = "0";
       selectB.style.height = "0";
     }
+    resetQuickRecordState();
   }
 
   function setMeasureTopbarMode(enabled) {
@@ -1840,13 +1907,16 @@
   }
 
   function handleMeasureModeClick(el) {
+    if (shouldBlockPageSelectionDuringScrub()) return;
     if (!el) return;
     if (state.measureA === el) {
       state.measureB = null;
+      syncQuickRecordUiForCurrentPanel();
       return;
     }
     state.measureA = el;
     state.measureB = null;
+    resetQuickRecordState();
   }
 
   function closeRecordMenu() {
@@ -3236,6 +3306,7 @@
       type: type,
       category: category.id,
       note: "",
+      changeSummary: null,
       targetName: targetName,
       pageUrl: location.href,
       pageTitle: document.title || "",
@@ -3256,6 +3327,267 @@
       },
       targetHint: targetHint || {}
     };
+  }
+
+  function resetQuickRecordState() {
+    state.v12.quickRecord.targetEl = null;
+    state.v12.quickRecord.baseline = null;
+  }
+
+  function isQuickRecordCurrentMeasureATarget(targetEl) {
+    return !!(isPlainSelectMode() && targetEl && state.measureA && targetEl === state.measureA);
+  }
+
+  function toChangeSummaryKey(prop) {
+    return String(prop || "")
+      .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
+      .replace(/\s+/g, "-")
+      .toLowerCase();
+  }
+
+  function normalizeQuickRecordComparableValue(value) {
+    if (value == null) return "";
+    return String(value).trim();
+  }
+
+  function setQuickRecordComparableValue(map, fieldId, value) {
+    if (!map || !fieldId) return;
+    map[fieldId] = normalizeQuickRecordComparableValue(value);
+  }
+
+  function getQuickRecordColorTextValue(styleValue) {
+    var meta = getColorComponents(styleValue);
+    return meta && meta.hex ? String(meta.hex).replace(/^#/, "") : "";
+  }
+
+  function getQuickRecordColorAlphaValue(styleValue) {
+    var meta = getColorComponents(styleValue);
+    return meta ? String(meta.alpha) : "";
+  }
+
+  function buildQuickRecordTrackedValueMap(targetEl) {
+    var map = {};
+    if (!targetEl) return map;
+    var style = getComputedStyle(targetEl);
+    var capabilities = buildSelectedCapabilities(targetEl, style);
+
+    if (capabilities.canEditTextContent) {
+      setQuickRecordComparableValue(map, "text-content", getEditableTextValue(targetEl));
+    }
+
+    setQuickRecordComparableValue(map, "width", displayNumericValue(style.width));
+    setQuickRecordComparableValue(map, "height", displayNumericValue(style.height));
+    setQuickRecordComparableValue(map, "paddingLeft", displayNumericValue(style.paddingLeft));
+    setQuickRecordComparableValue(map, "paddingTop", displayNumericValue(style.paddingTop));
+    setQuickRecordComparableValue(map, "paddingRight", displayNumericValue(style.paddingRight));
+    setQuickRecordComparableValue(map, "paddingBottom", displayNumericValue(style.paddingBottom));
+    setQuickRecordComparableValue(map, "marginLeft", displayNumericValue(style.marginLeft));
+    setQuickRecordComparableValue(map, "marginRight", displayNumericValue(style.marginRight));
+    setQuickRecordComparableValue(map, "marginTop", displayNumericValue(style.marginTop));
+    setQuickRecordComparableValue(map, "marginBottom", displayNumericValue(style.marginBottom));
+
+    if (capabilities.hasTextStyles) {
+      setQuickRecordComparableValue(map, "fontFamily", capabilities.fontFamilyPrimary);
+      setQuickRecordComparableValue(map, "fontWeight", style.fontWeight);
+      setQuickRecordComparableValue(map, "fontSize", displayNumericValue(style.fontSize));
+      setQuickRecordComparableValue(map, "lineHeight", displayNumericValue(style.lineHeight));
+      setQuickRecordComparableValue(
+        map,
+        "color",
+        (function () {
+          var hex = getQuickRecordColorTextValue(style.color);
+          var alpha = getQuickRecordColorAlphaValue(style.color);
+          return hex ? "#" + hex + (alpha && alpha !== "100" ? " / " + alpha + "%" : "") : "";
+        })()
+      );
+    }
+
+    setQuickRecordComparableValue(map, "opacity", formatOpacityDisplay(style.opacity));
+    setQuickRecordComparableValue(map, "borderRadius", displayRadiusValue(style.borderRadius));
+    setQuickRecordComparableValue(map, "borderTopLeftRadius", displayRadiusValue(style.borderTopLeftRadius));
+    setQuickRecordComparableValue(map, "borderTopRightRadius", displayRadiusValue(style.borderTopRightRadius));
+    setQuickRecordComparableValue(map, "borderBottomRightRadius", displayRadiusValue(style.borderBottomRightRadius));
+    setQuickRecordComparableValue(map, "borderBottomLeftRadius", displayRadiusValue(style.borderBottomLeftRadius));
+
+    if (!capabilities.canEditTextContent && !isTransparentColor(style.backgroundColor)) {
+      setQuickRecordComparableValue(
+        map,
+        "backgroundColor",
+        (function () {
+          var hex = getQuickRecordColorTextValue(style.backgroundColor);
+          var alpha = getQuickRecordColorAlphaValue(style.backgroundColor);
+          return hex ? "#" + hex + (alpha && alpha !== "100" ? " / " + alpha + "%" : "") : "";
+        })()
+      );
+    }
+
+    return map;
+  }
+
+  function ensureQuickRecordBaseline(targetEl) {
+    if (!isQuickRecordCurrentMeasureATarget(targetEl)) {
+      resetQuickRecordState();
+      return null;
+    }
+    if (state.v12.quickRecord.targetEl !== targetEl || !state.v12.quickRecord.baseline) {
+      state.v12.quickRecord.targetEl = targetEl;
+      state.v12.quickRecord.baseline = buildQuickRecordTrackedValueMap(targetEl);
+    }
+    return state.v12.quickRecord.baseline || null;
+  }
+
+  function getQuickRecordPropKeyFromFieldId(fieldId) {
+    if (!fieldId) return "";
+    if (fieldId === "text-content") return "text-content";
+    if (/^(color|backgroundColor)(-color-text|-alpha)?$/.test(fieldId)) {
+      return fieldId.replace(/(-color-text|-alpha)$/, "");
+    }
+    if (/^(width|height|paddingLeft|paddingTop|paddingRight|paddingBottom|marginLeft|marginRight|marginTop|marginBottom|fontFamily|fontWeight|fontSize|lineHeight|opacity|borderRadius|borderTopLeftRadius|borderTopRightRadius|borderBottomRightRadius|borderBottomLeftRadius)$/.test(fieldId)) {
+      return fieldId;
+    }
+    return "";
+  }
+
+  function getQuickRecordDraftValue(targetEl, propKey) {
+    if (!targetEl || !propKey) return null;
+    if (propKey === "text-content") {
+      if (state.draftInputs["text-content"] == null) return null;
+      return normalizeQuickRecordComparableValue(state.draftInputs["text-content"]);
+    }
+    if (propKey === "color" || propKey === "backgroundColor") {
+      var colorTextFieldId = propKey + "-color-text";
+      var alphaFieldId = propKey + "-alpha";
+      var draftColorText = state.draftInputs[colorTextFieldId];
+      var draftAlpha = state.draftInputs[alphaFieldId];
+      if (draftColorText == null && draftAlpha == null) return null;
+      var style = getComputedStyle(targetEl);
+      var fallbackText = getQuickRecordColorTextValue(style[propKey]);
+      var fallbackAlpha = getQuickRecordColorAlphaValue(style[propKey]);
+      var colorText = normalizeQuickRecordComparableValue(draftColorText != null ? draftColorText : fallbackText);
+      var alphaText = normalizeQuickRecordComparableValue(draftAlpha != null ? draftAlpha : fallbackAlpha);
+      return colorText ? "#" + colorText + (alphaText && alphaText !== "100" ? " / " + alphaText + "%" : "") : "";
+    }
+    if (state.draftInputs[propKey] == null) return null;
+    return normalizeQuickRecordComparableValue(state.draftInputs[propKey]);
+  }
+
+  function computeQuickRecordStateForMeasureA() {
+    var targetEl = getSelectedPanelTarget();
+    if (!isQuickRecordCurrentMeasureATarget(targetEl)) {
+      resetQuickRecordState();
+      return {
+        enabled: false,
+        changeSummary: { lines: [] },
+        dirtyCount: 0
+      };
+    }
+
+    var baseline = ensureQuickRecordBaseline(targetEl) || {};
+    var currentMap = buildQuickRecordTrackedValueMap(targetEl);
+    var dirtyPropKeys = [];
+    var seenProps = {};
+
+    Object.keys(state.modifiedProps || {}).forEach(function (prop) {
+      var propKey = getQuickRecordPropKeyFromFieldId(prop);
+      if (!propKey || seenProps[propKey]) return;
+      var currentValue = normalizeQuickRecordComparableValue(currentMap[propKey]);
+      var baselineValue = normalizeQuickRecordComparableValue(baseline[propKey]);
+      if (currentValue === baselineValue) return;
+      seenProps[propKey] = true;
+      dirtyPropKeys.push(propKey);
+    });
+
+    Object.keys(state.draftInputs || {}).forEach(function (fieldId) {
+      var propKey = getQuickRecordPropKeyFromFieldId(fieldId);
+      if (!propKey || seenProps[propKey]) return;
+      var draftValue = getQuickRecordDraftValue(targetEl, propKey);
+      var baselineValue = normalizeQuickRecordComparableValue(baseline[propKey]);
+      if (draftValue == null || normalizeQuickRecordComparableValue(draftValue) === baselineValue) return;
+      seenProps[propKey] = true;
+      dirtyPropKeys.push(propKey);
+    });
+
+    if (!seenProps["text-content"] && normalizeQuickRecordComparableValue(currentMap["text-content"]) !== normalizeQuickRecordComparableValue(baseline["text-content"])) {
+      seenProps["text-content"] = true;
+      dirtyPropKeys.push("text-content");
+    }
+
+    var lines = [];
+    dirtyPropKeys.forEach(function (propKey) {
+      var currentValue = getQuickRecordDraftValue(targetEl, propKey);
+      if (currentValue == null) currentValue = currentMap[propKey];
+      currentValue = normalizeQuickRecordComparableValue(currentValue);
+      if (!currentValue) return;
+      lines.push({
+        key: propKey === "text-content" ? "text" : toChangeSummaryKey(propKey),
+        value: currentValue
+      });
+    });
+
+    return {
+      enabled: !!lines.length,
+      changeSummary: {
+        lines: lines
+      },
+      dirtyCount: lines.length
+    };
+  }
+
+  function syncQuickRecordUiForCurrentPanel() {
+    if (!tooltip) return;
+    var button = tooltip.querySelector('[data-action="quick-add-record"]');
+    if (!button) return;
+    var quickState = computeQuickRecordStateForMeasureA();
+    button.disabled = !quickState.enabled;
+    button.setAttribute("aria-disabled", quickState.enabled ? "false" : "true");
+    button.style.borderColor = quickState.enabled ? "rgba(255,255,255,.12)" : "rgba(255,255,255,.08)";
+    button.style.background = quickState.enabled ? "rgba(255,255,255,.06)" : "rgba(255,255,255,.03)";
+    button.style.color = quickState.enabled ? "rgba(255,255,255,.88)" : "rgba(255,255,255,.34)";
+    button.style.cursor = quickState.enabled ? "pointer" : "not-allowed";
+  }
+
+  function renderSelectedPanelQuickRecordAction(targetEl) {
+    if (!isPlainSelectMode()) return "";
+    var quickState = computeQuickRecordStateForMeasureA();
+    var enabled = !!quickState.enabled;
+    return (
+      '<div data-vqa-selected-quick-record="1" style="display:flex;justify-content:flex-start;padding-top:4px;">' +
+      '<button type="button" data-action="quick-add-record" ' +
+      (enabled ? "" : 'disabled aria-disabled="true" ') +
+      'style="padding:9px 12px;border-radius:12px;border:1px solid ' +
+      (enabled ? "rgba(255,255,255,.12)" : "rgba(255,255,255,.08)") +
+      ';background:' +
+      (enabled ? "rgba(255,255,255,.06)" : "rgba(255,255,255,.03)") +
+      ';color:' +
+      (enabled ? "rgba(255,255,255,.88)" : "rgba(255,255,255,.34)") +
+      ';font:12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:' +
+      (enabled ? "pointer" : "not-allowed") +
+      ';box-sizing:border-box;">加入记录</button>' +
+      "</div>"
+    );
+  }
+
+  function createQuickElementPendingRecordFromMeasureA() {
+    var targetEl = getSelectedPanelTarget();
+    if (!isQuickRecordCurrentMeasureATarget(targetEl)) return null;
+    var quickState = computeQuickRecordStateForMeasureA();
+    if (!quickState.changeSummary.lines.length) return null;
+    setRecordTarget(targetEl);
+    var rect = targetEl.getBoundingClientRect();
+    var captureRect = viewportRectToDocumentRect({
+      left: Math.round(rect.left),
+      top: Math.round(rect.top),
+      width: Math.round(rect.width),
+      height: Math.round(rect.height)
+    });
+    var record = createPendingRecord(
+      "element",
+      buildElementTargetName(targetEl),
+      captureRect,
+      buildElementTargetHint(targetEl)
+    );
+    record.changeSummary = quickState.changeSummary;
+    return record;
   }
 
   function openPendingRecord(record) {
@@ -3841,6 +4173,7 @@
     syncColorUi(prop, hex);
     if (!commit) input.value = draft;
     applyColorWithAlpha(prop, hex, getColorDraftMeta(prop).alpha);
+    syncQuickRecordUiForCurrentPanel();
     if (commit) schedule();
     return true;
   }
@@ -3865,6 +4198,7 @@
     if (!hex) return;
     syncColorUi(prop, hex);
     applyColorWithAlpha(prop, hex, getColorDraftMeta(prop).alpha);
+    syncQuickRecordUiForCurrentPanel();
     if (!isColorPickerProtectionActive(prop)) schedule();
   }
 
@@ -4131,25 +4465,89 @@
     state.scrub.cursorDoc = "";
   }
 
+  function isNumericScrubbingActive() {
+    return !!(state.ui && state.ui.numericScrubbing && state.ui.numericScrubbing.active);
+  }
+
+  function shouldBlockPageSelectionOnce() {
+    return !!(state.ui && state.ui.suppressSelectionOnce);
+  }
+
+  function shouldBlockPageSelectionDuringScrub() {
+    return isNumericScrubbingActive() || shouldBlockPageSelectionOnce();
+  }
+
+  function clearSuppressSelectionOnce() {
+    if (!state.ui) return;
+    if (state.ui.suppressSelectionRafId) {
+      window.cancelAnimationFrame(state.ui.suppressSelectionRafId);
+      state.ui.suppressSelectionRafId = 0;
+    }
+    state.ui.suppressSelectionOnce = false;
+  }
+
+  function armSuppressSelectionOnce() {
+    if (!state.ui) return;
+    if (state.ui.suppressSelectionRafId) {
+      window.cancelAnimationFrame(state.ui.suppressSelectionRafId);
+    }
+    state.ui.suppressSelectionOnce = true;
+    state.ui.suppressSelectionRafId = window.requestAnimationFrame(function () {
+      state.ui.suppressSelectionRafId = 0;
+      state.ui.suppressSelectionOnce = false;
+    });
+  }
+
+  function consumeSuppressedSelectionEvent(e) {
+    if (!shouldBlockPageSelectionOnce()) return false;
+    clearSuppressSelectionOnce();
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (typeof e.stopImmediatePropagation === "function") {
+        e.stopImmediatePropagation();
+      }
+    }
+    return true;
+  }
+
   function updateScrubHoverCursor(altPressed) {
     var input = state.scrub.hoveredInput;
     if (!input) return;
     var enabled = input.getAttribute("data-scrub-enabled") === "true";
     var locked = input.getAttribute("data-scrub-locked") === "true";
-    if (state.scrub.active || !altPressed) {
-      input.style.cursor = "";
+    if (isNumericScrubbingActive()) {
+      input.style.cursor = "ew-resize";
       return;
     }
-    input.style.cursor = enabled ? "ew-resize" : locked ? "not-allowed" : "";
+    if (!enabled) {
+      input.style.cursor = locked && altPressed ? "not-allowed" : "";
+      return;
+    }
+    input.style.cursor = altPressed ? "ew-resize" : "text";
+  }
+
+  function updateScrubIconCursor(icon) {
+    if (!icon) return;
+    icon.style.cursor = getScrubInputFromIconTarget(icon) ? "ew-resize" : "";
   }
 
   function setHoveredScrubInput(input, altPressed) {
-    if (state.scrub.hoveredInput && state.scrub.hoveredInput !== input && !state.scrub.active) {
+    if (state.scrub.hoveredInput && state.scrub.hoveredInput !== input && !isNumericScrubbingActive()) {
       state.scrub.hoveredInput.style.cursor = "";
     }
     state.scrub.hoveredInput = input || null;
-    if (!state.scrub.hoveredInput || state.scrub.active) return;
+    if (!state.scrub.hoveredInput) return;
     updateScrubHoverCursor(altPressed);
+  }
+
+  function setHoveredScrubIcon(icon) {
+    if (state.scrub.hoveredIcon && state.scrub.hoveredIcon !== icon) {
+      state.scrub.hoveredIcon.style.cursor = "";
+    }
+    state.scrub.hoveredIcon = icon || null;
+    if (!state.scrub.hoveredIcon) return;
+    updateScrubIconCursor(state.scrub.hoveredIcon);
   }
 
   function startNumericScrub(input, e) {
@@ -4157,26 +4555,46 @@
     var percentProp = input && getPercentInputProp(input);
     var boxSummary = input && input.getAttribute("data-box-summary");
     if (!input || input.getAttribute("data-scrub-enabled") !== "true") return false;
-    state.scrub.active = true;
-    state.scrub.input = input;
-    state.scrub.fieldId = getFieldId(input);
-    state.scrub.prop = percentProp ? "opacity" : (prop || "");
-    state.scrub.startX = e.clientX;
+    var fieldId = getFieldId(input);
+    var scrubProp = percentProp ? "opacity" : (prop || "");
+    var startX = e.clientX;
+    var startValue = 0;
     if (boxSummary) {
       var boxMeta = getBoxSummaryScrubMeta(boxSummary);
       if (!boxMeta || !boxMeta.enabled) return false;
-      state.scrub.startValue = boxMeta.value;
+      startValue = boxMeta.value;
     } else {
       if (percentProp) {
-        state.scrub.startValue = getPercentInputValue(input);
+        startValue = getPercentInputValue(input);
       } else {
         if (!prop) return false;
-        state.scrub.startValue = getFieldNumericValue(prop, state.draftInputs[state.scrub.fieldId] != null ? state.draftInputs[state.scrub.fieldId] : input.value);
+        startValue = getFieldNumericValue(prop, state.draftInputs[fieldId] != null ? state.draftInputs[fieldId] : input.value);
       }
     }
+    clearSuppressSelectionOnce();
+    state.scrub.active = true;
+    state.scrub.input = input;
+    state.scrub.fieldId = fieldId;
+    state.scrub.prop = scrubProp;
+    state.scrub.startX = startX;
+    state.scrub.startValue = startValue;
+    state.ui.numericScrubbing.active = true;
+    state.ui.numericScrubbing.pointerId = typeof e.pointerId === "number" ? e.pointerId : "mouse";
+    state.ui.numericScrubbing.source = getIconHoverTarget(e.target) ? "icon-drag" : (e.altKey ? "option-drag" : "input-drag");
+    state.ui.numericScrubbing.originX = startX;
+    state.ui.numericScrubbing.startValue = startValue;
+    state.scrub.hoveredInput = input;
+    setPageHover(null);
+    if (state.measureB) state.measureB = null;
     state.editingFieldId = state.scrub.fieldId;
     if (input.focus) input.focus({ preventScroll: true });
+    if (typeof input.setPointerCapture === "function" && e.pointerId != null) {
+      try {
+        input.setPointerCapture(e.pointerId);
+      } catch (err) {}
+    }
     setScrubLock(true);
+    schedule();
     return true;
   }
 
@@ -4195,17 +4613,24 @@
     options = options || {};
     if (!state.scrub.active) return;
     var input = state.scrub.input;
+    if (input) {
+      commitFieldDraft(input, { silent: !!options.silent });
+      syncQuickRecordUiForCurrentPanel();
+      if (input === state.scrub.hoveredInput) updateScrubHoverCursor(!!options.altPressed);
+    }
     state.scrub.active = false;
     state.scrub.input = null;
     state.scrub.fieldId = "";
     state.scrub.prop = "";
     state.scrub.startX = 0;
     state.scrub.startValue = 0;
+    state.ui.numericScrubbing.active = false;
+    state.ui.numericScrubbing.pointerId = null;
+    state.ui.numericScrubbing.source = "";
+    state.ui.numericScrubbing.originX = 0;
+    state.ui.numericScrubbing.startValue = 0;
+    armSuppressSelectionOnce();
     setScrubLock(false);
-    if (input) {
-      commitFieldDraft(input, { silent: !!options.silent });
-      if (input === state.scrub.hoveredInput) updateScrubHoverCursor(!!options.altPressed);
-    }
   }
 
   function getScrubInputFromTarget(target) {
@@ -4380,6 +4805,7 @@
     state.modifiedProps = {};
     state.editedProps = state.modifiedProps;
     clearEditingState();
+    syncQuickRecordUiForCurrentPanel();
     schedule();
   }
 
@@ -4389,6 +4815,7 @@
     var fieldId = getFieldId(target);
     if (fieldId) {
       syncFieldDraft(target);
+      syncQuickRecordUiForCurrentPanel();
       if (getNodeTagName(target) === "select") {
         commitFieldDraft(target, { silent: false });
         return;
@@ -4428,6 +4855,7 @@
     state.editingFieldId = fieldId;
     state.draftInputs[fieldId] = nextValue;
     applyStyle(prop, toCssLength(nextValue));
+    syncQuickRecordUiForCurrentPanel();
     schedule();
     if (input.focus) input.focus();
   }
@@ -4463,6 +4891,7 @@
       setSelectedPanelHoverFreeze(true);
     }
     syncFieldDraft(target);
+    syncQuickRecordUiForCurrentPanel();
     schedulePanelInputSelectAll(target, fieldId);
   }
 
@@ -4487,10 +4916,12 @@
     if (state.skipNextBlurCommitFieldId && state.skipNextBlurCommitFieldId === fieldId) {
       state.skipNextBlurCommitFieldId = "";
       clearEditingState();
+      syncQuickRecordUiForCurrentPanel();
       scheduleSelectedPanelHoverUnfreeze(0);
       return;
     }
     commitFieldDraft(target);
+    syncQuickRecordUiForCurrentPanel();
     scheduleSelectedPanelHoverUnfreeze(0);
   }
 
@@ -4499,11 +4930,13 @@
     if (!target || !tooltip.contains(target)) return;
     if (getNodeTagName(target) !== "select") return;
     scheduleSelectedPanelHoverUnfreeze(0);
+    syncQuickRecordUiForCurrentPanel();
     if (!state.panelCollapsed) schedule();
   }
 
   function onPanelMouseMove(e) {
-    if (state.scrub.active) return;
+    if (isNumericScrubbingActive()) return;
+    setHoveredScrubIcon(getIconHoverTarget(e.target));
     setHoveredScrubInput(getScrubHoverTarget(e.target), !!e.altKey);
   }
 
@@ -4549,10 +4982,19 @@
   }
 
   function onPanelMouseLeave() {
+    setHoveredScrubIcon(null);
     setHoveredScrubInput(null, false);
   }
 
   function onPanelMouseDown(e) {
+    var actionTarget = e.target && e.target.closest ? e.target.closest("[data-action]") : null;
+    var action = actionTarget ? actionTarget.getAttribute("data-action") : "";
+    if (action === "quick-add-record") {
+      openQuickRecordComposerFromMeasureA();
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     var colorPickerInput = e.target && e.target.closest ? e.target.closest('input[data-color-picker-input]') : null;
     if (colorPickerInput) {
       openColorPickerProtection(colorPickerInput.getAttribute("data-color-picker-input"));
@@ -4581,20 +5023,24 @@
   }
 
   function onScrubMouseMove(e) {
-    if (!state.scrub.active) return;
+    if (!isNumericScrubbingActive()) return;
     updateNumericScrub(e);
     e.stopPropagation();
   }
 
   function onScrubMouseUp(e) {
-    if (!state.scrub.active) return;
+    if (consumeSuppressedSelectionEvent(e)) return;
+    if (!isNumericScrubbingActive()) return;
     stopNumericScrub({ altPressed: !!e.altKey });
     e.preventDefault();
     e.stopPropagation();
+    if (typeof e.stopImmediatePropagation === "function") {
+      e.stopImmediatePropagation();
+    }
   }
 
   function onPanelClick(e) {
-    if (state.scrub.active) {
+    if (isNumericScrubbingActive() || consumeSuppressedSelectionEvent(e)) {
       e.preventDefault();
       e.stopPropagation();
       return;
@@ -4605,6 +5051,11 @@
     if (action === "reset-styles") {
       clearEditedStyles();
       e.preventDefault();
+      return;
+    }
+    if (action === "quick-add-record") {
+      e.preventDefault();
+      e.stopPropagation();
       return;
     }
     if (action === "toggle-padding") {
@@ -9051,8 +9502,42 @@
       targetName: record.targetName,
       category: record.category,
       note: record.note || "",
+      changeSummary: record.changeSummary || null,
       categoryMenuOpen: !!state.v12.categoryMenuOpen
     });
+  }
+
+  function renderRecordComposerChangeSummary(record) {
+    var lines = record && record.changeSummary && Array.isArray(record.changeSummary.lines)
+      ? record.changeSummary.lines.filter(Boolean)
+      : [];
+    if (!lines.length) return "";
+    var visibleLines = lines.slice(0, 5);
+    var extraCount = Math.max(0, lines.length - visibleLines.length);
+    return (
+      '<div class="v12-record-composer-change-summary" style="display:flex;flex-direction:column;gap:8px;padding:10px 12px;border-radius:16px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);">' +
+      '<div style="color:rgba(255,255,255,.78);font:600 12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;">本次修改</div>' +
+      '<div style="display:flex;flex-direction:column;gap:6px;">' +
+      visibleLines.map(function (line) {
+        var valueText = line && line.from != null && line.to != null
+          ? String(line.from) + " -> " + String(line.to)
+          : String(line && line.value != null ? line.value : "");
+        return (
+          '<div style="color:rgba(255,255,255,.88);font:12px/1.45 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;word-break:break-word;">' +
+          esc(String(line.key || "")) +
+          ": " +
+          esc(valueText) +
+          "</div>"
+        );
+      }).join("") +
+      (extraCount
+        ? '<div style="color:rgba(255,255,255,.42);font:12px/1.35 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;">还有 ' +
+          esc(String(extraCount)) +
+          " 项未展开</div>"
+        : "") +
+      "</div>" +
+      "</div>"
+    );
   }
 
   function getRecordComposerAnchorRect(record) {
@@ -9397,6 +9882,7 @@
         "</div>" +
         "</div>" +
         "</div>" +
+        renderRecordComposerChangeSummary(record) +
         '<div class="v12-record-composer-note">' +
         '<textarea data-v12-action="record-note" data-editable="1" data-note-input="1" placeholder="写下问题说明">' +
         esc(record.note || "") +
@@ -9476,6 +9962,28 @@
       captureRect,
       buildElementTargetHint(el)
     );
+    openPendingRecord(record);
+    runPendingRecordShotCapture(record);
+  }
+
+  function flushActivePanelDraftForQuickRecord() {
+    var activeInput = document.activeElement;
+    if (!activeInput || !tooltip.contains(activeInput)) return false;
+    if (!getFieldId(activeInput)) return false;
+    syncFieldDraft(activeInput);
+    commitFieldDraft(activeInput, { silent: true });
+    syncQuickRecordUiForCurrentPanel();
+    return true;
+  }
+
+  function openQuickRecordComposerFromMeasureA() {
+    if (state.v12.pendingRecord) {
+      showV12Notice("请先保存或取消当前记录");
+      return;
+    }
+    flushActivePanelDraftForQuickRecord();
+    var record = createQuickElementPendingRecordFromMeasureA();
+    if (!record) return;
     openPendingRecord(record);
     runPendingRecordShotCapture(record);
   }
@@ -10879,6 +11387,7 @@
       PANEL_UI.sectionGap +
       ';">' +
       sections.join("") +
+      renderSelectedPanelQuickRecordAction(el) +
       "</div>";
     var textEditor = tooltip.querySelector('textarea[data-field-id="text-content"]');
     if (textEditor) syncTextareaAutoHeight(textEditor);
@@ -11144,12 +11653,13 @@
   }
 
   function fromPoint(x, y) {
+    if (shouldBlockPageSelectionDuringScrub()) return null;
     var el = deepElementFromPoint(document, x, y);
     if (!el || tooltip.contains(el) || isOverlayElement(el)) return null;
     return el;
   }
   function onMouseMove(e) {
-    if (state.scrub.active) return;
+    if (shouldBlockPageSelectionDuringScrub()) return;
     if (state.floatDragging) return;
     if (state.v12.pendingRecord) return;
     state.mouseX = e.clientX;
@@ -11261,6 +11771,7 @@
 
   function onClick(e) {
     if (state.panelCollapsed) return;
+    if (isNumericScrubbingActive() || consumeSuppressedSelectionEvent(e)) return;
     if (state.v12.suppressNextClick) {
       state.v12.suppressNextClick = false;
       e.preventDefault();
@@ -11420,17 +11931,59 @@
     return key === "v" || key === "c" || key === "o" || key === "r" || key === "m";
   }
 
+  function handleEscapeKey(e, key) {
+    if (key !== CONFIG.hotkeys.exit && key !== "esc") return false;
+    if (!e || e.isComposing || e.metaKey || e.ctrlKey || e.altKey) return false;
+
+    if (state.v12.drawerClearConfirmArmed) {
+      clearDrawerClearConfirm();
+    } else if (state.v12.previewRecordId) {
+      closeRecordPreview();
+    } else if (state.v12.regionSelection.active) {
+      resetRegionSelection();
+      schedule();
+    } else if (state.v12.recordMenuOpen) {
+      closeRecordMenu();
+      schedule();
+    } else if (state.v12.categoryMenuOpen) {
+      state.v12.categoryMenuOpen = false;
+      schedule();
+    } else if (state.v12.drawerMenuRecordId) {
+      state.v12.drawerMenuRecordId = "";
+      schedule();
+    } else if (state.v12.drawerEditingNoteId) {
+      cancelDrawerNoteEdit();
+      schedule();
+    } else if (state.v12.recordPopoverOpen) {
+      closePendingRecord();
+    } else if ((isMeasureTopbarMode() || isPlainSelectMode()) && (state.measureA || state.measureB || state.primaryMeasure)) {
+      clearMeasureSelection({ keepTopbarMode: isMeasureTopbarMode() });
+      if (isPlainSelectMode()) {
+        state.modifiedProps = {};
+        state.editedProps = state.modifiedProps;
+        state.spacingExpanded = { padding: false, margin: false, radius: false };
+        clearEditingState();
+        state.panelNeedsPlacement = false;
+        state.panelManualPosition = false;
+      }
+      schedule();
+    } else {
+      return false;
+    }
+
+    e.__visualQAHandled = true;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    return true;
+  }
+
   function onKeyDown(e) {
     if (e.__visualQAHandled) return;
     var key = (e.key || "").toLowerCase();
     if (key === "alt" || key === "shift" || key === "meta" || key === "control" || key === "ctrl") {
       updateScrubHoverCursor(!!e.altKey);
     }
-    if (state.v12.recordPopoverOpen && key === CONFIG.hotkeys.exit && !e.isComposing && !e.metaKey && !e.ctrlKey && !e.altKey) {
-      e.__visualQAHandled = true;
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      closePendingRecord();
+    if (handleEscapeKey(e, key)) {
       return;
     }
     if (shouldBlockTopbarShortcuts(e, key)) {
@@ -11441,42 +11994,6 @@
     }
     if (shouldIgnoreGlobalShortcuts(e)) return;
     if (e.repeat && (key === "v" || key === "c" || key === "o" || key === "r" || key === "m")) return;
-    if (state.v12.drawerClearConfirmArmed && (key === CONFIG.hotkeys.exit || key === "esc")) {
-      e.__visualQAHandled = true;
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      clearDrawerClearConfirm();
-      return;
-    }
-    if (isRecordPreviewOpen() && (key === CONFIG.hotkeys.exit || key === "esc")) {
-      e.__visualQAHandled = true;
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      closeRecordPreview();
-      return;
-    }
-    if ((isMeasureTopbarMode() || isPlainSelectMode()) && (key === CONFIG.hotkeys.exit || key === "esc") && (state.measureA || state.measureB)) {
-      e.__visualQAHandled = true;
-      clearMeasureSelection({ keepTopbarMode: isMeasureTopbarMode() });
-      if (isPlainSelectMode()) {
-        state.modifiedProps = {};
-        state.editedProps = state.modifiedProps;
-      state.spacingExpanded = { padding: false, margin: false, radius: false };
-        clearEditingState();
-        state.panelNeedsPlacement = false;
-        state.panelManualPosition = false;
-      }
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      return;
-    }
-    if (key === CONFIG.hotkeys.exit || key === "esc") {
-      e.__visualQAHandled = true;
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      destroy();
-      return;
-    }
     if (key === CONFIG.hotkeys.togglePanel) {
       if (e.repeat) return;
       e.__visualQAHandled = true;
@@ -11549,8 +12066,11 @@
     state.dragStartY = 0;
   }
 
-  function destroy() {
+  function destroy(reason) {
+    if (reason !== "action-click") return false;
+    if (state.destroyed) return true;
     state.destroyed = true;
+    notifyPluginActionState(false);
     Object.keys(recordPopupPerfById).forEach(function (recordId) {
       delete recordPopupPerfById[recordId];
     });
@@ -11640,6 +12160,7 @@
       if (styleEl && styleEl.parentNode) styleEl.parentNode.removeChild(styleEl);
     });
     delete window.__visualQAInspectorFinal__;
+    return true;
   }
 
   function onMeasureClick(e) {
@@ -11764,6 +12285,7 @@
 
   setCollapsed(false);
   window.__visualQAInspectorFinal__ = { destroy: destroy };
+  notifyPluginActionState(true);
   initializeV12DraftState();
   refresh();
 })();

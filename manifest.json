@@ -4,7 +4,11 @@
   "version": "1.0.0",
   "description": "在网页上查看元素尺寸、间距并测距。",
   "action": {
-    "default_title": "视觉走查助手"
+    "default_title": "视觉走查助手（未开启）",
+    "default_icon": {
+      "16": "icons/action-off-16.png",
+      "32": "icons/action-off-32.png"
+    }
   },
   "permissions": ["scripting", "activeTab", "storage", "tabs", "downloads"],
   "host_permissions": ["http://*/*", "https://*/*", "file://*/*"],
