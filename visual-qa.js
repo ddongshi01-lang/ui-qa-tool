@@ -192,6 +192,8 @@
   var V12_VERSION = "1.2.0";
   var BRIDGE_REQUEST_SOURCE = "visual-qa-v12-step2";
   var BRIDGE_RESPONSE_SOURCE = "visual-qa-bridge-v12-step2";
+  var TOPBAR_COLLAPSE_STAGGER_MS = 42;
+  var TOPBAR_COLLAPSE_ANIM_MS = 240;
 
   var state = {
     hoveredEl: null,
@@ -257,6 +259,7 @@
       recordSubMode: "element",
       recordSubModePreference: "",
       drawerOpen: false,
+      toolbarCollapsed: false,
       drawerCategoryFilter: "all",
       drawerMenuRecordId: "",
       drawerEditingNoteId: "",
@@ -285,6 +288,7 @@
         shortcut: "",
         anchorRect: null
       },
+      topbarCollapseAnimTimerId: 0,
       noticeText: "",
       draftPersisting: false,
       regionSelection: {
@@ -349,6 +353,9 @@
     "record-region": { label: "记录框选", shortcut: "R" },
     "toggle-drawer": { label: "记录抽屉", shortcut: "M" }
   };
+  var TOPBAR_ICON_PLACEHOLDER_SRC = "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
+  var TOPBAR_EXPANDED_WIDTH = 265;
+  var TOPBAR_COLLAPSED_WIDTH = 50;
   var TOPBAR_ICON_URLS = null;
   var TOPBAR_ICON_URLS_READY = false;
   var topbarIconUrlsPromise = null;
@@ -1887,6 +1894,19 @@
     state.v12.drawerOpen = !state.v12.drawerOpen;
     if (!state.v12.drawerOpen) clearDrawerClearConfirm();
     schedule();
+  }
+
+  function isToolbarCollapsed() {
+    return !!state.v12.toolbarCollapsed;
+  }
+
+  function activateV12DrawerEntry() {
+    if (state.v12.topbarCollapseAnimTimerId) return;
+    if (isToolbarCollapsed()) {
+      setCollapsed(false);
+      return;
+    }
+    toggleV12Drawer();
   }
 
   function setV12RecordSubMode(subMode) {
@@ -6628,10 +6648,7 @@
   }
 
   function addPairMeasureLabel(layer, x, y, text) {
-    addMeasureLabel(layer, x, y, text, {
-      background: "rgba(17,24,39,.96)",
-      borderColor: "rgba(139,92,246,.38)",
-      color: "#F8FAFC",
+    addExternalMeasureLabel(layer, x, y, text, {
       width: Math.max(60, Math.min(96, Math.round(String(text).length * 8 + 18))),
       height: 24
     });
@@ -6703,10 +6720,7 @@
 
   function addPairMeasureLabelAt(layer, x, y, text) {
     var size = getPairMeasureLabelSize(text);
-    addMeasureLabel(layer, x, y, text, {
-      background: "rgba(17,24,39,.96)",
-      borderColor: "rgba(139,92,246,.38)",
-      color: "#F8FAFC",
+    addExternalMeasureLabel(layer, x, y, text, {
       width: size.width,
       height: size.height
     });
@@ -8234,7 +8248,7 @@
     "div",
     "position:fixed;left:0;top:0;width:44px;height:44px;border-radius:999px;border:0;box-sizing:border-box;background:transparent;background-image:url(" +
       FLOAT_ICON_DATA +
-      ");background-repeat:no-repeat;background-position:center;background-size:100% 100%;display:flex;align-items:center;justify-content:center;font:12px/1 sans-serif;box-shadow:0 10px 24px rgba(31,107,255,.35);z-index:" +
+      ");background-repeat:no-repeat;background-position:center;background-size:100% 100%;display:none;align-items:center;justify-content:center;font:12px/1 sans-serif;box-shadow:0 10px 24px rgba(31,107,255,.35);z-index:" +
       (CONFIG.zIndexTooltip + 2) +
       ";cursor:pointer;user-select:none;opacity:1;transition:opacity 150ms ease;"
   );
@@ -8339,13 +8353,14 @@
   };
 
   function topbarButtonHtml(action, labelText, iconUrl, active) {
-    var iconMarkup = iconUrl
-      ? '<span class="v12-topbar-icon-slot" aria-hidden="true">' +
-        '<img class="v12-topbar-icon" src="' +
-        esc(iconUrl) +
-        '" alt="" draggable="false">' +
-        "</span>"
-      : '<span class="v12-topbar-icon-slot" aria-hidden="true"></span>';
+    var iconMarkup =
+      '<span class="v12-topbar-icon-slot" aria-hidden="true">' +
+      '<img class="v12-topbar-icon" data-v12-topbar-icon="' +
+      esc(action) +
+      '" src="' +
+      esc(iconUrl || TOPBAR_ICON_PLACEHOLDER_SRC) +
+      '" alt="" draggable="false">' +
+      "</span>";
     return (
       '<button type="button" class="v12-topbar-btn v12-topbar-icon-btn" data-v12-action="' +
       esc(action) +
@@ -8375,16 +8390,49 @@
     );
   }
 
+  function getTopbarShellHtml() {
+    var collapsed = isToolbarCollapsed();
+    return (
+      '<div class="v12-topbar-shell ' +
+      (collapsed ? "is-collapsed" : "is-expanded") +
+      '" data-v12-topbar-shell="1" data-toolbar-state="' +
+      (collapsed ? "collapsed" : "expanded") +
+      '" role="toolbar" aria-label="顶部栏">' +
+      '<div class="v12-topbar-toolbar">' +
+      '<div class="v12-topbar-group" data-v12-topbar-group="1">' +
+      topbarButtonHtml("mode-select", "选择", TOPBAR_ICON_URLS && TOPBAR_ICON_URLS.select, isSelectMode()) +
+      topbarButtonHtml("mode-measure", "测量", TOPBAR_ICON_URLS && TOPBAR_ICON_URLS.measure, false) +
+      topbarButtonHtml("record-element", "记录元素", TOPBAR_ICON_URLS && TOPBAR_ICON_URLS.recordElement, isRecordElementMode()) +
+      topbarButtonHtml("record-region", "记录框选", TOPBAR_ICON_URLS && TOPBAR_ICON_URLS.recordRegion, isRecordRegionMode()) +
+      "</div>" +
+      '<div class="v12-topbar-divider" aria-hidden="true" data-v12-topbar-divider="1"></div>' +
+      '<div class="v12-topbar-drawer-slot" data-v12-topbar-drawer-slot="1">' +
+      topbarDrawerEntryHtml(getV12RecordCount(), state.v12.drawerOpen) +
+      "</div>" +
+      "</div>" +
+      "</div>"
+    );
+  }
+
   function ensureTopbarStyles() {
     if (document.getElementById("v12-topbar-styles")) return;
     var style = document.createElement("style");
     style.id = "v12-topbar-styles";
     style.textContent =
-      ".v12-topbar-toolbar{display:inline-flex;align-items:center;gap:0;height:50px;box-sizing:border-box;padding:6.9px 8.6px 6.9px 6.9px;background:#343434;border:0;border-radius:12px;box-shadow:0 1px 0 rgba(255,255,255,.03) inset,0 8px 20px rgba(0,0,0,.18);backdrop-filter:none;}" +
-      ".v12-topbar-group{display:flex;align-items:center;gap:13.793px;}" +
-      ".v12-topbar-divider{width:1px;align-self:center;height:50px;background:rgba(255,255,255,.1);margin:0 13px;opacity:.55;}" +
-      ".v12-topbar-drawer-slot{display:flex;align-items:center;justify-content:center;margin-left:0;}" +
-      ".v12-topbar-btn{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;border:0;background:transparent;color:rgba(255,255,255,.82);cursor:pointer;user-select:none;touch-action:manipulation;transition:background-color 120ms ease,color 120ms ease,box-shadow 120ms ease,transform 120ms ease,filter 120ms ease;}" +
+      ".v12-topbar-shell{display:inline-flex;align-items:center;justify-content:flex-start;box-sizing:border-box;overflow:hidden;width:" + TOPBAR_EXPANDED_WIDTH + "px;max-width:" + TOPBAR_EXPANDED_WIDTH + "px;transition:width 180ms cubic-bezier(0.2,0,0,1),max-width 180ms cubic-bezier(0.2,0,0,1);}" +
+      ".v12-topbar-shell.is-expanded{width:" + TOPBAR_EXPANDED_WIDTH + "px;max-width:" + TOPBAR_EXPANDED_WIDTH + "px;}" +
+      ".v12-topbar-shell.is-collapsed{width:" + TOPBAR_COLLAPSED_WIDTH + "px;max-width:" + TOPBAR_COLLAPSED_WIDTH + "px;}" +
+      ".v12-topbar-toolbar{display:inline-flex;align-items:center;gap:0;width:100%;height:50px;box-sizing:border-box;background:#343434;border:0;box-shadow:0 1px 0 rgba(255,255,255,.03) inset,0 8px 20px rgba(0,0,0,.18);backdrop-filter:none;overflow:hidden;transition:padding 180ms cubic-bezier(0.2,0,0,1),border-radius 180ms cubic-bezier(0.2,0,0,1),box-shadow 180ms cubic-bezier(0.2,0,0,1);}" +
+      ".v12-topbar-shell.is-expanded .v12-topbar-toolbar{padding:6.9px 8.6px 6.9px 6.9px;border-radius:12px;}" +
+      ".v12-topbar-shell.is-collapsed .v12-topbar-toolbar{padding:6.9px;border-radius:7px;}" +
+      ".v12-topbar-group{display:flex;align-items:center;gap:13.793px;min-width:0;overflow:hidden;flex:0 0 auto;max-width:186.207px;opacity:1;transform:translateX(0) scale(1);visibility:visible;transition:max-width 180ms cubic-bezier(0.2,0,0,1),gap 180ms cubic-bezier(0.2,0,0,1),opacity 160ms ease,transform 180ms cubic-bezier(0.2,0,0,1),visibility 0s linear 0s;will-change:max-width,gap,opacity,transform;}" +
+      ".v12-topbar-shell.is-collapsed .v12-topbar-group{max-width:0;gap:0;opacity:0;transform:translateX(8px) scale(0.96);visibility:hidden;pointer-events:none;transition:visibility 0s linear 180ms,max-width 180ms cubic-bezier(0.2,0,0,1),gap 180ms cubic-bezier(0.2,0,0,1),opacity 160ms ease,transform 180ms cubic-bezier(0.2,0,0,1);}" +
+      ".v12-topbar-group .v12-topbar-btn{opacity:1;transform:translateY(0) scale(1);transition:opacity 140ms ease,transform 180ms cubic-bezier(0.2,0,0,1);}" +
+      ".v12-topbar-shell.is-collapsed .v12-topbar-group .v12-topbar-btn{opacity:0;transform:translateY(-2px) scale(0.96);}" +
+      ".v12-topbar-divider{width:1px;align-self:center;flex:0 0 auto;height:50px;background:rgba(255,255,255,.1);margin:0 13px;opacity:.55;transform:scaleY(1);transform-origin:center;transition:width 180ms cubic-bezier(0.2,0,0,1),margin 180ms cubic-bezier(0.2,0,0,1),opacity 160ms ease,transform 180ms cubic-bezier(0.2,0,0,1),visibility 0s linear 0s;visibility:visible;}" +
+      ".v12-topbar-shell.is-collapsed .v12-topbar-divider{width:0;margin:0;opacity:0;transform:scaleY(0.6);visibility:hidden;pointer-events:none;transition:visibility 0s linear 180ms,width 180ms cubic-bezier(0.2,0,0,1),margin 180ms cubic-bezier(0.2,0,0,1),opacity 160ms ease,transform 180ms cubic-bezier(0.2,0,0,1);}" +
+      ".v12-topbar-drawer-slot{display:flex;align-items:center;justify-content:center;margin-left:auto;flex:0 0 auto;min-width:36.207px;visibility:visible;opacity:1;transform:translateX(0) scale(1);transition:opacity 160ms ease,transform 180ms cubic-bezier(0.2,0,0,1);}" +
+      ".v12-topbar-btn{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;border:0;background:transparent;color:rgba(255,255,255,.82);cursor:pointer;user-select:none;touch-action:manipulation;transition:background-color 120ms ease,color 120ms ease,box-shadow 120ms ease,transform 220ms cubic-bezier(0.22,1,0.36,1),filter 120ms ease,opacity 220ms cubic-bezier(0.22,1,0.36,1);will-change:transform,opacity;}" +
       ".v12-topbar-btn:focus{outline:none;}" +
       ".v12-topbar-icon-btn{width:36.207px;height:36.207px;border-radius:5px;}" +
       ".v12-topbar-icon-btn:hover{background:rgba(255,255,255,.05);}" +
@@ -8405,6 +8453,44 @@
       ".v12-topbar-btn[data-v12-action]{position:relative;}" +
       ".v12-topbar-btn[data-v12-action]::after{content:'';position:absolute;left:50%;bottom:-8px;transform:translateX(-50%);width:100%;height:16px;pointer-events:none;}";
     document.head.appendChild(style);
+  }
+
+  function syncTopbarCollapseMotion() {
+    if (!topbarDom.shell) return;
+    var collapsed = isToolbarCollapsed();
+    topbarDom.shell.classList.toggle("is-collapsed", collapsed);
+    topbarDom.shell.classList.toggle("is-expanded", !collapsed);
+    topbarDom.shell.setAttribute("data-toolbar-state", collapsed ? "collapsed" : "expanded");
+    [
+      topbarDom.selectBtn,
+      topbarDom.measureBtn,
+      topbarDom.recordElementBtn,
+      topbarDom.recordRegionBtn
+    ].forEach(function (btn) {
+      if (!btn) return;
+      btn.disabled = collapsed;
+      btn.tabIndex = collapsed ? -1 : 0;
+    });
+    if (floating) {
+      floating.style.display = "none";
+      floating.style.pointerEvents = "none";
+    }
+  }
+
+  function syncTopbarIconSources() {
+    if (!topbarDom.shell) return;
+    var iconMap = {
+      "mode-select": TOPBAR_ICON_URLS && TOPBAR_ICON_URLS.select,
+      "mode-measure": TOPBAR_ICON_URLS && TOPBAR_ICON_URLS.measure,
+      "record-element": TOPBAR_ICON_URLS && TOPBAR_ICON_URLS.recordElement,
+      "record-region": TOPBAR_ICON_URLS && TOPBAR_ICON_URLS.recordRegion
+    };
+    Object.keys(iconMap).forEach(function (action) {
+      var iconEl = topbarDom.shell.querySelector('[data-v12-topbar-icon="' + action + '"]');
+      if (!iconEl) return;
+      var nextSrc = iconMap[action] || TOPBAR_ICON_PLACEHOLDER_SRC;
+      if (iconEl.getAttribute("src") !== nextSrc) iconEl.setAttribute("src", nextSrc);
+    });
   }
 
   function ensureFloatingControlStyles() {
@@ -8595,10 +8681,9 @@
       getTopbarIconUrlsFromBridge()
         .then(function () {
           if (topbarDom.ready) {
-            topbarDom.ready = false;
-            ensureTopbarDom();
+            syncTopbarIconSources();
             syncTopbar();
-            if (!state.panelCollapsed) schedule();
+            if (!isToolbarCollapsed()) schedule();
           }
         })
         .catch(function () {
@@ -8608,19 +8693,7 @@
         });
     }
     if (topbarDom.ready) return;
-    topbar.innerHTML =
-      '<div class="v12-topbar-toolbar" data-v12-topbar-shell="1" role="toolbar" aria-label="顶部栏">' +
-      '<div class="v12-topbar-group" data-v12-topbar-group="1">' +
-      topbarButtonHtml("mode-select", "选择", TOPBAR_ICON_URLS && TOPBAR_ICON_URLS.select, isSelectMode()) +
-      topbarButtonHtml("mode-measure", "测量", TOPBAR_ICON_URLS && TOPBAR_ICON_URLS.measure, false) +
-      topbarButtonHtml("record-element", "记录元素", TOPBAR_ICON_URLS && TOPBAR_ICON_URLS.recordElement, isRecordElementMode()) +
-      topbarButtonHtml("record-region", "记录框选", TOPBAR_ICON_URLS && TOPBAR_ICON_URLS.recordRegion, isRecordRegionMode()) +
-      "</div>" +
-      '<div class="v12-topbar-divider" aria-hidden="true" data-v12-topbar-divider="1"></div>' +
-      '<div class="v12-topbar-drawer-slot" data-v12-topbar-drawer-slot="1">' +
-      topbarDrawerEntryHtml(getV12RecordCount(), state.v12.drawerOpen) +
-      "</div>" +
-      "</div>";
+    topbar.innerHTML = getTopbarShellHtml();
     topbarDom.selectBtn = topbar.querySelector('[data-v12-action="mode-select"]');
     topbarDom.measureBtn = topbar.querySelector('[data-v12-action="mode-measure"]');
     topbarDom.recordElementBtn = topbar.querySelector('[data-v12-action="record-element"]');
@@ -8632,6 +8705,7 @@
     topbarDom.divider = topbar.querySelector("[data-v12-topbar-divider]");
     topbarDom.drawerSlot = topbar.querySelector("[data-v12-topbar-drawer-slot]");
     topbarDom.ready = true;
+    syncTopbarIconSources();
   }
 
   function getTopbarTooltipMeta(action) {
@@ -8771,6 +8845,10 @@
       var drawerLabel = topbarDom.drawerBtn.querySelector(".v12-topbar-count");
       if (drawerLabel) drawerLabel.textContent = String(getV12RecordCount());
     }
+    if (isToolbarCollapsed() && state.v12.topbarTooltip.visible && state.v12.topbarTooltip.key !== "toggle-drawer") {
+      hideTopbarTooltip(true);
+    }
+    syncTopbarCollapseMotion();
   }
 
   function ensureRecordMenuDom() {
@@ -9467,7 +9545,7 @@
       clearMeasureSelection({ keepTopbarMode: false });
       handleRecordRegionAction();
     } else if (action === "toggle-drawer") {
-      toggleV12Drawer();
+      activateV12DrawerEntry();
     }
     if (e) {
       e.preventDefault();
@@ -9745,11 +9823,32 @@
   }
 
   function setCollapsed(next) {
-    state.panelCollapsed = !!next;
+    var nextCollapsed = !!next;
+    if (state.v12.toolbarCollapsed === nextCollapsed && state.panelCollapsed === nextCollapsed) {
+      if (state.v12.topbarCollapseAnimTimerId) return;
+      syncTopbar();
+      syncTopbarCollapseMotion();
+      schedule();
+      return;
+    }
+    state.v12.toolbarCollapsed = nextCollapsed;
+    state.panelCollapsed = nextCollapsed;
+    if (nextCollapsed && state.v12.drawerOpen) {
+      state.v12.drawerOpen = false;
+      clearDrawerClearConfirm();
+    }
     if (state.panelCollapsed) clearEditingState();
-    floating.title = state.panelCollapsed ? "展开视觉走查" : "收起视觉走查";
-    floating.style.opacity = state.panelCollapsed ? "0.5" : "1";
-    floating.style.border = state.panelCollapsed ? "0" : "2px solid #FF8A00";
+    window.clearTimeout(state.v12.topbarCollapseAnimTimerId);
+    state.v12.topbarCollapseAnimTimerId = window.setTimeout(function () {
+      state.v12.topbarCollapseAnimTimerId = 0;
+    }, TOPBAR_COLLAPSE_ANIM_MS + 120);
+    if (floating) {
+      floating.style.display = "none";
+      floating.style.pointerEvents = "none";
+      floating.title = "";
+    }
+    syncTopbar();
+    syncTopbarCollapseMotion();
     schedule();
   }
 
@@ -9855,12 +9954,30 @@
     if (text) {
       var mx = horizontal ? Math.min(x1, x2) + Math.abs(x2 - x1) / 2 : x1;
       var my = horizontal ? y1 : Math.min(y1, y2) + Math.abs(y2 - y1) / 2;
-      addTag(layer, mx, my, text, color, horizontal);
+      addExternalMeasureLabel(layer, mx, my, text, {
+        width: Math.max(60, Math.min(96, Math.round(String(text).length * 8 + 18))),
+        height: 24
+      });
     }
   }
 
+  var internalMeasurePill = {
+    background: "#2F7BFF",
+    borderColor: "rgba(255,255,255,.14)",
+    color: "#ffffff",
+    boxShadow: "0 6px 16px rgba(47,123,255,.22)"
+  };
+
+  var externalMeasurePill = {
+    background: "rgba(15,23,42,.92)",
+    borderColor: "rgba(255,255,255,.12)",
+    color: "#F8FAFC",
+    boxShadow: "0 6px 16px rgba(0,0,0,.18)"
+  };
+
   function addMeasureLabel(layer, x, y, text, options) {
     var opts = options || {};
+    var theme = opts.theme || externalMeasurePill;
     var tag = document.createElement("div");
     tag.textContent = text;
     tag.style.position = "fixed";
@@ -9870,13 +9987,13 @@
     tag.style.justifyContent = "center";
     tag.style.padding = "3px 8px";
     tag.style.borderRadius = "999px";
-    tag.style.backgroundColor = opts.background || "rgba(15,23,42,.92)";
+    tag.style.backgroundColor = opts.background || theme.background;
     tag.style.backgroundImage = "none";
-    tag.style.border = "2px solid " + (opts.borderColor || "rgba(255,255,255,.12)");
-    tag.style.color = opts.color || "#F8FAFC";
+    tag.style.border = "2px solid " + (opts.borderColor || theme.borderColor);
+    tag.style.color = opts.color || theme.color;
     tag.style.font = "11px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif";
     tag.style.fontWeight = "700";
-    tag.style.boxShadow = "0 6px 16px rgba(0,0,0,.18)";
+    tag.style.boxShadow = opts.boxShadow || theme.boxShadow;
     tag.style.whiteSpace = "nowrap";
     layer.appendChild(tag);
     var width = opts.width || Math.ceil(tag.getBoundingClientRect().width || 58);
@@ -9886,21 +10003,34 @@
     tag.style.top = pos.y + "px";
   }
 
+  function addInternalMeasureLabel(layer, x, y, text, options) {
+    var opts = options || {};
+    opts.theme = internalMeasurePill;
+    addMeasureLabel(layer, x, y, text, opts);
+  }
+
+  function addExternalMeasureLabel(layer, x, y, text, options) {
+    var opts = options || {};
+    opts.theme = externalMeasurePill;
+    addMeasureLabel(layer, x, y, text, opts);
+  }
+
   function addHoverInfoLabel(layer, rect, text, options) {
     if (!rect || !text) return;
     var opts = options || {};
     var width = opts.width || Math.max(72, Math.min(180, Math.round(String(text).length * 8 + 20)));
     var height = opts.height || 24;
     var gap = opts.gap == null ? 10 : opts.gap;
-    addMeasureLabel(
+    addInternalMeasureLabel(
       layer,
       rect.left + rect.width / 2,
       rect.bottom + gap + height / 2,
       text,
       {
-        background: opts.background || "#0084FF",
+        background: opts.background,
         borderColor: opts.borderColor,
-        color: opts.color || "#ffffff",
+        color: opts.color,
+        boxShadow: opts.boxShadow,
         width: width,
         height: height
       }
@@ -10158,7 +10288,7 @@
     if (!bands || !bands.length) return;
     bands.forEach(function (band) {
       addMeasureStripedRangeBlock(layer, band.rect, "#0084FF");
-      addMeasureLabel(
+      addInternalMeasureLabel(
         layer,
         band.anchorX,
         band.anchorY,
@@ -10195,7 +10325,7 @@
     }
     gaps.forEach(function (gap) {
       addMeasureRangeBlock(layer, gap.rect, "rgba(217,70,239,.95)", 0.16);
-      addMeasureLabel(
+      addInternalMeasureLabel(
         layer,
         gap.rect.left + gap.rect.width / 2,
         gap.rect.top + gap.rect.height / 2,
@@ -10234,7 +10364,7 @@
     }
     bands.forEach(function (band) {
       addMeasureRangeBlock(layer, band.rect, "#0084FF", 0.12);
-      addMeasureLabel(
+      addInternalMeasureLabel(
         layer,
         band.anchorX,
         band.anchorY,
@@ -10907,9 +11037,9 @@
       ? (state.measureA ? resolveMeasureSingleState(state.measureA) : (measureHoverEl ? resolveMeasureSingleState(measureHoverEl) : null))
       : null;
     var measurePairState = !collapsed && measurementModeActive && state.measureA && state.measureB ? resolveMeasurePairState(state.measureA, state.measureB) : null;
+    topbar.style.display = "flex";
     if (collapsed) {
       tooltip.style.display = "none";
-      topbar.style.display = "none";
       hideTopbarTooltip(true);
       recordMenu.style.display = "none";
       regionCaptureOverlay.style.display = "none";
@@ -11348,6 +11478,7 @@
       return;
     }
     if (key === CONFIG.hotkeys.togglePanel) {
+      if (e.repeat) return;
       e.__visualQAHandled = true;
       e.preventDefault();
       e.stopImmediatePropagation();
@@ -11379,7 +11510,7 @@
       e.stopImmediatePropagation();
     } else if (key === "m") {
       e.__visualQAHandled = true;
-      toggleV12Drawer();
+      activateV12DrawerEntry();
       e.preventDefault();
       e.stopImmediatePropagation();
     }
@@ -11433,6 +11564,8 @@
     drawerClearConfirmTimerId = 0;
     window.clearTimeout(topbarTooltipHideTimerId);
     topbarTooltipHideTimerId = 0;
+    window.clearTimeout(state.v12.topbarCollapseAnimTimerId);
+    state.v12.topbarCollapseAnimTimerId = 0;
     window.clearTimeout(state.colorPickerOpenTimerId);
     state.colorPickerOpenTimerId = 0;
     stopNumericScrub({ silent: true });
@@ -11527,6 +11660,7 @@
   }
 
   function toggleCollapsed() {
+    if (state.v12.topbarCollapseAnimTimerId) return;
     setCollapsed(!state.panelCollapsed);
   }
 
