@@ -246,12 +246,17 @@
     panelFocusSelectFieldId: "",
     panelHoverFreeze: false,
     panelHoverFreezeTimerId: 0,
+    addPropMenuOpen: false,
+    backgroundEditorOpen: false,
     colorPickerOpenProp: "",
     colorPickerOpenAt: 0,
     colorPickerOpenTimerId: 0,
     rafId: null,
     modifiedProps: {},
     editedProps: {},
+    backgroundFillSources: typeof WeakMap !== "undefined" ? new WeakMap() : null,
+    backgroundFillSnapshots: typeof WeakMap !== "undefined" ? new WeakMap() : null,
+    backgroundFillMeta: null,
     panelCollapsed: false,
     floatX: null,
     floatY: null,
@@ -1852,8 +1857,162 @@
     return !isRecordRegionMode();
   }
 
+  function closeAddPropertyMenu() {
+    var changed = !!state.addPropMenuOpen;
+    state.addPropMenuOpen = false;
+    return changed;
+  }
+
+  function isAddPropertyUiTarget(target) {
+    return !!(target && target.closest && target.closest("[data-vqa-selected-add-property], [data-vqa-add-prop-menu]"));
+  }
+
+  function closeBackgroundEditor() {
+    var changed = !!state.backgroundEditorOpen;
+    state.backgroundEditorOpen = false;
+    return changed;
+  }
+
+  function openBackgroundEditor() {
+    var changed = !state.backgroundEditorOpen;
+    state.backgroundEditorOpen = true;
+    closeAddPropertyMenu();
+    return changed;
+  }
+
+  function isBackgroundEditorTarget(target) {
+    return !!(target && target.closest && target.closest("[data-vqa-background-editor]"));
+  }
+
+  function isPanelOrBackgroundEditorTarget(target) {
+    return !!(target && (tooltip.contains(target) || isBackgroundEditorTarget(target)));
+  }
+
+  function queryPanelOrBackgroundEditor(selector) {
+    if (!selector) return null;
+    var found = tooltip.querySelector(selector);
+    if (found) return found;
+    if (backgroundEditor && typeof backgroundEditor.querySelector === "function") {
+      found = backgroundEditor.querySelector(selector);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  function clearBackgroundFillMeta() {
+    state.backgroundFillMeta = null;
+  }
+
+  function getBackgroundFillSourceForTarget(targetEl) {
+    if (!targetEl) return "";
+    var sources = state.backgroundFillSources;
+    if (sources && typeof sources.get === "function") {
+      return sources.get(targetEl) || "";
+    }
+    return state.backgroundFillMeta && state.backgroundFillMeta.target === targetEl ? state.backgroundFillMeta.source || "" : "";
+  }
+
+  function setBackgroundFillSourceForTarget(targetEl, source) {
+    if (!targetEl || !source) return;
+    var sources = state.backgroundFillSources;
+    if (sources && typeof sources.set === "function") {
+      sources.set(targetEl, source);
+    }
+    state.backgroundFillMeta = { target: targetEl, source: source };
+  }
+
+  function clearBackgroundFillSourceForTarget(targetEl) {
+    if (!targetEl) return;
+    var sources = state.backgroundFillSources;
+    if (sources && typeof sources.delete === "function") {
+      sources.delete(targetEl);
+    }
+    if (state.backgroundFillMeta && state.backgroundFillMeta.target === targetEl) {
+      state.backgroundFillMeta = null;
+    }
+  }
+
+  function getBackgroundFillSnapshotForTarget(targetEl) {
+    if (!targetEl) return null;
+    var snapshots = state.backgroundFillSnapshots;
+    if (snapshots && typeof snapshots.get === "function") {
+      return snapshots.get(targetEl) || null;
+    }
+    return null;
+  }
+
+  function setBackgroundFillSnapshotForTarget(targetEl, snapshot) {
+    if (!targetEl || !snapshot) return;
+    var snapshots = state.backgroundFillSnapshots;
+    if (snapshots && typeof snapshots.set === "function") {
+      snapshots.set(targetEl, snapshot);
+    }
+  }
+
+  function clearBackgroundFillSnapshotForTarget(targetEl) {
+    if (!targetEl) return;
+    var snapshots = state.backgroundFillSnapshots;
+    if (snapshots && typeof snapshots.delete === "function") {
+      snapshots.delete(targetEl);
+    }
+  }
+
+  function clearBackgroundModifiedProps() {
+    delete state.modifiedProps.background;
+    delete state.modifiedProps.backgroundColor;
+    delete state.modifiedProps.backgroundImage;
+    state.editedProps = state.modifiedProps;
+  }
+
+  function captureBackgroundStyleSnapshot(targetEl) {
+    if (!targetEl || !targetEl.style) return null;
+    var existing = getBackgroundFillSnapshotForTarget(targetEl);
+    if (existing) return existing;
+    var computed = getComputedStyle(targetEl);
+    var computedBackground = String((computed && computed.background) || "");
+    var computedBackgroundImage = String((computed && computed.backgroundImage) || "");
+    var snapshot = {
+      background: String(targetEl.style.background || ""),
+      backgroundColor: String(targetEl.style.backgroundColor || ""),
+      backgroundImage: String(targetEl.style.backgroundImage || ""),
+      computedBackground: computedBackground,
+      computedBackgroundImage: computedBackgroundImage,
+      restoreComputed: !!(computedBackgroundImage && computedBackgroundImage.trim() && computedBackgroundImage.trim().toLowerCase() !== "none")
+    };
+    setBackgroundFillSnapshotForTarget(targetEl, snapshot);
+    return snapshot;
+  }
+
+  function restoreBackgroundStyleSnapshot(targetEl) {
+    if (!targetEl || !targetEl.style) return;
+    var snapshot = getBackgroundFillSnapshotForTarget(targetEl);
+    if (!snapshot) {
+      applyStyle("background", "", targetEl);
+      applyStyle("backgroundImage", "", targetEl);
+      applyStyle("backgroundColor", "", targetEl);
+      clearBackgroundFillSourceForTarget(targetEl);
+      clearBackgroundModifiedProps();
+      return;
+    }
+    if (snapshot.restoreComputed) {
+      applyStyle("background", "", targetEl);
+      applyStyle("backgroundImage", "", targetEl);
+      applyStyle("backgroundColor", "", targetEl);
+    } else {
+      applyStyle("background", snapshot.background || "", targetEl);
+      applyStyle("backgroundImage", snapshot.backgroundImage || "", targetEl);
+      applyStyle("backgroundColor", snapshot.backgroundColor || "", targetEl);
+    }
+    clearBackgroundFillSnapshotForTarget(targetEl);
+    clearBackgroundFillSourceForTarget(targetEl);
+    clearBackgroundModifiedProps();
+  }
+
   function setV12Mode(mode) {
     if (mode !== "select" && mode !== "record-element" && mode !== "record-region") return;
+    closeAddPropertyMenu();
+    closeBackgroundEditor();
+    clearBackgroundFillMeta();
     if (mode !== "select") {
       clearMeasureSelection({ keepTopbarMode: false });
     }
@@ -1870,6 +2029,9 @@
 
   function clearMeasureSelection(options) {
     var opts = options || {};
+    closeAddPropertyMenu();
+    closeBackgroundEditor();
+    clearBackgroundFillMeta();
     state.measureA = null;
     state.measureB = null;
     state.primaryMeasure = null;
@@ -1892,6 +2054,9 @@
   }
 
   function setMeasureTopbarMode(enabled) {
+    closeAddPropertyMenu();
+    closeBackgroundEditor();
+    clearBackgroundFillMeta();
     if (enabled) {
       state.measureMode = true;
       state.measureA = null;
@@ -1909,6 +2074,9 @@
   function handleMeasureModeClick(el) {
     if (shouldBlockPageSelectionDuringScrub()) return;
     if (!el) return;
+    closeAddPropertyMenu();
+    closeBackgroundEditor();
+    clearBackgroundFillMeta();
     if (state.measureA === el) {
       state.measureB = null;
       syncQuickRecordUiForCurrentPanel();
@@ -3546,12 +3714,14 @@
     button.style.cursor = quickState.enabled ? "pointer" : "not-allowed";
   }
 
-  function renderSelectedPanelQuickRecordAction(targetEl) {
+  function renderSelectedPanelQuickRecordAction(targetEl, opts) {
+    opts = opts || {};
+    var containerStyle = opts.containerStyle || "display:flex;justify-content:flex-start;padding-top:4px;";
     if (!isPlainSelectMode()) return "";
     var quickState = computeQuickRecordStateForMeasureA();
     var enabled = !!quickState.enabled;
     return (
-      '<div data-vqa-selected-quick-record="1" style="display:flex;justify-content:flex-start;padding-top:4px;">' +
+      '<div data-vqa-selected-quick-record="1" style="' + containerStyle + '">' +
       '<button type="button" data-action="quick-add-record" ' +
       (enabled ? "" : 'disabled aria-disabled="true" ') +
       'style="padding:9px 12px;border-radius:12px;border:1px solid ' +
@@ -3563,6 +3733,46 @@
       ';font:12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:' +
       (enabled ? "pointer" : "not-allowed") +
       ';box-sizing:border-box;">加入记录</button>' +
+      "</div>"
+    );
+  }
+
+  function renderSelectedPanelAddPropertyAction(targetEl, style, capabilities) {
+    var applyTarget = resolveBackgroundHost(targetEl);
+    var canAddBackground = !!applyTarget;
+    var addBgLabel = "添加填充";
+    var addBgHint = "";
+    if (!applyTarget) {
+      addBgHint = "无可写入宿主";
+    }
+    var menuOpen = !!state.addPropMenuOpen;
+    return (
+      '<div data-vqa-selected-add-property="1" style="display:flex;justify-content:flex-start;position:relative;overflow:visible;">' +
+      '<button type="button" data-action="toggle-add-property-menu" aria-expanded="' +
+      (menuOpen ? "true" : "false") +
+      '" style="padding:9px 12px;border-radius:12px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.06);color:rgba(255,255,255,.88);font:12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;box-sizing:border-box;">添加属性</button>' +
+      (menuOpen
+        ? '<div data-vqa-add-prop-menu="1" style="position:absolute;left:0;bottom:calc(100% + 8px);display:flex;flex-direction:column;min-width:172px;padding:6px;border-radius:10px;border:1px solid rgba(255,255,255,.12);background:rgba(22,24,30,.98);box-shadow:0 12px 28px rgba(0,0,0,.38);z-index:8;overflow:visible;">' +
+          '<button type="button" data-action="add-prop-background" ' +
+          (canAddBackground ? "" : 'disabled aria-disabled="true" ') +
+          'style="height:30px;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 10px;border:0;border-radius:7px;background:' +
+          (canAddBackground ? "transparent" : "rgba(255,255,255,.02)") +
+          ';color:' +
+          (canAddBackground ? "rgba(235,240,245,.92)" : "rgba(255,255,255,.36)") +
+          ';font:12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:' +
+          (canAddBackground ? "pointer" : "not-allowed") +
+          ';">' +
+          '<span style="white-space:nowrap;">' + addBgLabel + "</span>" +
+          (addBgHint ? '<span style="color:rgba(255,255,255,.42);font-size:11px;white-space:nowrap;">' + esc(addBgHint) + "</span>" : "") +
+          "</button>" +
+          '<button type="button" disabled aria-disabled="true" style="height:30px;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 10px;border:0;border-radius:7px;background:rgba(255,255,255,.02);color:rgba(255,255,255,.36);font:12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:not-allowed;">' +
+          '<span style="white-space:nowrap;">添加描边</span><span style="color:rgba(255,255,255,.42);font-size:11px;white-space:nowrap;">暂未支持</span>' +
+          "</button>" +
+          '<button type="button" disabled aria-disabled="true" style="height:30px;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 10px;border:0;border-radius:7px;background:rgba(255,255,255,.02);color:rgba(255,255,255,.36);font:12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:not-allowed;">' +
+          '<span style="white-space:nowrap;">添加投影</span><span style="color:rgba(255,255,255,.42);font-size:11px;white-space:nowrap;">暂未支持</span>' +
+          "</button>" +
+          "</div>"
+        : "") +
       "</div>"
     );
   }
@@ -3715,13 +3925,13 @@
     if (state.colorPickerOpenProp) return true;
     var active = document.activeElement;
     if (!active) return false;
-    if (!tooltip.contains(active)) return false;
+    if (!isPanelOrBackgroundEditorTarget(active)) return false;
     if (active.getAttribute("data-color-picker-input") || active.getAttribute("data-color-prop")) return true;
     return !!active.getAttribute("data-field-id");
   }
 
   function isSelectedPanelInteractiveTarget(target) {
-    if (!target || !tooltip.contains(target) || !target.closest) return false;
+    if (!target || !isPanelOrBackgroundEditorTarget(target) || !target.closest) return false;
     return !!target.closest(
       'input[data-editable="1"],input[data-prop],input[data-box-summary],input[data-color-alpha-prop],textarea[data-editable="1"],select[data-editable="1"],[contenteditable="true"]'
     );
@@ -3729,7 +3939,7 @@
 
   function isSelectedPanelSelectActive() {
     var active = document.activeElement;
-    if (!active || !tooltip.contains(active)) return false;
+    if (!active || !isPanelOrBackgroundEditorTarget(active)) return false;
     return getNodeTagName(active) === "select";
   }
 
@@ -3750,7 +3960,7 @@
       state.panelHoverFreezeTimerId = 0;
       if (state.colorPickerOpenProp) return;
       var active = document.activeElement;
-      if (active && tooltip.contains(active) && isSelectedPanelInteractiveTarget(active)) return;
+      if (active && isPanelOrBackgroundEditorTarget(active) && isSelectedPanelInteractiveTarget(active)) return;
       state.panelHoverFreeze = false;
       if (!state.panelCollapsed) schedule();
     }, delay || 0);
@@ -4091,10 +4301,28 @@
   function getColorDraftMeta(prop) {
     var el = getEditableTargetEl();
     if (!el) return { hex: "", alpha: 100 };
+    if (isBackgroundGradientProp(prop)) {
+      var backgroundHost = resolveBackgroundHost(getSelectedPanelTarget());
+      if (!backgroundHost) return { hex: "", alpha: 100 };
+      var gradientState = readBackgroundGradientDraft(backgroundHost);
+      if (prop === "backgroundGradientStop1") {
+        return {
+          hex: gradientState.stop1.hex || "",
+          alpha: gradientState.stop1.alpha
+        };
+      }
+      if (prop === "backgroundGradientStop2") {
+        return {
+          hex: gradientState.stop2.hex || "",
+          alpha: gradientState.stop2.alpha
+        };
+      }
+      return { hex: "", alpha: 100 };
+    }
     var style = getComputedStyle(el);
     var computed = getColorComponents(style[prop]);
-    var hexField = tooltip.querySelector('input[data-prop="' + prop + '"]');
-    var alphaField = tooltip.querySelector('input[data-color-alpha-prop="' + prop + '"]');
+    var hexField = queryPanelOrBackgroundEditor('input[data-prop="' + prop + '"]');
+    var alphaField = queryPanelOrBackgroundEditor('input[data-color-alpha-prop="' + prop + '"]');
     var draftHex = hexField ? String(hexField.value || "").trim() : "";
     var draftAlpha = alphaField ? String(alphaField.value || "").trim() : "";
     return {
@@ -4110,9 +4338,17 @@
     el.style[prop] = next || "";
   }
 
-  function applyColorWithAlpha(prop, hexValue, alphaValue) {
+  function applyColorWithAlpha(prop, hexValue, alphaValue, targetOverride) {
+    if (prop === "backgroundColor") {
+      applyPureBackgroundCover(targetOverride || getEditableTargetEl(), hexValue, alphaValue);
+      return;
+    }
+    if (isBackgroundGradientProp(prop)) {
+      applyBackgroundGradientFromPanel(targetOverride || resolveBackgroundHost(getSelectedPanelTarget()) || getEditableTargetEl());
+      return;
+    }
     var next = rgbaFromHexAndAlpha(hexValue, alphaValue);
-    applyStyle(prop, next || "");
+    applyStyle(prop, next || "", targetOverride);
   }
 
   function syncColorUi(prop, hexValue) {
@@ -4123,11 +4359,11 @@
       if (normalized === "#") normalized = "#000000";
     }
     var bare = normalized.replace(/^#/, "");
-    var pickerInput = tooltip.querySelector('input[data-color-picker-input="' + prop + '"]') || tooltip.querySelector('input[data-color-prop="' + prop + '"]');
+    var pickerInput = queryPanelOrBackgroundEditor('input[data-color-picker-input="' + prop + '"]') || queryPanelOrBackgroundEditor('input[data-color-prop="' + prop + '"]');
     if (pickerInput) pickerInput.value = normalized;
-    var swatchBox = tooltip.querySelector('[data-color-swatch="' + prop + '"]');
+    var swatchBox = queryPanelOrBackgroundEditor('[data-color-swatch="' + prop + '"]');
     if (swatchBox) swatchBox.style.background = normalized;
-    var textInput = tooltip.querySelector('input[data-color-text-prop="' + prop + '"]');
+    var textInput = queryPanelOrBackgroundEditor('input[data-color-text-prop="' + prop + '"]');
     if (textInput) textInput.value = bare;
   }
 
@@ -4634,34 +4870,34 @@
   }
 
   function getScrubInputFromTarget(target) {
-    if (!target || !tooltip.contains(target) || !target.closest) return null;
+    if (!target || !isPanelOrBackgroundEditorTarget(target) || !target.closest) return null;
     var input = target.closest('input[data-prop], input[data-box-summary], input[data-color-alpha-prop]');
-    if (!input || !tooltip.contains(input)) return null;
+    if (!input || !isPanelOrBackgroundEditorTarget(input)) return null;
     if (input.getAttribute("data-scrub-enabled") !== "true") return null;
     return input.disabled ? null : input;
   }
 
   function getIconHoverTarget(target) {
-    if (!target || !tooltip.contains(target) || !target.closest) return null;
+    if (!target || !isPanelOrBackgroundEditorTarget(target) || !target.closest) return null;
     var icon = target.closest('[data-vqa-icon-hit="1"]');
-    if (!icon || !tooltip.contains(icon)) return null;
+    if (!icon || !isPanelOrBackgroundEditorTarget(icon)) return null;
     return icon;
   }
 
   function getScrubInputFromIconTarget(icon) {
     if (!icon || !icon.closest) return null;
     var cell = icon.closest("[data-vqa-atom-cell]");
-    if (!cell || !tooltip.contains(cell)) return null;
+    if (!cell || !isPanelOrBackgroundEditorTarget(cell)) return null;
     var input = cell.querySelector('input[data-prop], input[data-box-summary], input[data-color-alpha-prop]');
-    if (!input || !tooltip.contains(input)) return null;
+    if (!input || !isPanelOrBackgroundEditorTarget(input)) return null;
     if (input.getAttribute("data-scrub-enabled") !== "true") return null;
     return input.disabled ? null : input;
   }
 
   function getScrubHoverTarget(target) {
-    if (!target || !tooltip.contains(target) || !target.closest) return null;
+    if (!target || !isPanelOrBackgroundEditorTarget(target) || !target.closest) return null;
     var input = target.closest('input[data-prop], input[data-box-summary], input[data-color-alpha-prop]');
-    if (input && tooltip.contains(input)) {
+    if (input && isPanelOrBackgroundEditorTarget(input)) {
       return input.disabled ? null : input;
     }
     return null;
@@ -4724,7 +4960,10 @@
     var colorAlphaProp = target.getAttribute("data-color-alpha-prop");
     if (colorAlphaProp) {
       var alphaPercent = parsePercentValue(rawValue);
-      if (alphaPercent === "") alphaPercent = getColorComponents(getComputedStyle(getEditableTargetEl())[colorAlphaProp]).alpha;
+      if (alphaPercent === "") {
+        var alphaFallbackMeta = getColorDraftMeta(colorAlphaProp);
+        alphaPercent = alphaFallbackMeta && alphaFallbackMeta.alpha != null ? alphaFallbackMeta.alpha : getColorComponents(getComputedStyle(getEditableTargetEl())[colorAlphaProp]).alpha;
+      }
       target.value = String(alphaPercent);
       var colorMeta = getColorDraftMeta(colorAlphaProp);
       applyColorWithAlpha(colorAlphaProp, colorMeta.hex, alphaPercent);
@@ -4735,6 +4974,13 @@
 
     var prop = target.getAttribute("data-prop") || "";
     if (!prop) return false;
+
+    if (isBackgroundGradientProp(prop)) {
+      applyBackgroundGradientFromPanel(resolveBackgroundHost(getSelectedPanelTarget()) || getEditableTargetEl());
+      clearEditingState();
+      if (!options.silent) schedule();
+      return true;
+    }
 
     if (fieldId === "text-content") {
       applyTextContentDraft(rawValue);
@@ -4788,8 +5034,8 @@
     return true;
   }
 
-  function applyStyle(prop, value) {
-    var el = getEditableTargetEl();
+  function applyStyle(prop, value, targetOverride) {
+    var el = targetOverride || getEditableTargetEl();
     if (!el) return;
     el.style[prop] = value;
     state.modifiedProps[prop] = true;
@@ -4799,9 +5045,17 @@
   function clearEditedStyles() {
     var el = getEditableTargetEl();
     if (!el) return;
+    var backgroundTarget = resolveBackgroundHost(getSelectedPanelTarget());
+    if (backgroundTarget && (getBackgroundFillSnapshotForTarget(backgroundTarget) || getBackgroundFillSourceForTarget(backgroundTarget) || getVisibleBackgroundColorValue(backgroundTarget, getComputedStyle(backgroundTarget)))) {
+      restoreBackgroundStyleSnapshot(backgroundTarget);
+    }
     Object.keys(state.modifiedProps).forEach(function (prop) {
+      if (backgroundTarget && (prop === "background" || prop === "backgroundColor" || prop === "backgroundImage")) return;
       el.style[prop] = "";
     });
+    if (backgroundTarget) {
+      clearBackgroundModifiedProps();
+    }
     state.modifiedProps = {};
     state.editedProps = state.modifiedProps;
     clearEditingState();
@@ -4811,13 +5065,18 @@
 
   function onPanelInput(e) {
     var target = e.target;
-    if (!target || !tooltip.contains(target)) return;
+    if (!target || !isPanelOrBackgroundEditorTarget(target)) return;
     var fieldId = getFieldId(target);
     if (fieldId) {
       syncFieldDraft(target);
       syncQuickRecordUiForCurrentPanel();
       if (getNodeTagName(target) === "select") {
         commitFieldDraft(target, { silent: false });
+        return;
+      }
+      if (isBackgroundGradientProp(target.getAttribute("data-prop") || "")) {
+        applyBackgroundGradientFromPanel(resolveBackgroundHost(getSelectedPanelTarget()) || getEditableTargetEl());
+        schedule();
         return;
       }
       if (fieldId === "text-content" && getNodeTagName(target) === "textarea") {
@@ -4862,7 +5121,7 @@
 
   function onPanelKeyDown(e) {
     var target = e.target;
-    if (!target || !tooltip.contains(target)) return;
+    if (!target || !isPanelOrBackgroundEditorTarget(target)) return;
     var tagName = getNodeTagName(target);
     var fieldId = getFieldId(target);
     var prop = target.getAttribute("data-prop");
@@ -4884,7 +5143,7 @@
 
   function onPanelFocusIn(e) {
     var target = e.target;
-    if (!target || !tooltip.contains(target)) return;
+    if (!target || !isPanelOrBackgroundEditorTarget(target)) return;
     var fieldId = getFieldId(target);
     if (!fieldId) return;
     if (isSelectedPanelInteractiveTarget(target)) {
@@ -4898,7 +5157,7 @@
   function onPanelBlur(e) {
     if (state.scrub.active) return;
     var target = e.target;
-    if (!target || !tooltip.contains(target)) return;
+    if (!target || !isPanelOrBackgroundEditorTarget(target)) return;
     var fieldId = getFieldId(target);
     if (!fieldId) return;
     if (state.panelFocusSelectFieldId === fieldId && state.panelFocusSelectTimerId) {
@@ -4927,7 +5186,7 @@
 
   function onPanelChange(e) {
     var target = e.target;
-    if (!target || !tooltip.contains(target)) return;
+    if (!target || !isPanelOrBackgroundEditorTarget(target)) return;
     if (getNodeTagName(target) !== "select") return;
     scheduleSelectedPanelHoverUnfreeze(0);
     syncQuickRecordUiForCurrentPanel();
@@ -4936,12 +5195,13 @@
 
   function onPanelMouseMove(e) {
     if (isNumericScrubbingActive()) return;
+    if (!isPanelOrBackgroundEditorTarget(e.target)) return;
     setHoveredScrubIcon(getIconHoverTarget(e.target));
     setHoveredScrubInput(getScrubHoverTarget(e.target), !!e.altKey);
   }
 
   function shouldSelectAllOnPanelFocus(target) {
-    if (!target || !tooltip.contains(target)) return false;
+    if (!target || !isPanelOrBackgroundEditorTarget(target)) return false;
     if (state.scrub.active) return false;
     if (getNodeTagName(target) !== "input") return false;
     if (target.disabled || target.readOnly) return false;
@@ -4966,7 +5226,7 @@
       state.panelFocusSelectTimerId = 0;
       if (state.scrub.active) return;
       if (!target || document.activeElement !== target) return;
-      if (!tooltip.contains(target)) return;
+      if (!isPanelOrBackgroundEditorTarget(target)) return;
       if (fieldId && getFieldId(target) !== fieldId) return;
       try {
         if (typeof target.select === "function") {
@@ -4989,6 +5249,10 @@
   function onPanelMouseDown(e) {
     var actionTarget = e.target && e.target.closest ? e.target.closest("[data-action]") : null;
     var action = actionTarget ? actionTarget.getAttribute("data-action") : "";
+    if (isAddPropertyUiTarget(e.target)) {
+      e.stopPropagation();
+      return;
+    }
     if (action === "quick-add-record") {
       openQuickRecordComposerFromMeasureA();
       e.preventDefault();
@@ -4998,6 +5262,10 @@
     var colorPickerInput = e.target && e.target.closest ? e.target.closest('input[data-color-picker-input]') : null;
     if (colorPickerInput) {
       openColorPickerProtection(colorPickerInput.getAttribute("data-color-picker-input"));
+      return;
+    }
+    if (isBackgroundEditorTarget(e.target)) {
+      e.stopPropagation();
       return;
     }
     var iconTarget = getIconHoverTarget(e.target);
@@ -5046,35 +5314,134 @@
       return;
     }
     var target = e.target;
-    if (!target || !tooltip.contains(target)) return;
-    var action = target.getAttribute("data-action");
+    if (!target || !isPanelOrBackgroundEditorTarget(target)) return;
+    var actionTarget = target.closest ? target.closest("[data-action]") : null;
+    var action = actionTarget ? actionTarget.getAttribute("data-action") : "";
     if (action === "reset-styles") {
+      closeAddPropertyMenu();
+      closeBackgroundEditor();
       clearEditedStyles();
       e.preventDefault();
       return;
     }
     if (action === "quick-add-record") {
+      closeAddPropertyMenu();
+      closeBackgroundEditor();
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    if (action === "toggle-add-property-menu") {
+      closeBackgroundEditor();
+      state.addPropMenuOpen = !state.addPropMenuOpen;
+      schedule();
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    if (action === "add-prop-background") {
+      var addBaseTarget = getSelectedPanelTarget();
+      var addTarget = resolveBackgroundHost(addBaseTarget);
+      if (addTarget) {
+        captureBackgroundStyleSnapshot(addTarget);
+        applyPureBackgroundCover(addTarget, "#FFFFFF", 100);
+        setBackgroundFillSourceForTarget(addTarget, "addedOnNone");
+      }
+      closeAddPropertyMenu();
+      closeBackgroundEditor();
+      schedule();
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    if (action === "toggle-background-editor") {
+      if (state.backgroundEditorOpen) {
+        closeBackgroundEditor();
+      } else {
+        openBackgroundEditor();
+      }
+      schedule();
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    if (action === "close-background-editor") {
+      closeBackgroundEditor();
+      schedule();
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    if (action === "set-background-mode-solid") {
+      var solidTarget = resolveBackgroundHost(getSelectedPanelTarget());
+      if (solidTarget) {
+        applySolidBackgroundMode(solidTarget);
+      }
+      schedule();
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    if (action === "set-background-mode-gradient") {
+      var gradientTarget = resolveBackgroundHost(getSelectedPanelTarget());
+      if (gradientTarget) {
+        applyGradientBackgroundMode(gradientTarget);
+      }
+      schedule();
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    if (action === "remove-background-color") {
+      var removeBaseTarget = getSelectedPanelTarget();
+      var removeTarget = resolveBackgroundHost(removeBaseTarget);
+      if (removeTarget) {
+        if (getBackgroundFillSnapshotForTarget(removeTarget)) {
+          restoreBackgroundStyleSnapshot(removeTarget);
+        } else {
+          applyStyle("backgroundColor", "transparent", removeTarget);
+          clearBackgroundFillSourceForTarget(removeTarget);
+          clearBackgroundModifiedProps();
+        }
+      }
+      closeAddPropertyMenu();
+      closeBackgroundEditor();
+      schedule();
       e.preventDefault();
       e.stopPropagation();
       return;
     }
     if (action === "toggle-padding") {
+      closeAddPropertyMenu();
+      closeBackgroundEditor();
       state.spacingExpanded.padding = !state.spacingExpanded.padding;
       schedule();
       e.preventDefault();
       return;
     }
     if (action === "toggle-radius") {
+      closeAddPropertyMenu();
+      closeBackgroundEditor();
       state.spacingExpanded.radius = !state.spacingExpanded.radius;
       schedule();
       e.preventDefault();
       return;
     }
     if (action === "toggle-margin") {
+      closeAddPropertyMenu();
+      closeBackgroundEditor();
       state.spacingExpanded.margin = !state.spacingExpanded.margin;
       schedule();
       e.preventDefault();
       return;
+    }
+    if (state.addPropMenuOpen) {
+      if (!isAddPropertyUiTarget(target)) {
+        closeAddPropertyMenu();
+        schedule();
+      } else {
+        e.stopPropagation();
+      }
     }
     var stepDir = target.getAttribute("data-step");
     if (stepDir) {
@@ -5770,8 +6137,11 @@
     opts = opts || {};
     var colorMeta = getColorComponents(colorValue);
     var alphaFieldId = prop + "-alpha";
+    var allowDelete = !!opts.allowDelete;
     return (
-      '<div data-vqa-field="color-value" style="display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:0;align-items:stretch;min-width:0;overflow:hidden;border-radius:' +
+      '<div data-vqa-field="color-value" style="display:grid;grid-template-columns:' +
+      (allowDelete ? "minmax(0,2fr) minmax(0,1fr) 36px" : "minmax(0,2fr) minmax(0,1fr)") +
+      ';gap:0;align-items:stretch;min-width:0;overflow:hidden;border-radius:' +
       PANEL_UI.atomRadius +
       ';background:rgba(255,255,255,.07);border:1px solid transparent;transition:background-color 120ms ease,border-color 120ms ease,box-shadow 120ms ease;">' +
       '<div style="display:flex;align-items:center;min-width:0;height:' +
@@ -5831,6 +6201,13 @@
       ';font:400 14px/1.2 \'PingFang SC\',-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;outline:none;box-shadow:none;text-align:right;">' +
       '<span aria-hidden="true" style="flex:0 0 auto;color:#B6B6B6;font:400 14px/1.2 \'PingFang SC\',-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;line-height:1;">%</span>' +
       "</div>" +
+      (allowDelete
+        ? '<div style="display:flex;align-items:center;justify-content:center;height:' +
+          PANEL_UI.atomHeight +
+          ';padding:0 4px;box-sizing:border-box;background:transparent;border:0;">' +
+          '<button type="button" data-action="remove-background-color" aria-label="删除背景色" title="删除背景色" style="width:26px;height:26px;border-radius:6px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.04);color:rgba(232,238,244,.86);font:500 14px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;box-sizing:border-box;">×</button>' +
+          "</div>"
+        : "") +
       "</div>"
     );
   }
@@ -6750,6 +7127,9 @@
   function setSelectedEl(el) {
     var prevSelected = state.selectedA;
     setSelectedPanelHoverFreeze(false);
+    closeAddPropertyMenu();
+    closeBackgroundEditor();
+    clearBackgroundFillMeta();
     if (state.editingFieldId) {
       var activeInput = tooltip.querySelector('[data-field-id="' + state.editingFieldId + '"]');
       if (activeInput) commitFieldDraft(activeInput, { silent: true });
@@ -8789,6 +9169,13 @@
   var topbarTooltipLabel = topbarTooltip.querySelector("[data-v12-topbar-tooltip-label]");
   var topbarTooltipShortcut = topbarTooltip.querySelector("[data-v12-topbar-tooltip-shortcut]");
 
+  var backgroundEditor = make(
+    "div",
+    "position:fixed;left:0;top:0;z-index:" +
+      (CONFIG.zIndexTooltip + 7) +
+      ";pointer-events:none;opacity:0;transition:opacity 120ms ease;will-change:opacity;display:none;"
+  );
+
   var topbarDom = {
     ready: false,
     shell: null,
@@ -9968,7 +10355,7 @@
 
   function flushActivePanelDraftForQuickRecord() {
     var activeInput = document.activeElement;
-    if (!activeInput || !tooltip.contains(activeInput)) return false;
+    if (!activeInput || !isPanelOrBackgroundEditorTarget(activeInput)) return false;
     if (!getFieldId(activeInput)) return false;
     syncFieldDraft(activeInput);
     commitFieldDraft(activeInput, { silent: true });
@@ -10332,6 +10719,9 @@
 
   function setCollapsed(next) {
     var nextCollapsed = !!next;
+    if (nextCollapsed) closeAddPropertyMenu();
+    if (nextCollapsed) closeBackgroundEditor();
+    if (nextCollapsed) clearBackgroundFillMeta();
     if (state.v12.toolbarCollapsed === nextCollapsed && state.panelCollapsed === nextCollapsed) {
       if (state.v12.topbarCollapseAnimTimerId) return;
       syncTopbar();
@@ -11164,6 +11554,9 @@
       rows.push(renderTextEditorRow(textValue));
     }
     rows.push(renderSelectedDimensionsRow(style));
+    if (rows.length) {
+      rows[0] = '<div style="margin-top:-12px;">' + rows[0] + "</div>";
+    }
     return section("", rows);
   }
 
@@ -11335,12 +11728,579 @@
     ]);
   }
 
-  function renderSelectedFillSection(style, capabilities) {
-    if (capabilities.canEditTextContent && isTransparentColor(style.backgroundColor)) return "";
-    if (isTransparentColor(style.backgroundColor)) return "";
-    return section("背景色", [
-      panelColorValueCell("backgroundColor", style.backgroundColor, { kind: "background-color" })
-    ]);
+  function hasInlineStyleValue(el, propName) {
+    if (!el || !el.style || !propName) return false;
+    var value = el.style[propName];
+    return !!(value != null && String(value).trim() !== "");
+  }
+
+  function resolveBackgroundPresence(hostEl, style) {
+    if (!hostEl || !hostEl.tagName) {
+      return {
+        mode: "none",
+        hasBackgroundColor: false,
+        hasBackgroundImage: false,
+        backgroundColor: "",
+        backgroundImage: "",
+        background: "",
+        gradient: null
+      };
+    }
+    var computed = style || getComputedStyle(hostEl);
+    var inlineBackgroundColor = hasInlineStyleValue(hostEl, "backgroundColor") ? String(hostEl.style.backgroundColor || "").trim() : "";
+    var inlineBackgroundImage = hasInlineStyleValue(hostEl, "backgroundImage") ? String(hostEl.style.backgroundImage || "").trim() : "";
+    var inlineBackground = hasInlineStyleValue(hostEl, "background") ? String(hostEl.style.background || "").trim() : "";
+    var resolvedBackgroundColor = inlineBackgroundColor || String((computed && computed.backgroundColor) || "").trim();
+    var resolvedBackgroundImage = inlineBackgroundImage || String((computed && computed.backgroundImage) || "").trim();
+    var resolvedBackground = inlineBackground || String((computed && computed.background) || "").trim();
+    var parsedGradient = parseLinearGradientBackground(resolvedBackgroundImage) || parseLinearGradientBackground(resolvedBackground);
+    var hasBackgroundImage = !!(resolvedBackgroundImage && resolvedBackgroundImage.toLowerCase() !== "none");
+    var hasBackgroundColor = !isTransparentColor(resolvedBackgroundColor);
+    var mode = parsedGradient ? "gradient" : hasBackgroundColor ? "solid" : "none";
+    return {
+      mode: mode,
+      hasBackgroundColor: hasBackgroundColor,
+      hasBackgroundImage: hasBackgroundImage,
+      backgroundColor: resolvedBackgroundColor,
+      backgroundImage: resolvedBackgroundImage,
+      background: resolvedBackground,
+      gradient: parsedGradient
+    };
+  }
+
+  function splitCssTopLevelCommas(value) {
+    var text = String(value == null ? "" : value);
+    if (!text) return [];
+    var parts = [];
+    var current = "";
+    var depth = 0;
+    for (var i = 0; i < text.length; i++) {
+      var ch = text.charAt(i);
+      if (ch === "(") depth += 1;
+      else if (ch === ")") depth = Math.max(0, depth - 1);
+      if (ch === "," && depth === 0) {
+        if (String(current).trim()) parts.push(String(current).trim());
+        current = "";
+        continue;
+      }
+      current += ch;
+    }
+    if (String(current).trim()) parts.push(String(current).trim());
+    return parts;
+  }
+
+  function normalizeLinearGradientAngle(rawAngle) {
+    var value = String(rawAngle == null ? "" : rawAngle).trim().toLowerCase();
+    if (!value) return "180deg";
+    if (/^-?\d+(\.\d+)?deg$/.test(value)) return String(parseFloat(value)) + "deg";
+    if (/^-?\d+(\.\d+)?$/.test(value)) return String(parseFloat(value)) + "deg";
+    if (value === "to top") return "0deg";
+    if (value === "to right") return "90deg";
+    if (value === "to bottom") return "180deg";
+    if (value === "to left") return "270deg";
+    if (value === "to top right") return "45deg";
+    if (value === "to bottom right") return "135deg";
+    if (value === "to bottom left") return "225deg";
+    if (value === "to top left") return "315deg";
+    return "180deg";
+  }
+
+  function splitGradientStopColorAndPosition(token) {
+    var text = String(token == null ? "" : token).trim();
+    if (!text) return { color: "", position: "" };
+    var match = text.match(/^(.*?)(\s+-?\d+(\.\d+)?%?)$/);
+    if (match && match[1]) {
+      return { color: String(match[1]).trim(), position: String(match[2]).trim() };
+    }
+    return { color: text, position: "" };
+  }
+
+  function parseLinearGradientBackground(value) {
+    var text = String(value == null ? "" : value).trim();
+    if (!text) return null;
+    var match = text.match(/linear-gradient\s*\((.*)\)/i);
+    if (!match) return null;
+    var args = splitCssTopLevelCommas(match[1]);
+    if (args.length < 2) return null;
+    var first = args[0];
+    var stopStartIndex = 0;
+    var angle = "180deg";
+    if (/^(to\s|[-+]?\d|\d+(\.\d+)?(deg|rad|turn))$/i.test(String(first).trim())) {
+      angle = normalizeLinearGradientAngle(first);
+      stopStartIndex = 1;
+    }
+    var stops = args.slice(stopStartIndex);
+    if (stops.length < 2) return null;
+    if (stops.length > 2) return null;
+    var stop1Parts = splitGradientStopColorAndPosition(stops[0]);
+    var stop2Parts = splitGradientStopColorAndPosition(stops[1]);
+    var stop1Meta = getColorComponents(stop1Parts.color);
+    var stop2Meta = getColorComponents(stop2Parts.color);
+    if (!stop1Meta.hex || !stop2Meta.hex) return null;
+    return {
+      angle: angle,
+      stop1: {
+        hex: stop1Meta.hex,
+        alpha: stop1Meta.alpha
+      },
+      stop2: {
+        hex: stop2Meta.hex,
+        alpha: stop2Meta.alpha
+      }
+    };
+  }
+
+  function mixHexColors(hexA, hexB, amount) {
+    var first = getColorComponents(hexA);
+    var second = getColorComponents(hexB);
+    var ratio = clamp(parsePercentValue(amount) === "" ? 50 : parsePercentValue(amount), 0, 100) / 100;
+    if (!first.hex || !second.hex) return hexA || hexB || "#FFFFFF";
+    var a = first.hex.length === 4 ? "#" + first.hex.charAt(1) + first.hex.charAt(1) + first.hex.charAt(2) + first.hex.charAt(2) + first.hex.charAt(3) + first.hex.charAt(3) : first.hex;
+    var b = second.hex.length === 4 ? "#" + second.hex.charAt(1) + second.hex.charAt(1) + second.hex.charAt(2) + second.hex.charAt(2) + second.hex.charAt(3) + second.hex.charAt(3) : second.hex;
+    var ar = parseInt(a.slice(1, 3), 16);
+    var ag = parseInt(a.slice(3, 5), 16);
+    var ab = parseInt(a.slice(5, 7), 16);
+    var br = parseInt(b.slice(1, 3), 16);
+    var bg = parseInt(b.slice(3, 5), 16);
+    var bb = parseInt(b.slice(5, 7), 16);
+    var r = Math.round(ar + (br - ar) * ratio);
+    var g = Math.round(ag + (bg - ag) * ratio);
+    var bl = Math.round(ab + (bb - ab) * ratio);
+    return "#" + [r, g, bl].map(function (n) {
+      var v = Math.max(0, Math.min(255, n || 0)).toString(16);
+      return v.length < 2 ? "0" + v : v;
+    }).join("").toUpperCase();
+  }
+
+  function deriveGradientStopsFromSolid(colorValue) {
+    var solid = getColorComponents(colorValue);
+    var baseHex = solid.hex || "#FFFFFF";
+    var light = mixHexColors(baseHex, "#FFFFFF", 0.18);
+    var dark = mixHexColors(baseHex, "#111827", 0.18);
+    var first = getColorComponents(baseHex);
+    var second = getColorComponents(dark === baseHex ? light : dark);
+    return {
+      angle: "180deg",
+      stop1: {
+        hex: first.hex || baseHex || "#FFFFFF",
+        alpha: first.alpha || 100
+      },
+      stop2: {
+        hex: second.hex || light || "#DDE7FF",
+        alpha: second.alpha || 100
+      }
+    };
+  }
+
+  function buildLinearGradientBackground(angle, stop1, stop2) {
+    var nextAngle = normalizeLinearGradientAngle(angle);
+    var stop1Value = rgbaFromHexAndAlpha(stop1 && stop1.hex ? stop1.hex : stop1, stop1 && stop1.alpha != null ? stop1.alpha : 100) || "rgba(255, 255, 255, 1)";
+    var stop2Value = rgbaFromHexAndAlpha(stop2 && stop2.hex ? stop2.hex : stop2, stop2 && stop2.alpha != null ? stop2.alpha : 100) || "rgba(255, 255, 255, 1)";
+    return "linear-gradient(" + nextAngle + ", " + stop1Value + " 0%, " + stop2Value + " 100%)";
+  }
+
+  function getBackgroundGradientState(hostEl, style) {
+    var presence = resolveBackgroundPresence(hostEl, style);
+    var gradient = presence.gradient;
+    if (!gradient) {
+      var fallback = deriveGradientStopsFromSolid(presence.backgroundColor || "#FFFFFF");
+      return {
+        mode: "solid",
+        angle: fallback.angle,
+        stop1: fallback.stop1,
+        stop2: fallback.stop2
+      };
+    }
+    return {
+      mode: "gradient",
+      angle: gradient.angle || "180deg",
+      stop1: gradient.stop1 || { hex: "#FFFFFF", alpha: 100 },
+      stop2: gradient.stop2 || { hex: "#FFFFFF", alpha: 100 }
+    };
+  }
+
+  function isBackgroundGradientProp(prop) {
+    return prop === "backgroundGradientAngle" || prop === "backgroundGradientStop1" || prop === "backgroundGradientStop2";
+  }
+
+  function readBackgroundGradientDraft(hostEl) {
+    var style = hostEl ? getComputedStyle(hostEl) : null;
+    var current = getBackgroundGradientState(hostEl, style);
+    var angleInput = queryPanelOrBackgroundEditor('input[data-prop="backgroundGradientAngle"]');
+    var stop1HexInput = queryPanelOrBackgroundEditor('input[data-prop="backgroundGradientStop1"]');
+    var stop1AlphaInput = queryPanelOrBackgroundEditor('input[data-color-alpha-prop="backgroundGradientStop1"]');
+    var stop2HexInput = queryPanelOrBackgroundEditor('input[data-prop="backgroundGradientStop2"]');
+    var stop2AlphaInput = queryPanelOrBackgroundEditor('input[data-color-alpha-prop="backgroundGradientStop2"]');
+    var angle = angleInput ? String(angleInput.value || "").trim() : "";
+    var stop1Hex = stop1HexInput ? String(stop1HexInput.value || "").trim() : "";
+    var stop1Alpha = stop1AlphaInput ? String(stop1AlphaInput.value || "").trim() : "";
+    var stop2Hex = stop2HexInput ? String(stop2HexInput.value || "").trim() : "";
+    var stop2Alpha = stop2AlphaInput ? String(stop2AlphaInput.value || "").trim() : "";
+    return {
+      angle: normalizeLinearGradientAngle(angle || current.angle),
+      stop1: {
+        hex: toHexColor(stop1Hex || current.stop1.hex || "#FFFFFF") || "#FFFFFF",
+        alpha: stop1Alpha !== "" ? parsePercentValue(stop1Alpha) : current.stop1.alpha
+      },
+      stop2: {
+        hex: toHexColor(stop2Hex || current.stop2.hex || "#FFFFFF") || "#FFFFFF",
+        alpha: stop2Alpha !== "" ? parsePercentValue(stop2Alpha) : current.stop2.alpha
+      }
+    };
+  }
+
+  function applyLinearGradientBackground(targetEl, angle, stop1, stop2) {
+    if (!targetEl) return;
+    captureBackgroundStyleSnapshot(targetEl);
+    applyStyle("background", "", targetEl);
+    applyStyle("backgroundColor", "transparent", targetEl);
+    applyStyle("backgroundImage", buildLinearGradientBackground(angle, stop1, stop2), targetEl);
+  }
+
+  function applyBackgroundGradientFromPanel(targetEl) {
+    var host = targetEl || getEditableTargetEl();
+    if (!host) return;
+    var draft = readBackgroundGradientDraft(host);
+    applyLinearGradientBackground(host, draft.angle, draft.stop1, draft.stop2);
+  }
+
+  function applySolidBackgroundMode(targetEl) {
+    var host = targetEl || getEditableTargetEl();
+    if (!host) return;
+    var presence = resolveBackgroundPresence(host, getComputedStyle(host));
+    if (presence.mode === "gradient" && presence.gradient) {
+      applyPureBackgroundCover(host, presence.gradient.stop1.hex || "#FFFFFF", presence.gradient.stop1.alpha != null ? presence.gradient.stop1.alpha : 100);
+      return;
+    }
+    var solid = getColorComponents(presence.backgroundColor || "#FFFFFF");
+    applyPureBackgroundCover(host, solid.hex || "#FFFFFF", solid.alpha != null ? solid.alpha : 100);
+  }
+
+  function deriveGradientDraftFromCurrentBackground(host) {
+    var presence = resolveBackgroundPresence(host, getComputedStyle(host));
+    if (presence.mode === "gradient" && presence.gradient) {
+      return presence.gradient;
+    }
+    return deriveGradientStopsFromSolid(presence.backgroundColor || "#FFFFFF");
+  }
+
+  function applyGradientBackgroundMode(targetEl) {
+    var host = targetEl || getEditableTargetEl();
+    if (!host) return;
+    var draft = deriveGradientDraftFromCurrentBackground(host);
+    applyLinearGradientBackground(host, draft.angle, draft.stop1, draft.stop2);
+  }
+
+  function isBackgroundHostTag(tagName) {
+    return /^(button|a|label|summary|details|input|textarea|select|option)$/i.test(tagName || "");
+  }
+
+  function isBackgroundHostRole(roleValue) {
+    return /^(button|menuitem|tab|option|checkbox|radio|switch|textbox|combobox|listbox|link)$/i.test(String(roleValue || "").toLowerCase());
+  }
+
+  function isBoxyDisplay(displayValue) {
+    return /^(block|inline-block|flex|inline-flex|grid|inline-grid|table-cell|table-caption|list-item)$/.test(String(displayValue || "").toLowerCase());
+  }
+
+  function isVisibleBackgroundHostCandidate(el, style) {
+    if (!el || !el.tagName) return false;
+    var computed = style || getComputedStyle(el);
+    if (!computed) return false;
+    if (computed.display === "none" || computed.visibility === "hidden") return false;
+    if (computed.opacity != null && parseFloat(computed.opacity) <= 0) return false;
+    var rect = el.getBoundingClientRect ? el.getBoundingClientRect() : null;
+    if (!rect || rect.width <= 0 || rect.height <= 0) return false;
+    var tag = el.tagName.toLowerCase();
+    var role = el.getAttribute ? el.getAttribute("role") : "";
+    if (isBackgroundHostTag(tag) || isBackgroundHostRole(role) || hasBoxSemantic(el)) return true;
+    if (isBoxyDisplay(computed.display)) return true;
+    return rect.width > 0 && rect.height > 0;
+  }
+
+  function isTextLeafLikeBackgroundTarget(el) {
+    if (!el || !el.tagName) return false;
+    var tag = el.tagName.toLowerCase();
+    var style = getComputedStyle(el);
+    if (/^(input|textarea)$/i.test(tag)) return false;
+    if (isBackgroundHostTag(tag)) return false;
+    if (hasBoxSemantic(el)) return false;
+    if (style && isBoxyDisplay(style.display)) return false;
+    return !!(getDirectTextContent(el) || (/^(button|a|label|p|span|small|strong|em|b|i|h1|h2|h3|h4|h5|h6)$/i.test(tag) && (el.innerText || "").trim()));
+  }
+
+  function resolveBackgroundHost(baseTarget) {
+    if (!baseTarget) return null;
+    if (baseTarget.nodeType === 3) {
+      return resolveBackgroundHost(baseTarget.parentElement || null);
+    }
+    if (baseTarget.nodeType !== 1) return null;
+
+    var tag = baseTarget.tagName ? baseTarget.tagName.toLowerCase() : "";
+    if (tag === "svg" || /^(img|video|canvas|iframe)$/i.test(tag)) return baseTarget;
+    if (baseTarget instanceof HTMLElement) {
+      var baseStyle = getComputedStyle(baseTarget);
+      var baseRole = baseTarget.getAttribute ? baseTarget.getAttribute("role") : "";
+      if (
+        (isBackgroundHostTag(tag) || isBackgroundHostRole(baseRole) || hasBoxSemantic(baseTarget) || isBoxyDisplay(baseStyle && baseStyle.display)) &&
+        isVisibleBackgroundHostCandidate(baseTarget, baseStyle)
+      ) {
+        return baseTarget;
+      }
+    }
+
+    if (baseTarget.namespaceURI === "http://www.w3.org/2000/svg") {
+      if (baseTarget.ownerSVGElement && baseTarget.ownerSVGElement !== baseTarget) {
+        return baseTarget.ownerSVGElement;
+      }
+      if (tag === "svg") return baseTarget;
+      var svgCursor = baseTarget.parentElement;
+      while (svgCursor) {
+        if (svgCursor.tagName && svgCursor.tagName.toLowerCase() === "svg") return svgCursor;
+        if (svgCursor instanceof HTMLElement && isVisibleBackgroundHostCandidate(svgCursor, getComputedStyle(svgCursor))) return svgCursor;
+        svgCursor = svgCursor.parentElement;
+      }
+      return null;
+    }
+
+    var current = baseTarget;
+    while (current) {
+      if (!(current instanceof HTMLElement)) {
+        current = current.parentElement;
+        continue;
+      }
+      var currentStyle = getComputedStyle(current);
+      var currentTag = current.tagName ? current.tagName.toLowerCase() : "";
+      if (currentTag === "svg" || /^(img|video|canvas|iframe)$/i.test(currentTag)) return current;
+      if (isBackgroundHostTag(currentTag) || isBackgroundHostRole(current.getAttribute && current.getAttribute("role"))) {
+        if (isVisibleBackgroundHostCandidate(current, currentStyle)) return current;
+      }
+      if (!isTextLeafLikeBackgroundTarget(current) && isVisibleBackgroundHostCandidate(current, currentStyle)) {
+        return current;
+      }
+      current = current.parentElement;
+    }
+    return null;
+  }
+
+  function resolveBackgroundApplyTarget(baseEl) {
+    return resolveBackgroundHost(baseEl);
+  }
+
+  function getVisibleBackgroundColorValue(targetEl, style) {
+    if (!targetEl) return "";
+    var presence = resolveBackgroundPresence(targetEl, style);
+    return presence.hasBackgroundColor ? presence.backgroundColor : "";
+  }
+
+  function applyPureBackgroundCover(targetEl, hexValue, alphaValue) {
+    if (!targetEl) return;
+    captureBackgroundStyleSnapshot(targetEl);
+    applyStyle("background", "", targetEl);
+    applyStyle("backgroundImage", "none", targetEl);
+    applyStyle("backgroundColor", rgbaFromHexAndAlpha(hexValue, alphaValue) || "", targetEl);
+  }
+
+  function renderBackgroundModeToggleRow(mode) {
+    var solidActive = mode !== "gradient";
+    var gradientActive = mode === "gradient";
+    return (
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">' +
+      '<button type="button" data-action="set-background-mode-solid" data-active="' +
+      (solidActive ? "true" : "false") +
+      '" style="height:30px;border-radius:10px;border:1px solid ' +
+      (solidActive ? "rgba(255,255,255,.18)" : "rgba(255,255,255,.10)") +
+      ';background:' +
+      (solidActive ? "rgba(255,255,255,.12)" : "rgba(255,255,255,.04)") +
+      ';color:' +
+      (solidActive ? "rgba(255,255,255,.94)" : "rgba(255,255,255,.74)") +
+      ';font:12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;box-sizing:border-box;">实色</button>' +
+      '<button type="button" data-action="set-background-mode-gradient" data-active="' +
+      (gradientActive ? "true" : "false") +
+      '" style="height:30px;border-radius:10px;border:1px solid ' +
+      (gradientActive ? "rgba(255,255,255,.18)" : "rgba(255,255,255,.10)") +
+      ';background:' +
+      (gradientActive ? "rgba(255,255,255,.12)" : "rgba(255,255,255,.04)") +
+      ';color:' +
+      (gradientActive ? "rgba(255,255,255,.94)" : "rgba(255,255,255,.74)") +
+      ';font:12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;box-sizing:border-box;">渐变</button>' +
+      "</div>"
+    );
+  }
+
+  function renderBackgroundSolidControls(applyTarget, presence) {
+    var displayValue = presence.hasBackgroundColor ? getVisibleBackgroundColorValue(applyTarget, getComputedStyle(applyTarget)) : presence.backgroundColor || "#FFFFFF";
+    if (!displayValue) displayValue = "#FFFFFF";
+    return panelColorValueCell("backgroundColor", displayValue, { kind: "background-color", allowDelete: true });
+  }
+
+  function renderBackgroundGradientControls(applyTarget, presence) {
+    var gradientState = getBackgroundGradientState(applyTarget, getComputedStyle(applyTarget));
+    var angleValue = String(gradientState.angle || "180deg").replace(/deg$/i, "");
+    var stop1Value = rgbaFromHexAndAlpha(gradientState.stop1.hex || "#FFFFFF", gradientState.stop1.alpha != null ? gradientState.stop1.alpha : 100) || "#FFFFFF";
+    var stop2Value = rgbaFromHexAndAlpha(gradientState.stop2.hex || "#FFFFFF", gradientState.stop2.alpha != null ? gradientState.stop2.alpha : 100) || "#FFFFFF";
+    return (
+      '<div style="display:flex;flex-direction:column;gap:8px;">' +
+      panelIconValueCell("", "backgroundGradientAngle", angleValue, {
+        kind: "background-gradient-angle",
+        flex: "1 1 auto",
+        slotName: "background-gradient-angle",
+        inputFont: "400 14px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif",
+        inputTextAlign: "left"
+      }) +
+      panelColorValueCell("backgroundGradientStop1", stop1Value, { kind: "background-gradient-stop1" }) +
+      panelColorValueCell("backgroundGradientStop2", stop2Value, { kind: "background-gradient-stop2" }) +
+      "</div>"
+    );
+  }
+
+  function getBackgroundSummaryState(applyTarget) {
+    var applyTargetStyle = getComputedStyle(applyTarget);
+    var presence = resolveBackgroundPresence(applyTarget, applyTargetStyle);
+    var mode = presence.mode === "gradient" ? "gradient" : presence.hasBackgroundColor ? "solid" : "none";
+    var previewValue = "";
+    var label = "添加背景";
+    var opacityText = "--";
+    if (mode === "gradient" && presence.gradient) {
+      previewValue = buildLinearGradientBackground(presence.gradient.angle, presence.gradient.stop1, presence.gradient.stop2);
+      label = "渐变填充";
+      opacityText = String(presence.gradient.stop1 && presence.gradient.stop1.alpha != null ? presence.gradient.stop1.alpha : 100) + "%";
+    } else if (presence.hasBackgroundColor) {
+      previewValue = presence.backgroundColor || "#FFFFFF";
+      label = "实色填充";
+      var solidColor = getColorComponents(presence.backgroundColor || "#FFFFFF");
+      opacityText = String(solidColor.alpha != null ? solidColor.alpha : 100) + "%";
+    } else {
+      previewValue = "transparent";
+    }
+    return {
+      mode: mode,
+      label: label,
+      previewValue: previewValue,
+      opacityText: opacityText,
+      presence: presence
+    };
+  }
+
+  function renderBackgroundSummaryRow(applyTarget) {
+    var summary = getBackgroundSummaryState(applyTarget);
+    if (!summary || summary.mode === "none") return "";
+    var open = !!state.backgroundEditorOpen;
+    return (
+      '<div data-vqa-background-summary="1" data-action="toggle-background-editor" data-open="' +
+      (open ? "true" : "false") +
+      '" style="display:grid;grid-template-columns:28px minmax(0,1fr) auto auto;gap:10px;align-items:center;min-width:0;padding:0 10px;height:' +
+      PANEL_UI.atomHeight +
+      ';border-radius:' +
+      PANEL_UI.atomRadius +
+      ';background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);box-sizing:border-box;cursor:pointer;">' +
+      '<div aria-hidden="true" style="width:20px;height:20px;border-radius:6px;background:' +
+      esc(summary.previewValue || "transparent") +
+      ';border:1px solid rgba(255,255,255,.12);box-sizing:border-box;"></div>' +
+      '<div style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:' +
+      PANEL_UI.atomText +
+      ';font:400 14px/1.2 \'PingFang SC\',-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;">' +
+      esc(summary.label) +
+      "</div>" +
+      '<div style="min-width:0;color:' +
+      PANEL_UI.atomMutedText +
+      ';font:400 13px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;white-space:nowrap;">' +
+      esc(summary.opacityText) +
+      "</div>" +
+      (summary.mode !== "none"
+        ? '<button type="button" data-action="remove-background-color" aria-label="删除背景" title="删除背景" style="width:26px;height:26px;border:1px solid rgba(255,255,255,.14);border-radius:7px;background:rgba(255,255,255,.04);color:rgba(232,238,244,.86);font:500 14px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;box-sizing:border-box;">×</button>'
+        : '<div aria-hidden="true" style="width:26px;height:26px;"></div>') +
+      "</div>"
+    );
+  }
+
+  function syncBackgroundEditorPosition(applyTarget) {
+    if (!backgroundEditor || !backgroundEditor.parentNode) return;
+    var editorCard = backgroundEditor.querySelector("[data-vqa-background-editor-card=\"1\"]");
+    if (!editorCard) return;
+    var anchor = tooltip.querySelector('[data-vqa-background-summary="1"]') || tooltip.querySelector('[data-vqa-background-summary-trigger="1"]');
+    var anchorRect = anchor && anchor.getBoundingClientRect ? anchor.getBoundingClientRect() : (applyTarget && applyTarget.getBoundingClientRect ? applyTarget.getBoundingClientRect() : null);
+    var cardRect = editorCard.getBoundingClientRect();
+    var width = cardRect.width || editorCard.offsetWidth || 320;
+    var height = cardRect.height || editorCard.offsetHeight || 0;
+    var padding = 8;
+    var gap = 12;
+    var left = 0;
+    var top = 0;
+    if (anchorRect) {
+      var rightCandidate = anchorRect.right + gap;
+      var leftCandidate = anchorRect.left - width - gap;
+      var preferredTop = anchorRect.top - 6;
+      var maxLeft = Math.max(padding, window.innerWidth - width - padding);
+      var maxTop = Math.max(padding, window.innerHeight - Math.max(height, 120) - padding);
+      if (rightCandidate + width <= window.innerWidth - padding) {
+        left = rightCandidate;
+      } else if (leftCandidate >= padding) {
+        left = leftCandidate;
+      } else {
+        left = clamp(anchorRect.left, padding, maxLeft);
+      }
+      top = clamp(preferredTop, padding, maxTop);
+      if (top + height > window.innerHeight - padding) {
+        top = clamp(window.innerHeight - height - padding, padding, maxTop);
+      }
+    } else {
+      left = clamp(window.innerWidth - width - 16, padding, window.innerWidth - width - padding);
+      top = padding;
+    }
+    editorCard.style.left = left + "px";
+    editorCard.style.top = top + "px";
+  }
+
+  function renderBackgroundEditorPanel(applyTarget) {
+    if (!backgroundEditor) return;
+    if (!state.backgroundEditorOpen) {
+      backgroundEditor.style.display = "none";
+      backgroundEditor.style.opacity = "0";
+      backgroundEditor.innerHTML = "";
+      return;
+    }
+    if (!applyTarget) {
+      closeBackgroundEditor();
+      backgroundEditor.style.display = "none";
+      backgroundEditor.style.opacity = "0";
+      backgroundEditor.innerHTML = "";
+      return;
+    }
+    var applyTargetStyle = getComputedStyle(applyTarget);
+    var presence = resolveBackgroundPresence(applyTarget, applyTargetStyle);
+    if (presence.mode === "none" && !presence.hasBackgroundColor && !presence.hasBackgroundImage) {
+      closeBackgroundEditor();
+      backgroundEditor.style.display = "none";
+      backgroundEditor.style.opacity = "0";
+      backgroundEditor.innerHTML = "";
+      return;
+    }
+    var mode = presence.mode === "gradient" ? "gradient" : "solid";
+    var bodyHtml = mode === "gradient" ? renderBackgroundGradientControls(applyTarget, presence) : renderBackgroundSolidControls(applyTarget, presence);
+    backgroundEditor.style.display = "block";
+    backgroundEditor.style.opacity = "1";
+    backgroundEditor.innerHTML =
+      '<div data-vqa-background-editor="1" style="position:fixed;left:0;top:0;z-index:1;pointer-events:auto;">' +
+      '<div data-vqa-background-editor-card="1" style="position:fixed;left:0;top:0;min-width:320px;max-width:min(360px,calc(100vw - 24px));max-height:calc(100vh - 24px);overflow:auto;display:flex;flex-direction:column;gap:10px;padding:12px;border-radius:18px;border:1px solid rgba(255,255,255,.12);background:rgba(18,20,25,.98);box-shadow:0 18px 36px rgba(0,0,0,.32);box-sizing:border-box;">' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0;">' +
+      '<div style="min-width:0;color:#fff;font:600 13px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">颜色属性</div>' +
+      '<button type="button" data-action="close-background-editor" aria-label="关闭背景编辑器" title="关闭" style="width:26px;height:26px;border:0;border-radius:7px;background:rgba(255,255,255,.06);color:rgba(255,255,255,.82);font:500 14px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;box-sizing:border-box;">×</button>' +
+      "</div>" +
+      renderBackgroundModeToggleRow(mode) +
+      bodyHtml +
+      "</div>" +
+      "</div>";
+    syncBackgroundEditorPosition(applyTarget);
+  }
+
+  function renderSelectedBackgroundSection(el, style, capabilities) {
+    var applyTarget = resolveBackgroundHost(el);
+    if (!applyTarget) return "";
+    var applyTargetStyle = getComputedStyle(applyTarget);
+    var presence = resolveBackgroundPresence(applyTarget, applyTargetStyle);
+    if (presence.mode === "none") return "";
+    return section("背景", [renderBackgroundSummaryRow(applyTarget)]);
   }
 
   function buildSelectedPanelSections(el, style, capabilities, textValue) {
@@ -11349,7 +12309,7 @@
     sections.push(renderSelectedLayoutSection(style, boxValues(style, "padding"), boxValues(style, "margin"), capabilities));
     sections.push(renderSelectedFontSection(style, capabilities));
     sections.push(renderSelectedAppearanceSection(style, capabilities));
-    if (!capabilities.canEditTextContent) sections.push(renderSelectedFillSection(style, capabilities));
+    sections.push(renderSelectedBackgroundSection(el, style, capabilities));
     return sections.filter(Boolean);
   }
 
@@ -11380,15 +12340,24 @@
 
     var textValue = capabilities.canEditTextContent ? getEditableTextValue(el) : "";
     var sections = buildSelectedPanelSections(el, style, capabilities, textValue);
+    var addPropertyAction = renderSelectedPanelAddPropertyAction(el, style, capabilities);
+    var quickRecordAction = renderSelectedPanelQuickRecordAction(el, {
+      containerStyle: "display:flex;justify-content:flex-start;"
+    });
     body.innerHTML =
       '<div class="v12-selected-panel" data-vqa-panel-stack data-vqa-panel-kind="' +
       esc(capabilities.canEditTextContent ? "text" : "element") +
-      '" style="display:flex;flex-direction:column;gap:' +
+      '" style="display:flex;flex-direction:column;min-height:0;max-height:72vh;overflow:visible;">' +
+      '<div data-vqa-panel-scroll="1" style="display:flex;flex-direction:column;gap:' +
       PANEL_UI.sectionGap +
-      ';">' +
+      ';min-height:0;overflow-y:auto;overflow-x:visible;padding-bottom:18px;box-sizing:border-box;">' +
       sections.join("") +
-      renderSelectedPanelQuickRecordAction(el) +
+      "</div>" +
+      '<div data-vqa-panel-footer="1" style="display:flex;flex-direction:column;gap:8px;position:relative;z-index:4;flex:0 0 auto;padding:12px 0 0;background:transparent;overflow:visible;">' +
+      addPropertyAction +
+      quickRecordAction +
       "</div>";
+    renderBackgroundEditorPanel(resolveBackgroundHost(el));
     var textEditor = tooltip.querySelector('textarea[data-field-id="text-content"]');
     if (textEditor) syncTextareaAutoHeight(textEditor);
     logTargetDebug("render-selected-panel", el);
@@ -11772,6 +12741,22 @@
   function onClick(e) {
     if (state.panelCollapsed) return;
     if (isNumericScrubbingActive() || consumeSuppressedSelectionEvent(e)) return;
+    if (isAddPropertyUiTarget(e.target)) return;
+    if (state.backgroundEditorOpen && e.target && tooltip.contains(e.target) && !isBackgroundEditorTarget(e.target)) {
+      var backgroundToggleTarget = e.target.closest ? e.target.closest('[data-action="toggle-background-editor"]') : null;
+      var backgroundEditorActionTarget = e.target.closest ? e.target.closest("[data-vqa-background-editor]") : null;
+      if (!backgroundToggleTarget && !backgroundEditorActionTarget) {
+        closeBackgroundEditor();
+        schedule();
+      }
+    } else if (state.backgroundEditorOpen && (!e.target || (!tooltip.contains(e.target) && !isBackgroundEditorTarget(e.target)))) {
+      closeBackgroundEditor();
+      schedule();
+    }
+    if (state.addPropMenuOpen && (!e.target || !tooltip.contains(e.target))) {
+      closeAddPropertyMenu();
+      if (!state.panelCollapsed) schedule();
+    }
     if (state.v12.suppressNextClick) {
       state.v12.suppressNextClick = false;
       e.preventDefault();
@@ -11793,7 +12778,7 @@
     }
     if (topbar.contains(e.target) || recordMenu.contains(e.target) || drawerStub.contains(e.target) || recordComposer.contains(e.target)) return;
     if (recordPreview.contains(e.target)) return;
-    if (tooltip.contains(e.target)) return;
+    if (tooltip.contains(e.target) || isBackgroundEditorTarget(e.target)) return;
     if (state.panelHoverFreeze) {
       scheduleSelectedPanelHoverUnfreeze(0);
     }
@@ -11937,6 +12922,13 @@
 
     if (state.v12.drawerClearConfirmArmed) {
       clearDrawerClearConfirm();
+    } else if (state.backgroundEditorOpen) {
+      closeBackgroundEditor();
+      clearEditingState();
+      schedule();
+    } else if (state.addPropMenuOpen) {
+      closeAddPropertyMenu();
+      schedule();
     } else if (state.v12.previewRecordId) {
       closeRecordPreview();
     } else if (state.v12.regionSelection.active) {
@@ -12110,6 +13102,17 @@
     tooltip.removeEventListener("mousemove", onPanelMouseMove, true);
     tooltip.removeEventListener("mouseleave", onPanelMouseLeave, true);
     tooltip.removeEventListener("mousedown", onPanelMouseDown, true);
+    tooltip.removeEventListener("scroll", schedule, true);
+    backgroundEditor.removeEventListener("input", onPanelInput, true);
+    backgroundEditor.removeEventListener("change", onPanelChange, true);
+    backgroundEditor.removeEventListener("focusin", onPanelFocusIn, true);
+    backgroundEditor.removeEventListener("blur", onPanelBlur, true);
+    backgroundEditor.removeEventListener("keydown", onPanelKeyDown, true);
+    backgroundEditor.removeEventListener("click", onPanelClick, true);
+    backgroundEditor.removeEventListener("mousemove", onPanelMouseMove, true);
+    backgroundEditor.removeEventListener("mouseleave", onPanelMouseLeave, true);
+    backgroundEditor.removeEventListener("mousedown", onPanelMouseDown, true);
+    backgroundEditor.removeEventListener("scroll", schedule, true);
     topbar.removeEventListener("pointerdown", onV12TopbarPointerDown, true);
     topbar.removeEventListener("pointerup", onV12TopbarPointerUp, true);
     topbar.removeEventListener("pointercancel", onV12TopbarPointerCancel, true);
@@ -12138,7 +13141,7 @@
     floating.removeEventListener("mouseenter", onFloatEnter, true);
     floating.removeEventListener("mouseleave", onFloatLeave, true);
     btnMeasure.removeEventListener("click", onMeasureClick, true);
-    [highlight, selectA, selectB, tooltip, topbarTooltip, spacingLayer, measureLayer, floating, topbar, recordMenu, regionCaptureOverlay, drawerStub, regionSelectBox, recordComposer, recordPreview, v12Notice].forEach(function (el) {
+    [highlight, selectA, selectB, tooltip, topbarTooltip, backgroundEditor, spacingLayer, measureLayer, floating, topbar, recordMenu, regionCaptureOverlay, drawerStub, regionSelectBox, recordComposer, recordPreview, v12Notice].forEach(function (el) {
       if (el && el.parentNode) el.parentNode.removeChild(el);
     });
     Object.keys(bridgePending).forEach(function (requestId) {
@@ -12266,9 +13269,20 @@
   tooltip.addEventListener("blur", onPanelBlur, true);
   tooltip.addEventListener("keydown", onPanelKeyDown, true);
   tooltip.addEventListener("click", onPanelClick, true);
-  tooltip.addEventListener("mousemove", onPanelMouseMove, true);
-  tooltip.addEventListener("mouseleave", onPanelMouseLeave, true);
-  tooltip.addEventListener("mousedown", onPanelMouseDown, true);
+    tooltip.addEventListener("mousemove", onPanelMouseMove, true);
+    tooltip.addEventListener("mouseleave", onPanelMouseLeave, true);
+    tooltip.addEventListener("mousedown", onPanelMouseDown, true);
+    tooltip.addEventListener("scroll", schedule, true);
+    backgroundEditor.addEventListener("input", onPanelInput, true);
+    backgroundEditor.addEventListener("change", onPanelChange, true);
+    backgroundEditor.addEventListener("focusin", onPanelFocusIn, true);
+    backgroundEditor.addEventListener("blur", onPanelBlur, true);
+    backgroundEditor.addEventListener("keydown", onPanelKeyDown, true);
+    backgroundEditor.addEventListener("click", onPanelClick, true);
+    backgroundEditor.addEventListener("mousemove", onPanelMouseMove, true);
+    backgroundEditor.addEventListener("mouseleave", onPanelMouseLeave, true);
+    backgroundEditor.addEventListener("mousedown", onPanelMouseDown, true);
+    backgroundEditor.addEventListener("scroll", schedule, true);
   document.addEventListener("mousemove", onMouseMove, true);
   document.addEventListener("mousemove", onScrubMouseMove, true);
   document.addEventListener("mousemove", onFloatMove, true);
