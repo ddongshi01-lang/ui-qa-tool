@@ -247,7 +247,6 @@
     panelHoverFreeze: false,
     panelHoverFreezeTimerId: 0,
     addPropMenuOpen: false,
-    backgroundEditorOpen: false,
     colorPickerOpenProp: "",
     colorPickerOpenAt: 0,
     colorPickerOpenTimerId: 0,
@@ -1868,16 +1867,11 @@
   }
 
   function closeBackgroundEditor() {
-    var changed = !!state.backgroundEditorOpen;
-    state.backgroundEditorOpen = false;
-    return changed;
+    return false;
   }
 
   function openBackgroundEditor() {
-    var changed = !state.backgroundEditorOpen;
-    state.backgroundEditorOpen = true;
-    closeAddPropertyMenu();
-    return changed;
+    return false;
   }
 
   function isBackgroundEditorTarget(target) {
@@ -2011,7 +2005,6 @@
   function setV12Mode(mode) {
     if (mode !== "select" && mode !== "record-element" && mode !== "record-region") return;
     closeAddPropertyMenu();
-    closeBackgroundEditor();
     clearBackgroundFillMeta();
     if (mode !== "select") {
       clearMeasureSelection({ keepTopbarMode: false });
@@ -2030,7 +2023,6 @@
   function clearMeasureSelection(options) {
     var opts = options || {};
     closeAddPropertyMenu();
-    closeBackgroundEditor();
     clearBackgroundFillMeta();
     state.measureA = null;
     state.measureB = null;
@@ -2055,7 +2047,6 @@
 
   function setMeasureTopbarMode(enabled) {
     closeAddPropertyMenu();
-    closeBackgroundEditor();
     clearBackgroundFillMeta();
     if (enabled) {
       state.measureMode = true;
@@ -2075,7 +2066,6 @@
     if (shouldBlockPageSelectionDuringScrub()) return;
     if (!el) return;
     closeAddPropertyMenu();
-    closeBackgroundEditor();
     clearBackgroundFillMeta();
     if (state.measureA === el) {
       state.measureB = null;
@@ -3708,31 +3698,18 @@
     var quickState = computeQuickRecordStateForMeasureA();
     button.disabled = !quickState.enabled;
     button.setAttribute("aria-disabled", quickState.enabled ? "false" : "true");
-    button.style.borderColor = quickState.enabled ? "rgba(255,255,255,.12)" : "rgba(255,255,255,.08)";
-    button.style.background = quickState.enabled ? "rgba(255,255,255,.06)" : "rgba(255,255,255,.03)";
-    button.style.color = quickState.enabled ? "rgba(255,255,255,.88)" : "rgba(255,255,255,.34)";
-    button.style.cursor = quickState.enabled ? "pointer" : "not-allowed";
   }
 
   function renderSelectedPanelQuickRecordAction(targetEl, opts) {
     opts = opts || {};
-    var containerStyle = opts.containerStyle || "display:flex;justify-content:flex-start;padding-top:4px;";
     if (!isPlainSelectMode()) return "";
     var quickState = computeQuickRecordStateForMeasureA();
     var enabled = !!quickState.enabled;
     return (
-      '<div data-vqa-selected-quick-record="1" style="' + containerStyle + '">' +
-      '<button type="button" data-action="quick-add-record" ' +
+      '<div data-vqa-selected-quick-record="1" style="display:flex;justify-content:flex-end;align-items:center;flex:0 0 auto;min-width:0;">' +
+      '<button type="button" data-action="quick-add-record" data-vqa-footer-primary="1" ' +
       (enabled ? "" : 'disabled aria-disabled="true" ') +
-      'style="padding:9px 12px;border-radius:12px;border:1px solid ' +
-      (enabled ? "rgba(255,255,255,.12)" : "rgba(255,255,255,.08)") +
-      ';background:' +
-      (enabled ? "rgba(255,255,255,.06)" : "rgba(255,255,255,.03)") +
-      ';color:' +
-      (enabled ? "rgba(255,255,255,.88)" : "rgba(255,255,255,.34)") +
-      ';font:12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:' +
-      (enabled ? "pointer" : "not-allowed") +
-      ';box-sizing:border-box;">加入记录</button>' +
+      'style="min-width:112px;height:36px;padding:0 16px;border-radius:12px;box-sizing:border-box;">加入记录</button>' +
       "</div>"
     );
   }
@@ -3747,10 +3724,10 @@
     }
     var menuOpen = !!state.addPropMenuOpen;
     return (
-      '<div data-vqa-selected-add-property="1" style="display:flex;justify-content:flex-start;position:relative;overflow:visible;">' +
+      '<div data-vqa-selected-add-property="1" style="display:flex;justify-content:flex-start;align-items:center;position:relative;overflow:visible;flex:0 0 auto;min-width:0;">' +
       '<button type="button" data-action="toggle-add-property-menu" aria-expanded="' +
       (menuOpen ? "true" : "false") +
-      '" style="padding:9px 12px;border-radius:12px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.06);color:rgba(255,255,255,.88);font:12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;box-sizing:border-box;">添加属性</button>' +
+      '" data-vqa-footer-secondary="1" style="height:36px;padding:0 14px;border-radius:12px;box-sizing:border-box;">添加属性</button>' +
       (menuOpen
         ? '<div data-vqa-add-prop-menu="1" style="position:absolute;left:0;bottom:calc(100% + 8px);display:flex;flex-direction:column;min-width:172px;padding:6px;border-radius:10px;border:1px solid rgba(255,255,255,.12);background:rgba(22,24,30,.98);box-shadow:0 12px 28px rgba(0,0,0,.38);z-index:8;overflow:visible;">' +
           '<button type="button" data-action="add-prop-background" ' +
@@ -3925,13 +3902,13 @@
     if (state.colorPickerOpenProp) return true;
     var active = document.activeElement;
     if (!active) return false;
-    if (!isPanelOrBackgroundEditorTarget(active)) return false;
+    if (!tooltip.contains(active)) return false;
     if (active.getAttribute("data-color-picker-input") || active.getAttribute("data-color-prop")) return true;
     return !!active.getAttribute("data-field-id");
   }
 
   function isSelectedPanelInteractiveTarget(target) {
-    if (!target || !isPanelOrBackgroundEditorTarget(target) || !target.closest) return false;
+    if (!target || !tooltip.contains(target) || !target.closest) return false;
     return !!target.closest(
       'input[data-editable="1"],input[data-prop],input[data-box-summary],input[data-color-alpha-prop],textarea[data-editable="1"],select[data-editable="1"],[contenteditable="true"]'
     );
@@ -3939,7 +3916,7 @@
 
   function isSelectedPanelSelectActive() {
     var active = document.activeElement;
-    if (!active || !isPanelOrBackgroundEditorTarget(active)) return false;
+    if (!active || !tooltip.contains(active)) return false;
     return getNodeTagName(active) === "select";
   }
 
@@ -3960,7 +3937,7 @@
       state.panelHoverFreezeTimerId = 0;
       if (state.colorPickerOpenProp) return;
       var active = document.activeElement;
-      if (active && isPanelOrBackgroundEditorTarget(active) && isSelectedPanelInteractiveTarget(active)) return;
+      if (active && tooltip.contains(active) && isSelectedPanelInteractiveTarget(active)) return;
       state.panelHoverFreeze = false;
       if (!state.panelCollapsed) schedule();
     }, delay || 0);
@@ -4301,24 +4278,6 @@
   function getColorDraftMeta(prop) {
     var el = getEditableTargetEl();
     if (!el) return { hex: "", alpha: 100 };
-    if (isBackgroundGradientProp(prop)) {
-      var backgroundHost = resolveBackgroundHost(getSelectedPanelTarget());
-      if (!backgroundHost) return { hex: "", alpha: 100 };
-      var gradientState = readBackgroundGradientDraft(backgroundHost);
-      if (prop === "backgroundGradientStop1") {
-        return {
-          hex: gradientState.stop1.hex || "",
-          alpha: gradientState.stop1.alpha
-        };
-      }
-      if (prop === "backgroundGradientStop2") {
-        return {
-          hex: gradientState.stop2.hex || "",
-          alpha: gradientState.stop2.alpha
-        };
-      }
-      return { hex: "", alpha: 100 };
-    }
     var style = getComputedStyle(el);
     var computed = getColorComponents(style[prop]);
     var hexField = queryPanelOrBackgroundEditor('input[data-prop="' + prop + '"]');
@@ -4341,10 +4300,6 @@
   function applyColorWithAlpha(prop, hexValue, alphaValue, targetOverride) {
     if (prop === "backgroundColor") {
       applyPureBackgroundCover(targetOverride || getEditableTargetEl(), hexValue, alphaValue);
-      return;
-    }
-    if (isBackgroundGradientProp(prop)) {
-      applyBackgroundGradientFromPanel(targetOverride || resolveBackgroundHost(getSelectedPanelTarget()) || getEditableTargetEl());
       return;
     }
     var next = rgbaFromHexAndAlpha(hexValue, alphaValue);
@@ -4870,34 +4825,34 @@
   }
 
   function getScrubInputFromTarget(target) {
-    if (!target || !isPanelOrBackgroundEditorTarget(target) || !target.closest) return null;
+    if (!target || !tooltip.contains(target) || !target.closest) return null;
     var input = target.closest('input[data-prop], input[data-box-summary], input[data-color-alpha-prop]');
-    if (!input || !isPanelOrBackgroundEditorTarget(input)) return null;
+    if (!input || !tooltip.contains(input)) return null;
     if (input.getAttribute("data-scrub-enabled") !== "true") return null;
     return input.disabled ? null : input;
   }
 
   function getIconHoverTarget(target) {
-    if (!target || !isPanelOrBackgroundEditorTarget(target) || !target.closest) return null;
+    if (!target || !tooltip.contains(target) || !target.closest) return null;
     var icon = target.closest('[data-vqa-icon-hit="1"]');
-    if (!icon || !isPanelOrBackgroundEditorTarget(icon)) return null;
+    if (!icon || !tooltip.contains(icon)) return null;
     return icon;
   }
 
   function getScrubInputFromIconTarget(icon) {
     if (!icon || !icon.closest) return null;
     var cell = icon.closest("[data-vqa-atom-cell]");
-    if (!cell || !isPanelOrBackgroundEditorTarget(cell)) return null;
+    if (!cell || !tooltip.contains(cell)) return null;
     var input = cell.querySelector('input[data-prop], input[data-box-summary], input[data-color-alpha-prop]');
-    if (!input || !isPanelOrBackgroundEditorTarget(input)) return null;
+    if (!input || !tooltip.contains(input)) return null;
     if (input.getAttribute("data-scrub-enabled") !== "true") return null;
     return input.disabled ? null : input;
   }
 
   function getScrubHoverTarget(target) {
-    if (!target || !isPanelOrBackgroundEditorTarget(target) || !target.closest) return null;
+    if (!target || !tooltip.contains(target) || !target.closest) return null;
     var input = target.closest('input[data-prop], input[data-box-summary], input[data-color-alpha-prop]');
-    if (input && isPanelOrBackgroundEditorTarget(input)) {
+    if (input && tooltip.contains(input)) {
       return input.disabled ? null : input;
     }
     return null;
@@ -4974,13 +4929,6 @@
 
     var prop = target.getAttribute("data-prop") || "";
     if (!prop) return false;
-
-    if (isBackgroundGradientProp(prop)) {
-      applyBackgroundGradientFromPanel(resolveBackgroundHost(getSelectedPanelTarget()) || getEditableTargetEl());
-      clearEditingState();
-      if (!options.silent) schedule();
-      return true;
-    }
 
     if (fieldId === "text-content") {
       applyTextContentDraft(rawValue);
@@ -5065,18 +5013,13 @@
 
   function onPanelInput(e) {
     var target = e.target;
-    if (!target || !isPanelOrBackgroundEditorTarget(target)) return;
+    if (!target || !tooltip.contains(target)) return;
     var fieldId = getFieldId(target);
     if (fieldId) {
       syncFieldDraft(target);
       syncQuickRecordUiForCurrentPanel();
       if (getNodeTagName(target) === "select") {
         commitFieldDraft(target, { silent: false });
-        return;
-      }
-      if (isBackgroundGradientProp(target.getAttribute("data-prop") || "")) {
-        applyBackgroundGradientFromPanel(resolveBackgroundHost(getSelectedPanelTarget()) || getEditableTargetEl());
-        schedule();
         return;
       }
       if (fieldId === "text-content" && getNodeTagName(target) === "textarea") {
@@ -5121,7 +5064,7 @@
 
   function onPanelKeyDown(e) {
     var target = e.target;
-    if (!target || !isPanelOrBackgroundEditorTarget(target)) return;
+    if (!target || !tooltip.contains(target)) return;
     var tagName = getNodeTagName(target);
     var fieldId = getFieldId(target);
     var prop = target.getAttribute("data-prop");
@@ -5143,7 +5086,7 @@
 
   function onPanelFocusIn(e) {
     var target = e.target;
-    if (!target || !isPanelOrBackgroundEditorTarget(target)) return;
+    if (!target || !tooltip.contains(target)) return;
     var fieldId = getFieldId(target);
     if (!fieldId) return;
     if (isSelectedPanelInteractiveTarget(target)) {
@@ -5157,7 +5100,7 @@
   function onPanelBlur(e) {
     if (state.scrub.active) return;
     var target = e.target;
-    if (!target || !isPanelOrBackgroundEditorTarget(target)) return;
+    if (!target || !tooltip.contains(target)) return;
     var fieldId = getFieldId(target);
     if (!fieldId) return;
     if (state.panelFocusSelectFieldId === fieldId && state.panelFocusSelectTimerId) {
@@ -5186,7 +5129,7 @@
 
   function onPanelChange(e) {
     var target = e.target;
-    if (!target || !isPanelOrBackgroundEditorTarget(target)) return;
+    if (!target || !tooltip.contains(target)) return;
     if (getNodeTagName(target) !== "select") return;
     scheduleSelectedPanelHoverUnfreeze(0);
     syncQuickRecordUiForCurrentPanel();
@@ -5195,13 +5138,12 @@
 
   function onPanelMouseMove(e) {
     if (isNumericScrubbingActive()) return;
-    if (!isPanelOrBackgroundEditorTarget(e.target)) return;
     setHoveredScrubIcon(getIconHoverTarget(e.target));
     setHoveredScrubInput(getScrubHoverTarget(e.target), !!e.altKey);
   }
 
   function shouldSelectAllOnPanelFocus(target) {
-    if (!target || !isPanelOrBackgroundEditorTarget(target)) return false;
+    if (!target || !tooltip.contains(target)) return false;
     if (state.scrub.active) return false;
     if (getNodeTagName(target) !== "input") return false;
     if (target.disabled || target.readOnly) return false;
@@ -5226,7 +5168,7 @@
       state.panelFocusSelectTimerId = 0;
       if (state.scrub.active) return;
       if (!target || document.activeElement !== target) return;
-      if (!isPanelOrBackgroundEditorTarget(target)) return;
+      if (!tooltip.contains(target)) return;
       if (fieldId && getFieldId(target) !== fieldId) return;
       try {
         if (typeof target.select === "function") {
@@ -5262,10 +5204,6 @@
     var colorPickerInput = e.target && e.target.closest ? e.target.closest('input[data-color-picker-input]') : null;
     if (colorPickerInput) {
       openColorPickerProtection(colorPickerInput.getAttribute("data-color-picker-input"));
-      return;
-    }
-    if (isBackgroundEditorTarget(e.target)) {
-      e.stopPropagation();
       return;
     }
     var iconTarget = getIconHoverTarget(e.target);
@@ -5314,25 +5252,22 @@
       return;
     }
     var target = e.target;
-    if (!target || !isPanelOrBackgroundEditorTarget(target)) return;
+    if (!target || !tooltip.contains(target)) return;
     var actionTarget = target.closest ? target.closest("[data-action]") : null;
     var action = actionTarget ? actionTarget.getAttribute("data-action") : "";
     if (action === "reset-styles") {
       closeAddPropertyMenu();
-      closeBackgroundEditor();
       clearEditedStyles();
       e.preventDefault();
       return;
     }
     if (action === "quick-add-record") {
       closeAddPropertyMenu();
-      closeBackgroundEditor();
       e.preventDefault();
       e.stopPropagation();
       return;
     }
     if (action === "toggle-add-property-menu") {
-      closeBackgroundEditor();
       state.addPropMenuOpen = !state.addPropMenuOpen;
       schedule();
       e.preventDefault();
@@ -5348,45 +5283,6 @@
         setBackgroundFillSourceForTarget(addTarget, "addedOnNone");
       }
       closeAddPropertyMenu();
-      closeBackgroundEditor();
-      schedule();
-      e.preventDefault();
-      e.stopPropagation();
-      return;
-    }
-    if (action === "toggle-background-editor") {
-      if (state.backgroundEditorOpen) {
-        closeBackgroundEditor();
-      } else {
-        openBackgroundEditor();
-      }
-      schedule();
-      e.preventDefault();
-      e.stopPropagation();
-      return;
-    }
-    if (action === "close-background-editor") {
-      closeBackgroundEditor();
-      schedule();
-      e.preventDefault();
-      e.stopPropagation();
-      return;
-    }
-    if (action === "set-background-mode-solid") {
-      var solidTarget = resolveBackgroundHost(getSelectedPanelTarget());
-      if (solidTarget) {
-        applySolidBackgroundMode(solidTarget);
-      }
-      schedule();
-      e.preventDefault();
-      e.stopPropagation();
-      return;
-    }
-    if (action === "set-background-mode-gradient") {
-      var gradientTarget = resolveBackgroundHost(getSelectedPanelTarget());
-      if (gradientTarget) {
-        applyGradientBackgroundMode(gradientTarget);
-      }
       schedule();
       e.preventDefault();
       e.stopPropagation();
@@ -5405,7 +5301,6 @@
         }
       }
       closeAddPropertyMenu();
-      closeBackgroundEditor();
       schedule();
       e.preventDefault();
       e.stopPropagation();
@@ -5413,7 +5308,6 @@
     }
     if (action === "toggle-padding") {
       closeAddPropertyMenu();
-      closeBackgroundEditor();
       state.spacingExpanded.padding = !state.spacingExpanded.padding;
       schedule();
       e.preventDefault();
@@ -5421,7 +5315,6 @@
     }
     if (action === "toggle-radius") {
       closeAddPropertyMenu();
-      closeBackgroundEditor();
       state.spacingExpanded.radius = !state.spacingExpanded.radius;
       schedule();
       e.preventDefault();
@@ -5429,7 +5322,6 @@
     }
     if (action === "toggle-margin") {
       closeAddPropertyMenu();
-      closeBackgroundEditor();
       state.spacingExpanded.margin = !state.spacingExpanded.margin;
       schedule();
       e.preventDefault();
@@ -7128,7 +7020,6 @@
     var prevSelected = state.selectedA;
     setSelectedPanelHoverFreeze(false);
     closeAddPropertyMenu();
-    closeBackgroundEditor();
     clearBackgroundFillMeta();
     if (state.editingFieldId) {
       var activeInput = tooltip.querySelector('[data-field-id="' + state.editingFieldId + '"]');
@@ -9388,6 +9279,16 @@
       ".v12-selected-panel [data-vqa-field-grid] input[data-editable=\"1\"]::placeholder," +
       ".v12-selected-panel [data-vqa-field-grid] textarea[data-editable=\"1\"]::placeholder{color:rgba(255,255,255,.35);}" +
       ".v12-selected-panel [data-vqa-field=\"color-value\"] input[type=\"color\"]{padding:0!important;background:transparent!important;border:1px solid rgba(255,255,255,.18)!important;outline:none!important;box-shadow:none!important;appearance:none;-webkit-appearance:none;-moz-appearance:none;}" +
+      ".v12-selected-panel [data-vqa-selected-footer-actions]{width:100%;display:flex;flex-direction:column;align-items:stretch;gap:10px;min-width:0;}" +
+      ".v12-selected-panel [data-vqa-selected-add-property]{width:100%;min-width:0;}" +
+      ".v12-selected-panel [data-vqa-selected-add-property] > button[data-vqa-footer-secondary=\"1\"]{display:inline-flex;align-items:center;justify-content:center;width:100%;height:36px;padding:0 14px;border:1px solid rgba(255,255,255,.14);border-radius:12px;background:rgba(255,255,255,.05);color:rgba(255,255,255,.80);font:500 12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;box-sizing:border-box;transition:background-color 120ms ease,border-color 120ms ease,color 120ms ease,box-shadow 120ms ease,transform 120ms ease;}" +
+      ".v12-selected-panel [data-vqa-selected-add-property] > button[data-vqa-footer-secondary=\"1\"]:hover{background:rgba(255,255,255,.09)!important;border-color:rgba(255,255,255,.22)!important;color:rgba(255,255,255,.92)!important;}" +
+      ".v12-selected-panel [data-vqa-selected-add-property] > button[data-vqa-footer-secondary=\"1\"]:active{transform:translateY(1px);}" +
+      ".v12-selected-panel [data-vqa-selected-quick-record]{display:flex;justify-content:flex-end;align-items:center;min-width:0;}" +
+      ".v12-selected-panel [data-vqa-selected-quick-record] > button[data-vqa-footer-primary=\"1\"]{display:inline-flex;align-items:center;justify-content:center;min-width:112px;height:36px;padding:0 16px;border:1px solid rgba(10,118,240,.88);border-radius:12px;background:linear-gradient(180deg,#2F8FFF 0%,#0A76F0 100%);box-shadow:0 8px 18px rgba(10,118,240,.28);color:#fff;font:600 12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;box-sizing:border-box;transition:background-color 120ms ease,border-color 120ms ease,box-shadow 120ms ease,transform 120ms ease,opacity 120ms ease;}" +
+      ".v12-selected-panel [data-vqa-selected-quick-record] > button[data-vqa-footer-primary=\"1\"]:hover:not(:disabled){background:linear-gradient(180deg,#43A0FF 0%,#1282FF 100%)!important;border-color:rgba(65,160,255,.96)!important;box-shadow:0 10px 20px rgba(10,118,240,.34)!important;}" +
+      ".v12-selected-panel [data-vqa-selected-quick-record] > button[data-vqa-footer-primary=\"1\"]:active:not(:disabled){transform:translateY(1px);}" +
+      ".v12-selected-panel [data-vqa-selected-quick-record] > button[data-vqa-footer-primary=\"1\"]:disabled{background:linear-gradient(180deg,rgba(49,66,92,.98),rgba(34,46,67,.98))!important;border-color:rgba(255,255,255,.08)!important;box-shadow:none!important;color:rgba(255,255,255,.42)!important;cursor:not-allowed!important;}" +
       ".v12-record-menu{pointer-events:auto;}" +
       ".v12-record-menu [data-v12-action=\"record-submode-element\"]," +
       ".v12-record-menu [data-v12-action=\"record-submode-region\"]{transition:background-color 90ms ease,color 90ms ease,box-shadow 90ms ease,border-color 90ms ease;pointer-events:auto;}" +
@@ -10355,7 +10256,7 @@
 
   function flushActivePanelDraftForQuickRecord() {
     var activeInput = document.activeElement;
-    if (!activeInput || !isPanelOrBackgroundEditorTarget(activeInput)) return false;
+    if (!activeInput || !tooltip.contains(activeInput)) return false;
     if (!getFieldId(activeInput)) return false;
     syncFieldDraft(activeInput);
     commitFieldDraft(activeInput, { silent: true });
@@ -10720,7 +10621,6 @@
   function setCollapsed(next) {
     var nextCollapsed = !!next;
     if (nextCollapsed) closeAddPropertyMenu();
-    if (nextCollapsed) closeBackgroundEditor();
     if (nextCollapsed) clearBackgroundFillMeta();
     if (state.v12.toolbarCollapsed === nextCollapsed && state.panelCollapsed === nextCollapsed) {
       if (state.v12.topbarCollapseAnimTimerId) return;
@@ -11831,7 +11731,6 @@
     }
     var stops = args.slice(stopStartIndex);
     if (stops.length < 2) return null;
-    if (stops.length > 2) return null;
     var stop1Parts = splitGradientStopColorAndPosition(stops[0]);
     var stop2Parts = splitGradientStopColorAndPosition(stops[1]);
     var stop1Meta = getColorComponents(stop1Parts.color);
@@ -11870,125 +11769,6 @@
       var v = Math.max(0, Math.min(255, n || 0)).toString(16);
       return v.length < 2 ? "0" + v : v;
     }).join("").toUpperCase();
-  }
-
-  function deriveGradientStopsFromSolid(colorValue) {
-    var solid = getColorComponents(colorValue);
-    var baseHex = solid.hex || "#FFFFFF";
-    var light = mixHexColors(baseHex, "#FFFFFF", 0.18);
-    var dark = mixHexColors(baseHex, "#111827", 0.18);
-    var first = getColorComponents(baseHex);
-    var second = getColorComponents(dark === baseHex ? light : dark);
-    return {
-      angle: "180deg",
-      stop1: {
-        hex: first.hex || baseHex || "#FFFFFF",
-        alpha: first.alpha || 100
-      },
-      stop2: {
-        hex: second.hex || light || "#DDE7FF",
-        alpha: second.alpha || 100
-      }
-    };
-  }
-
-  function buildLinearGradientBackground(angle, stop1, stop2) {
-    var nextAngle = normalizeLinearGradientAngle(angle);
-    var stop1Value = rgbaFromHexAndAlpha(stop1 && stop1.hex ? stop1.hex : stop1, stop1 && stop1.alpha != null ? stop1.alpha : 100) || "rgba(255, 255, 255, 1)";
-    var stop2Value = rgbaFromHexAndAlpha(stop2 && stop2.hex ? stop2.hex : stop2, stop2 && stop2.alpha != null ? stop2.alpha : 100) || "rgba(255, 255, 255, 1)";
-    return "linear-gradient(" + nextAngle + ", " + stop1Value + " 0%, " + stop2Value + " 100%)";
-  }
-
-  function getBackgroundGradientState(hostEl, style) {
-    var presence = resolveBackgroundPresence(hostEl, style);
-    var gradient = presence.gradient;
-    if (!gradient) {
-      var fallback = deriveGradientStopsFromSolid(presence.backgroundColor || "#FFFFFF");
-      return {
-        mode: "solid",
-        angle: fallback.angle,
-        stop1: fallback.stop1,
-        stop2: fallback.stop2
-      };
-    }
-    return {
-      mode: "gradient",
-      angle: gradient.angle || "180deg",
-      stop1: gradient.stop1 || { hex: "#FFFFFF", alpha: 100 },
-      stop2: gradient.stop2 || { hex: "#FFFFFF", alpha: 100 }
-    };
-  }
-
-  function isBackgroundGradientProp(prop) {
-    return prop === "backgroundGradientAngle" || prop === "backgroundGradientStop1" || prop === "backgroundGradientStop2";
-  }
-
-  function readBackgroundGradientDraft(hostEl) {
-    var style = hostEl ? getComputedStyle(hostEl) : null;
-    var current = getBackgroundGradientState(hostEl, style);
-    var angleInput = queryPanelOrBackgroundEditor('input[data-prop="backgroundGradientAngle"]');
-    var stop1HexInput = queryPanelOrBackgroundEditor('input[data-prop="backgroundGradientStop1"]');
-    var stop1AlphaInput = queryPanelOrBackgroundEditor('input[data-color-alpha-prop="backgroundGradientStop1"]');
-    var stop2HexInput = queryPanelOrBackgroundEditor('input[data-prop="backgroundGradientStop2"]');
-    var stop2AlphaInput = queryPanelOrBackgroundEditor('input[data-color-alpha-prop="backgroundGradientStop2"]');
-    var angle = angleInput ? String(angleInput.value || "").trim() : "";
-    var stop1Hex = stop1HexInput ? String(stop1HexInput.value || "").trim() : "";
-    var stop1Alpha = stop1AlphaInput ? String(stop1AlphaInput.value || "").trim() : "";
-    var stop2Hex = stop2HexInput ? String(stop2HexInput.value || "").trim() : "";
-    var stop2Alpha = stop2AlphaInput ? String(stop2AlphaInput.value || "").trim() : "";
-    return {
-      angle: normalizeLinearGradientAngle(angle || current.angle),
-      stop1: {
-        hex: toHexColor(stop1Hex || current.stop1.hex || "#FFFFFF") || "#FFFFFF",
-        alpha: stop1Alpha !== "" ? parsePercentValue(stop1Alpha) : current.stop1.alpha
-      },
-      stop2: {
-        hex: toHexColor(stop2Hex || current.stop2.hex || "#FFFFFF") || "#FFFFFF",
-        alpha: stop2Alpha !== "" ? parsePercentValue(stop2Alpha) : current.stop2.alpha
-      }
-    };
-  }
-
-  function applyLinearGradientBackground(targetEl, angle, stop1, stop2) {
-    if (!targetEl) return;
-    captureBackgroundStyleSnapshot(targetEl);
-    applyStyle("background", "", targetEl);
-    applyStyle("backgroundColor", "transparent", targetEl);
-    applyStyle("backgroundImage", buildLinearGradientBackground(angle, stop1, stop2), targetEl);
-  }
-
-  function applyBackgroundGradientFromPanel(targetEl) {
-    var host = targetEl || getEditableTargetEl();
-    if (!host) return;
-    var draft = readBackgroundGradientDraft(host);
-    applyLinearGradientBackground(host, draft.angle, draft.stop1, draft.stop2);
-  }
-
-  function applySolidBackgroundMode(targetEl) {
-    var host = targetEl || getEditableTargetEl();
-    if (!host) return;
-    var presence = resolveBackgroundPresence(host, getComputedStyle(host));
-    if (presence.mode === "gradient" && presence.gradient) {
-      applyPureBackgroundCover(host, presence.gradient.stop1.hex || "#FFFFFF", presence.gradient.stop1.alpha != null ? presence.gradient.stop1.alpha : 100);
-      return;
-    }
-    var solid = getColorComponents(presence.backgroundColor || "#FFFFFF");
-    applyPureBackgroundCover(host, solid.hex || "#FFFFFF", solid.alpha != null ? solid.alpha : 100);
-  }
-
-  function deriveGradientDraftFromCurrentBackground(host) {
-    var presence = resolveBackgroundPresence(host, getComputedStyle(host));
-    if (presence.mode === "gradient" && presence.gradient) {
-      return presence.gradient;
-    }
-    return deriveGradientStopsFromSolid(presence.backgroundColor || "#FFFFFF");
-  }
-
-  function applyGradientBackgroundMode(targetEl) {
-    var host = targetEl || getEditableTargetEl();
-    if (!host) return;
-    var draft = deriveGradientDraftFromCurrentBackground(host);
-    applyLinearGradientBackground(host, draft.angle, draft.stop1, draft.stop2);
   }
 
   function isBackgroundHostTag(tagName) {
@@ -12101,197 +11881,10 @@
     applyStyle("backgroundColor", rgbaFromHexAndAlpha(hexValue, alphaValue) || "", targetEl);
   }
 
-  function renderBackgroundModeToggleRow(mode) {
-    var solidActive = mode !== "gradient";
-    var gradientActive = mode === "gradient";
-    return (
-      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">' +
-      '<button type="button" data-action="set-background-mode-solid" data-active="' +
-      (solidActive ? "true" : "false") +
-      '" style="height:30px;border-radius:10px;border:1px solid ' +
-      (solidActive ? "rgba(255,255,255,.18)" : "rgba(255,255,255,.10)") +
-      ';background:' +
-      (solidActive ? "rgba(255,255,255,.12)" : "rgba(255,255,255,.04)") +
-      ';color:' +
-      (solidActive ? "rgba(255,255,255,.94)" : "rgba(255,255,255,.74)") +
-      ';font:12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;box-sizing:border-box;">实色</button>' +
-      '<button type="button" data-action="set-background-mode-gradient" data-active="' +
-      (gradientActive ? "true" : "false") +
-      '" style="height:30px;border-radius:10px;border:1px solid ' +
-      (gradientActive ? "rgba(255,255,255,.18)" : "rgba(255,255,255,.10)") +
-      ';background:' +
-      (gradientActive ? "rgba(255,255,255,.12)" : "rgba(255,255,255,.04)") +
-      ';color:' +
-      (gradientActive ? "rgba(255,255,255,.94)" : "rgba(255,255,255,.74)") +
-      ';font:12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;box-sizing:border-box;">渐变</button>' +
-      "</div>"
-    );
-  }
-
   function renderBackgroundSolidControls(applyTarget, presence) {
     var displayValue = presence.hasBackgroundColor ? getVisibleBackgroundColorValue(applyTarget, getComputedStyle(applyTarget)) : presence.backgroundColor || "#FFFFFF";
     if (!displayValue) displayValue = "#FFFFFF";
     return panelColorValueCell("backgroundColor", displayValue, { kind: "background-color", allowDelete: true });
-  }
-
-  function renderBackgroundGradientControls(applyTarget, presence) {
-    var gradientState = getBackgroundGradientState(applyTarget, getComputedStyle(applyTarget));
-    var angleValue = String(gradientState.angle || "180deg").replace(/deg$/i, "");
-    var stop1Value = rgbaFromHexAndAlpha(gradientState.stop1.hex || "#FFFFFF", gradientState.stop1.alpha != null ? gradientState.stop1.alpha : 100) || "#FFFFFF";
-    var stop2Value = rgbaFromHexAndAlpha(gradientState.stop2.hex || "#FFFFFF", gradientState.stop2.alpha != null ? gradientState.stop2.alpha : 100) || "#FFFFFF";
-    return (
-      '<div style="display:flex;flex-direction:column;gap:8px;">' +
-      panelIconValueCell("", "backgroundGradientAngle", angleValue, {
-        kind: "background-gradient-angle",
-        flex: "1 1 auto",
-        slotName: "background-gradient-angle",
-        inputFont: "400 14px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif",
-        inputTextAlign: "left"
-      }) +
-      panelColorValueCell("backgroundGradientStop1", stop1Value, { kind: "background-gradient-stop1" }) +
-      panelColorValueCell("backgroundGradientStop2", stop2Value, { kind: "background-gradient-stop2" }) +
-      "</div>"
-    );
-  }
-
-  function getBackgroundSummaryState(applyTarget) {
-    var applyTargetStyle = getComputedStyle(applyTarget);
-    var presence = resolveBackgroundPresence(applyTarget, applyTargetStyle);
-    var mode = presence.mode === "gradient" ? "gradient" : presence.hasBackgroundColor ? "solid" : "none";
-    var previewValue = "";
-    var label = "添加背景";
-    var opacityText = "--";
-    if (mode === "gradient" && presence.gradient) {
-      previewValue = buildLinearGradientBackground(presence.gradient.angle, presence.gradient.stop1, presence.gradient.stop2);
-      label = "渐变填充";
-      opacityText = String(presence.gradient.stop1 && presence.gradient.stop1.alpha != null ? presence.gradient.stop1.alpha : 100) + "%";
-    } else if (presence.hasBackgroundColor) {
-      previewValue = presence.backgroundColor || "#FFFFFF";
-      label = "实色填充";
-      var solidColor = getColorComponents(presence.backgroundColor || "#FFFFFF");
-      opacityText = String(solidColor.alpha != null ? solidColor.alpha : 100) + "%";
-    } else {
-      previewValue = "transparent";
-    }
-    return {
-      mode: mode,
-      label: label,
-      previewValue: previewValue,
-      opacityText: opacityText,
-      presence: presence
-    };
-  }
-
-  function renderBackgroundSummaryRow(applyTarget) {
-    var summary = getBackgroundSummaryState(applyTarget);
-    if (!summary || summary.mode === "none") return "";
-    var open = !!state.backgroundEditorOpen;
-    return (
-      '<div data-vqa-background-summary="1" data-action="toggle-background-editor" data-open="' +
-      (open ? "true" : "false") +
-      '" style="display:grid;grid-template-columns:28px minmax(0,1fr) auto auto;gap:10px;align-items:center;min-width:0;padding:0 10px;height:' +
-      PANEL_UI.atomHeight +
-      ';border-radius:' +
-      PANEL_UI.atomRadius +
-      ';background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);box-sizing:border-box;cursor:pointer;">' +
-      '<div aria-hidden="true" style="width:20px;height:20px;border-radius:6px;background:' +
-      esc(summary.previewValue || "transparent") +
-      ';border:1px solid rgba(255,255,255,.12);box-sizing:border-box;"></div>' +
-      '<div style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:' +
-      PANEL_UI.atomText +
-      ';font:400 14px/1.2 \'PingFang SC\',-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;">' +
-      esc(summary.label) +
-      "</div>" +
-      '<div style="min-width:0;color:' +
-      PANEL_UI.atomMutedText +
-      ';font:400 13px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;white-space:nowrap;">' +
-      esc(summary.opacityText) +
-      "</div>" +
-      (summary.mode !== "none"
-        ? '<button type="button" data-action="remove-background-color" aria-label="删除背景" title="删除背景" style="width:26px;height:26px;border:1px solid rgba(255,255,255,.14);border-radius:7px;background:rgba(255,255,255,.04);color:rgba(232,238,244,.86);font:500 14px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;box-sizing:border-box;">×</button>'
-        : '<div aria-hidden="true" style="width:26px;height:26px;"></div>') +
-      "</div>"
-    );
-  }
-
-  function syncBackgroundEditorPosition(applyTarget) {
-    if (!backgroundEditor || !backgroundEditor.parentNode) return;
-    var editorCard = backgroundEditor.querySelector("[data-vqa-background-editor-card=\"1\"]");
-    if (!editorCard) return;
-    var anchor = tooltip.querySelector('[data-vqa-background-summary="1"]') || tooltip.querySelector('[data-vqa-background-summary-trigger="1"]');
-    var anchorRect = anchor && anchor.getBoundingClientRect ? anchor.getBoundingClientRect() : (applyTarget && applyTarget.getBoundingClientRect ? applyTarget.getBoundingClientRect() : null);
-    var cardRect = editorCard.getBoundingClientRect();
-    var width = cardRect.width || editorCard.offsetWidth || 320;
-    var height = cardRect.height || editorCard.offsetHeight || 0;
-    var padding = 8;
-    var gap = 12;
-    var left = 0;
-    var top = 0;
-    if (anchorRect) {
-      var rightCandidate = anchorRect.right + gap;
-      var leftCandidate = anchorRect.left - width - gap;
-      var preferredTop = anchorRect.top - 6;
-      var maxLeft = Math.max(padding, window.innerWidth - width - padding);
-      var maxTop = Math.max(padding, window.innerHeight - Math.max(height, 120) - padding);
-      if (rightCandidate + width <= window.innerWidth - padding) {
-        left = rightCandidate;
-      } else if (leftCandidate >= padding) {
-        left = leftCandidate;
-      } else {
-        left = clamp(anchorRect.left, padding, maxLeft);
-      }
-      top = clamp(preferredTop, padding, maxTop);
-      if (top + height > window.innerHeight - padding) {
-        top = clamp(window.innerHeight - height - padding, padding, maxTop);
-      }
-    } else {
-      left = clamp(window.innerWidth - width - 16, padding, window.innerWidth - width - padding);
-      top = padding;
-    }
-    editorCard.style.left = left + "px";
-    editorCard.style.top = top + "px";
-  }
-
-  function renderBackgroundEditorPanel(applyTarget) {
-    if (!backgroundEditor) return;
-    if (!state.backgroundEditorOpen) {
-      backgroundEditor.style.display = "none";
-      backgroundEditor.style.opacity = "0";
-      backgroundEditor.innerHTML = "";
-      return;
-    }
-    if (!applyTarget) {
-      closeBackgroundEditor();
-      backgroundEditor.style.display = "none";
-      backgroundEditor.style.opacity = "0";
-      backgroundEditor.innerHTML = "";
-      return;
-    }
-    var applyTargetStyle = getComputedStyle(applyTarget);
-    var presence = resolveBackgroundPresence(applyTarget, applyTargetStyle);
-    if (presence.mode === "none" && !presence.hasBackgroundColor && !presence.hasBackgroundImage) {
-      closeBackgroundEditor();
-      backgroundEditor.style.display = "none";
-      backgroundEditor.style.opacity = "0";
-      backgroundEditor.innerHTML = "";
-      return;
-    }
-    var mode = presence.mode === "gradient" ? "gradient" : "solid";
-    var bodyHtml = mode === "gradient" ? renderBackgroundGradientControls(applyTarget, presence) : renderBackgroundSolidControls(applyTarget, presence);
-    backgroundEditor.style.display = "block";
-    backgroundEditor.style.opacity = "1";
-    backgroundEditor.innerHTML =
-      '<div data-vqa-background-editor="1" style="position:fixed;left:0;top:0;z-index:1;pointer-events:auto;">' +
-      '<div data-vqa-background-editor-card="1" style="position:fixed;left:0;top:0;min-width:320px;max-width:min(360px,calc(100vw - 24px));max-height:calc(100vh - 24px);overflow:auto;display:flex;flex-direction:column;gap:10px;padding:12px;border-radius:18px;border:1px solid rgba(255,255,255,.12);background:rgba(18,20,25,.98);box-shadow:0 18px 36px rgba(0,0,0,.32);box-sizing:border-box;">' +
-      '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0;">' +
-      '<div style="min-width:0;color:#fff;font:600 13px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">颜色属性</div>' +
-      '<button type="button" data-action="close-background-editor" aria-label="关闭背景编辑器" title="关闭" style="width:26px;height:26px;border:0;border-radius:7px;background:rgba(255,255,255,.06);color:rgba(255,255,255,.82);font:500 14px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;box-sizing:border-box;">×</button>' +
-      "</div>" +
-      renderBackgroundModeToggleRow(mode) +
-      bodyHtml +
-      "</div>" +
-      "</div>";
-    syncBackgroundEditorPosition(applyTarget);
   }
 
   function renderSelectedBackgroundSection(el, style, capabilities) {
@@ -12300,7 +11893,7 @@
     var applyTargetStyle = getComputedStyle(applyTarget);
     var presence = resolveBackgroundPresence(applyTarget, applyTargetStyle);
     if (presence.mode === "none") return "";
-    return section("背景", [renderBackgroundSummaryRow(applyTarget)]);
+    return section("背景", [renderBackgroundSolidControls(applyTarget, presence)]);
   }
 
   function buildSelectedPanelSections(el, style, capabilities, textValue) {
@@ -12353,11 +11946,12 @@
       ';min-height:0;overflow-y:auto;overflow-x:visible;padding-bottom:18px;box-sizing:border-box;">' +
       sections.join("") +
       "</div>" +
-      '<div data-vqa-panel-footer="1" style="display:flex;flex-direction:column;gap:8px;position:relative;z-index:4;flex:0 0 auto;padding:12px 0 0;background:transparent;overflow:visible;">' +
+      '<div data-vqa-panel-footer="1" style="display:flex;flex-direction:column;align-items:stretch;gap:10px;position:relative;z-index:4;flex:0 0 auto;padding:12px 0 0;background:linear-gradient(180deg,rgba(255,255,255,.02),rgba(255,255,255,0));overflow:visible;">' +
+      '<div data-vqa-selected-footer-actions="1" style="display:flex;flex-direction:column;align-items:stretch;gap:10px;min-width:0;flex:1 1 auto;">' +
       addPropertyAction +
       quickRecordAction +
+      "</div>" +
       "</div>";
-    renderBackgroundEditorPanel(resolveBackgroundHost(el));
     var textEditor = tooltip.querySelector('textarea[data-field-id="text-content"]');
     if (textEditor) syncTextareaAutoHeight(textEditor);
     logTargetDebug("render-selected-panel", el);
@@ -12742,17 +12336,6 @@
     if (state.panelCollapsed) return;
     if (isNumericScrubbingActive() || consumeSuppressedSelectionEvent(e)) return;
     if (isAddPropertyUiTarget(e.target)) return;
-    if (state.backgroundEditorOpen && e.target && tooltip.contains(e.target) && !isBackgroundEditorTarget(e.target)) {
-      var backgroundToggleTarget = e.target.closest ? e.target.closest('[data-action="toggle-background-editor"]') : null;
-      var backgroundEditorActionTarget = e.target.closest ? e.target.closest("[data-vqa-background-editor]") : null;
-      if (!backgroundToggleTarget && !backgroundEditorActionTarget) {
-        closeBackgroundEditor();
-        schedule();
-      }
-    } else if (state.backgroundEditorOpen && (!e.target || (!tooltip.contains(e.target) && !isBackgroundEditorTarget(e.target)))) {
-      closeBackgroundEditor();
-      schedule();
-    }
     if (state.addPropMenuOpen && (!e.target || !tooltip.contains(e.target))) {
       closeAddPropertyMenu();
       if (!state.panelCollapsed) schedule();
@@ -12778,7 +12361,7 @@
     }
     if (topbar.contains(e.target) || recordMenu.contains(e.target) || drawerStub.contains(e.target) || recordComposer.contains(e.target)) return;
     if (recordPreview.contains(e.target)) return;
-    if (tooltip.contains(e.target) || isBackgroundEditorTarget(e.target)) return;
+    if (tooltip.contains(e.target)) return;
     if (state.panelHoverFreeze) {
       scheduleSelectedPanelHoverUnfreeze(0);
     }
@@ -12922,10 +12505,6 @@
 
     if (state.v12.drawerClearConfirmArmed) {
       clearDrawerClearConfirm();
-    } else if (state.backgroundEditorOpen) {
-      closeBackgroundEditor();
-      clearEditingState();
-      schedule();
     } else if (state.addPropMenuOpen) {
       closeAddPropertyMenu();
       schedule();
@@ -13102,17 +12681,6 @@
     tooltip.removeEventListener("mousemove", onPanelMouseMove, true);
     tooltip.removeEventListener("mouseleave", onPanelMouseLeave, true);
     tooltip.removeEventListener("mousedown", onPanelMouseDown, true);
-    tooltip.removeEventListener("scroll", schedule, true);
-    backgroundEditor.removeEventListener("input", onPanelInput, true);
-    backgroundEditor.removeEventListener("change", onPanelChange, true);
-    backgroundEditor.removeEventListener("focusin", onPanelFocusIn, true);
-    backgroundEditor.removeEventListener("blur", onPanelBlur, true);
-    backgroundEditor.removeEventListener("keydown", onPanelKeyDown, true);
-    backgroundEditor.removeEventListener("click", onPanelClick, true);
-    backgroundEditor.removeEventListener("mousemove", onPanelMouseMove, true);
-    backgroundEditor.removeEventListener("mouseleave", onPanelMouseLeave, true);
-    backgroundEditor.removeEventListener("mousedown", onPanelMouseDown, true);
-    backgroundEditor.removeEventListener("scroll", schedule, true);
     topbar.removeEventListener("pointerdown", onV12TopbarPointerDown, true);
     topbar.removeEventListener("pointerup", onV12TopbarPointerUp, true);
     topbar.removeEventListener("pointercancel", onV12TopbarPointerCancel, true);
@@ -13141,7 +12709,7 @@
     floating.removeEventListener("mouseenter", onFloatEnter, true);
     floating.removeEventListener("mouseleave", onFloatLeave, true);
     btnMeasure.removeEventListener("click", onMeasureClick, true);
-    [highlight, selectA, selectB, tooltip, topbarTooltip, backgroundEditor, spacingLayer, measureLayer, floating, topbar, recordMenu, regionCaptureOverlay, drawerStub, regionSelectBox, recordComposer, recordPreview, v12Notice].forEach(function (el) {
+    [highlight, selectA, selectB, tooltip, topbarTooltip, spacingLayer, measureLayer, floating, topbar, recordMenu, regionCaptureOverlay, drawerStub, regionSelectBox, recordComposer, recordPreview, v12Notice].forEach(function (el) {
       if (el && el.parentNode) el.parentNode.removeChild(el);
     });
     Object.keys(bridgePending).forEach(function (requestId) {
@@ -13269,20 +12837,9 @@
   tooltip.addEventListener("blur", onPanelBlur, true);
   tooltip.addEventListener("keydown", onPanelKeyDown, true);
   tooltip.addEventListener("click", onPanelClick, true);
-    tooltip.addEventListener("mousemove", onPanelMouseMove, true);
-    tooltip.addEventListener("mouseleave", onPanelMouseLeave, true);
-    tooltip.addEventListener("mousedown", onPanelMouseDown, true);
-    tooltip.addEventListener("scroll", schedule, true);
-    backgroundEditor.addEventListener("input", onPanelInput, true);
-    backgroundEditor.addEventListener("change", onPanelChange, true);
-    backgroundEditor.addEventListener("focusin", onPanelFocusIn, true);
-    backgroundEditor.addEventListener("blur", onPanelBlur, true);
-    backgroundEditor.addEventListener("keydown", onPanelKeyDown, true);
-    backgroundEditor.addEventListener("click", onPanelClick, true);
-    backgroundEditor.addEventListener("mousemove", onPanelMouseMove, true);
-    backgroundEditor.addEventListener("mouseleave", onPanelMouseLeave, true);
-    backgroundEditor.addEventListener("mousedown", onPanelMouseDown, true);
-    backgroundEditor.addEventListener("scroll", schedule, true);
+  tooltip.addEventListener("mousemove", onPanelMouseMove, true);
+  tooltip.addEventListener("mouseleave", onPanelMouseLeave, true);
+  tooltip.addEventListener("mousedown", onPanelMouseDown, true);
   document.addEventListener("mousemove", onMouseMove, true);
   document.addEventListener("mousemove", onScrubMouseMove, true);
   document.addEventListener("mousemove", onFloatMove, true);
