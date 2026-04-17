@@ -207,7 +207,8 @@
 
   var IS_TOP_FRAME = window.top === window.self;
   var FRAME_LABEL = IS_TOP_FRAME ? "主页面" : "iframe";
-  var V12_VERSION = "1.2.0";
+  var V12_VERSION = "1.2.1";
+  var DRAFT_SCHEMA_VERSION = V12_VERSION;
   var BRIDGE_REQUEST_SOURCE = "visual-qa-v12-step2";
   var BRIDGE_RESPONSE_SOURCE = "visual-qa-bridge-v12-step2";
   var TOPBAR_COLLAPSE_STAGGER_MS = 42;
@@ -246,6 +247,7 @@
     panelFocusSelectFieldId: "",
     panelHoverFreeze: false,
     panelHoverFreezeTimerId: 0,
+    isPointerInsideSelectedPanel: false,
     addPropMenuOpen: false,
     colorPickerOpenProp: "",
     colorPickerOpenAt: 0,
@@ -350,9 +352,6 @@
       bodyOverflow: "",
       docOverflow: ""
     },
-    debugRawTarget: null,
-    debugNormalizedTarget: null,
-    debugLastSignature: "",
     destroyed: false
   };
 
@@ -561,9 +560,29 @@
       pageTitle: document.title || "",
       createdAt: now,
       updatedAt: now,
-      version: V12_VERSION,
+      version: DRAFT_SCHEMA_VERSION,
       records: []
     };
+  }
+
+  function isCompatibleDraftShape(draft) {
+    return !!(draft && typeof draft === "object" && draft.version === DRAFT_SCHEMA_VERSION && Array.isArray(draft.records));
+  }
+
+  function normalizeLoadedDraft(draft, pageKey) {
+    if (!isCompatibleDraftShape(draft)) return null;
+    var nextDraft = cloneDraft(draft);
+    nextDraft.pageKey = pageKey || nextDraft.pageKey || normalizePageKey(location.href);
+    nextDraft.pageUrl = String(nextDraft.pageUrl || location.href || "").trim();
+    nextDraft.pageTitle = String(nextDraft.pageTitle || document.title || "").trim();
+    nextDraft.version = DRAFT_SCHEMA_VERSION;
+    nextDraft.records = nextDraft.records.map(function (record) {
+      if (!record || typeof record !== "object") return null;
+      var nextRecord = cloneDraft(record);
+      nextRecord.version = DRAFT_SCHEMA_VERSION;
+      return nextRecord;
+    }).filter(Boolean);
+    return nextDraft;
   }
 
   function onBridgeMessage(event) {
@@ -608,7 +627,7 @@
 
   async function loadDraftFromBridge(pageKey) {
     var response = await bridgeRequest("load-draft", { pageKey: pageKey });
-    return response.draft || null;
+    return normalizeLoadedDraft(response.draft || null, pageKey);
   }
 
   async function saveDraftToBridge(pageKey, draft) {
@@ -647,10 +666,6 @@
       state.v12.draft = storedDraft || buildEmptyDraft(pageKey);
       state.v12.bridgeReady = true;
       state.v12.draftStatus = "ready";
-      console.debug("[visual-qa][v1.2] draft bridge ready", {
-        pageKey: pageKey,
-        recordCount: state.v12.draft.records.length
-      });
     } catch (err) {
       state.v12.draft = buildEmptyDraft(pageKey);
       state.v12.bridgeReady = false;
@@ -732,6 +747,25 @@
       pad2(d.getHours()) +
       ":" +
       pad2(d.getMinutes())
+    );
+  }
+
+  function formatExportTime(iso) {
+    if (!iso) return "";
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return "";
+    return (
+      d.getFullYear() +
+      "-" +
+      pad2(d.getMonth() + 1) +
+      "-" +
+      pad2(d.getDate()) +
+      " " +
+      pad2(d.getHours()) +
+      ":" +
+      pad2(d.getMinutes()) +
+      ":" +
+      pad2(d.getSeconds())
     );
   }
 
@@ -969,6 +1003,8 @@
     var items = buildHtmlExportRecordViewModels(records);
     var pageTitle = getReportPageTitle(draft);
     var pageUrl = getReportPageUrl(draft);
+    var effectiveExportedAt = draft && draft.exportedAt ? draft.exportedAt : exportedAt;
+    var exportTimeText = formatExportTime(effectiveExportedAt);
     var listHtml = items.length
       ? items
           .map(function (item) {
@@ -1044,8 +1080,8 @@
       ".hero-main{display:flex;align-items:flex-start;justify-content:space-between;gap:28px;}" +
       ".hero h1{margin:0;font-size:28px;line-height:1.28;letter-spacing:-.02em;max-width:880px;word-break:break-word;}" +
       ".hero-url{margin:12px 0 0;color:var(--accent);font-size:15px;word-break:break-all;}" +
-      ".hero-meta{min-width:260px;border:1px solid var(--line-soft);border-radius:20px;background:#f8fbff;padding:16px 18px;}" +
-      ".hero-meta .row + .row{margin-top:10px;padding-top:10px;border-top:1px dashed var(--line);}" +
+      ".hero-meta{min-width:260px;border:1px solid var(--line-soft);border-radius:20px;background:#f8fbff;padding:16px 18px;display:flex;flex-direction:column;}" +
+      ".hero-meta .row + .row{margin-top:12px;padding-top:12px;border-top:1px solid var(--line);}" +
       ".label{font-size:12px;color:var(--muted);margin-bottom:6px;font-weight:600;}" +
       ".value{font-size:16px;font-weight:700;line-height:1.45;word-break:break-word;}" +
       ".section{margin-top:20px;padding:22px;}" +
@@ -1086,6 +1122,9 @@
       "</p>" +
       "</div>" +
       '<div class="hero-meta">' +
+      '<div class="row"><div class="label">导出时间</div><div class="value">' +
+      esc(exportTimeText || "-") +
+      "</div></div>" +
       '<div class="row"><div class="label">记录总数</div><div class="value">' +
       esc(String(items.length)) +
       "</div></div>" +
@@ -1107,6 +1146,7 @@
   async function exportCurrentDraftAsHtml() {
     var draft = state.v12.draft || buildEmptyDraft(normalizePageKey(location.href));
     var exportedAt = new Date().toISOString();
+    draft.exportedAt = exportedAt;
     await warmAllRecordExports("html-export-preflight");
     if (draft && Array.isArray(draft.records)) {
       for (var i = 0; i < draft.records.length; i++) {
@@ -1219,9 +1259,7 @@
     var overlay = recordPreview.querySelector("[data-v12-preview-overlay]");
     var previewSrcExists = !!getRecordPreviewSrc(record);
 
-    function logPreviewLayout(payload) {
-      console.debug("[visual-qa][v1.2][preview-layout-real]", payload);
-    }
+    function logPreviewLayout() {}
 
     function showPlaceholder(message, imageLoadSuccess) {
       if (previewShell) previewShell.style.display = "none";
@@ -1230,35 +1268,6 @@
         previewPlaceholder.style.display = "flex";
         previewPlaceholder.textContent = message || "暂无可预览图片";
       }
-      window.requestAnimationFrame(function () {
-        logPreviewLayout({
-          recordId: record && record.id ? record.id : "",
-          naturalWidth: img ? img.naturalWidth || 0 : 0,
-          naturalHeight: img ? img.naturalHeight || 0 : 0,
-          maxPreviewWidth: Math.min(800, Math.round(window.innerWidth * 0.9)),
-          maxPreviewHeight: Math.round(window.innerHeight * 0.78),
-          scale: 0,
-          displayWidth: 0,
-          displayHeight: 0,
-          previewBodyClientWidth: previewBody ? previewBody.clientWidth : 0,
-          previewBodyClientHeight: previewBody ? previewBody.clientHeight : 0,
-          previewShellClientWidth: previewShell ? previewShell.clientWidth : 0,
-          previewShellClientHeight: previewShell ? previewShell.clientHeight : 0,
-          imageStageClientWidth: stage ? stage.clientWidth : 0,
-          imageStageClientHeight: stage ? stage.clientHeight : 0,
-          imgRectWidth: img ? img.getBoundingClientRect().width : 0,
-          imgRectHeight: img ? img.getBoundingClientRect().height : 0,
-          overlayRectWidth: overlay ? overlay.getBoundingClientRect().width : 0,
-          overlayRectHeight: overlay ? overlay.getBoundingClientRect().height : 0,
-          previewSrcExists: previewSrcExists,
-          imageLoadSuccess: !!imageLoadSuccess,
-          renderBranch: "placeholder",
-          overlayLeft: 0,
-          overlayTop: 0,
-          overlayWidth: 0,
-          overlayHeight: 0
-        });
-      });
     }
 
     if (!img || !stage || !previewShell) {
@@ -1306,36 +1315,7 @@
         }
       }
       window.requestAnimationFrame(function () {
-        var stageRect = stage.getBoundingClientRect();
-        var imgRect = img.getBoundingClientRect();
-        var overlayRect = overlay ? overlay.getBoundingClientRect() : { left: 0, top: 0, width: 0, height: 0 };
-        console.debug("[visual-qa][v1.2][preview-layout-real]", {
-          recordId: record && record.id ? record.id : "",
-          naturalWidth: naturalWidth,
-          naturalHeight: naturalHeight,
-          maxPreviewWidth: maxPreviewWidth,
-          maxPreviewHeight: maxPreviewHeight,
-          scale: scale,
-          displayWidth: displayWidth,
-          displayHeight: displayHeight,
-          previewBodyClientWidth: previewBody ? previewBody.clientWidth : 0,
-          previewBodyClientHeight: previewBody ? previewBody.clientHeight : 0,
-          previewShellClientWidth: previewShell ? previewShell.clientWidth : 0,
-          previewShellClientHeight: previewShell ? previewShell.clientHeight : 0,
-          imageStageClientWidth: stage.clientWidth,
-          imageStageClientHeight: stage.clientHeight,
-          imgRectWidth: imgRect.width,
-          imgRectHeight: imgRect.height,
-          overlayRectWidth: overlayRect.width,
-          overlayRectHeight: overlayRect.height,
-          previewSrcExists: previewSrcExists,
-          imageLoadSuccess: true,
-          renderBranch: "image",
-          overlayLeft: Math.max(0, overlayRect.left - stageRect.left),
-          overlayTop: Math.max(0, overlayRect.top - stageRect.top),
-          overlayWidth: overlayRect.width,
-          overlayHeight: overlayRect.height
-        });
+        logPreviewLayout();
       });
     }
 
@@ -1568,34 +1548,6 @@
     recordPreview.classList.add("is-open");
     if (hasPreviewSrc) {
       applyRecordPreviewLayout(record);
-    } else {
-      console.debug("[visual-qa][v1.2][preview-layout-real]", {
-        recordId: record && record.id ? record.id : "",
-        naturalWidth: 0,
-        naturalHeight: 0,
-        maxPreviewWidth: Math.min(800, Math.round(window.innerWidth * 0.9)),
-        maxPreviewHeight: Math.round(window.innerHeight * 0.78),
-        scale: 0,
-        displayWidth: 0,
-        displayHeight: 0,
-        previewBodyClientWidth: 0,
-        previewBodyClientHeight: 0,
-        previewShellClientWidth: 0,
-        previewShellClientHeight: 0,
-        imageStageClientWidth: 0,
-        imageStageClientHeight: 0,
-        imgRectWidth: 0,
-        imgRectHeight: 0,
-        overlayRectWidth: 0,
-        overlayRectHeight: 0,
-        previewSrcExists: false,
-        imageLoadSuccess: false,
-        renderBranch: "placeholder",
-        overlayLeft: 0,
-        overlayTop: 0,
-        overlayWidth: 0,
-        overlayHeight: 0
-      });
     }
   }
 
@@ -1866,31 +1818,9 @@
     return !!(target && target.closest && target.closest("[data-vqa-selected-add-property], [data-vqa-add-prop-menu]"));
   }
 
-  function closeBackgroundEditor() {
-    return false;
-  }
-
-  function openBackgroundEditor() {
-    return false;
-  }
-
-  function isBackgroundEditorTarget(target) {
-    return !!(target && target.closest && target.closest("[data-vqa-background-editor]"));
-  }
-
-  function isPanelOrBackgroundEditorTarget(target) {
-    return !!(target && (tooltip.contains(target) || isBackgroundEditorTarget(target)));
-  }
-
-  function queryPanelOrBackgroundEditor(selector) {
+  function queryPanelSelector(selector) {
     if (!selector) return null;
-    var found = tooltip.querySelector(selector);
-    if (found) return found;
-    if (backgroundEditor && typeof backgroundEditor.querySelector === "function") {
-      found = backgroundEditor.querySelector(selector);
-      if (found) return found;
-    }
-    return null;
+    return tooltip.querySelector(selector);
   }
 
   function clearBackgroundFillMeta() {
@@ -2008,6 +1938,12 @@
     clearBackgroundFillMeta();
     if (mode !== "select") {
       clearMeasureSelection({ keepTopbarMode: false });
+      state.modifiedProps = {};
+      state.editedProps = state.modifiedProps;
+      state.spacingExpanded = { padding: false, margin: false, radius: false };
+      clearEditingState();
+      state.panelNeedsPlacement = false;
+      state.panelManualPosition = false;
     }
     if (mode === "select") {
       if (state.v12.pendingRecord) discardPendingShotCapture(state.v12.pendingRecord.id);
@@ -2024,6 +1960,7 @@
     var opts = options || {};
     closeAddPropertyMenu();
     clearBackgroundFillMeta();
+    clearSelectedPanelHoverFreeze();
     state.measureA = null;
     state.measureB = null;
     state.primaryMeasure = null;
@@ -2120,7 +2057,26 @@
       return;
     }
     state.v12.drawerOpen = !state.v12.drawerOpen;
-    if (!state.v12.drawerOpen) clearDrawerClearConfirm();
+    clearSelectedPanelHoverFreeze();
+    closeAddPropertyMenu();
+    clearBackgroundFillMeta();
+    clearMeasureSelection({ keepTopbarMode: true });
+    clearDrawerClearConfirm();
+    if (state.v12.drawerOpen) {
+      state.v12.recordMenuOpen = false;
+      state.v12.categoryMenuOpen = false;
+      state.v12.drawerMenuRecordId = "";
+      state.v12.drawerEditingNoteId = "";
+      state.v12.drawerEditingNoteValue = "";
+      state.v12.previewRecordId = "";
+      state.v12.recordPopoverOpen = false;
+    } else {
+      state.v12.drawerMenuRecordId = "";
+      state.v12.drawerEditingNoteId = "";
+      state.v12.drawerEditingNoteValue = "";
+      state.v12.previewRecordId = "";
+      state.v12.recordPopoverOpen = false;
+    }
     schedule();
   }
 
@@ -2496,16 +2452,6 @@
       }
       result = buildShotRectWithBias(rect, elementFrameWidth, elementFrameHeight, elementPadding, viewportRect);
       result = ensureRectContainsRect(result, rect);
-      console.debug("[visual-qa][v1.2][shot-rect]", {
-        type: type,
-        focusWidth: rect.width,
-        focusHeight: rect.height,
-        maxSide: maxSide,
-        bucket: bucket,
-        shotWidth: result ? result.width : 0,
-        shotHeight: result ? result.height : 0,
-        shotContainsFocus: !!(result && rectContainsRect(result, rect))
-      });
       return result;
     }
     var longSide = Math.max(rect.width, rect.height);
@@ -2536,16 +2482,6 @@
     }
     result = buildShotRectWithBias(rect, regionFrameWidth, regionFrameHeight, regionPadding, viewportRect);
     result = ensureRectContainsRect(result, rect);
-    console.debug("[visual-qa][v1.2][shot-rect]", {
-      type: type,
-      focusWidth: rect.width,
-      focusHeight: rect.height,
-      maxSide: Math.max(rect.width, rect.height),
-      bucket: bucket,
-      shotWidth: result ? result.width : 0,
-      shotHeight: result ? result.height : 0,
-      shotContainsFocus: !!(result && rectContainsRect(result, rect))
-    });
     return result;
   }
 
@@ -2651,23 +2587,7 @@
         };
       },
       log: function (phase, payload) {
-        var screenshotSize = payload && payload.screenshotSize ? payload.screenshotSize : null;
-        var rawCropSize = payload && payload.rawCropSize ? payload.rawCropSize : null;
-        var recordSourceSize = payload && payload.recordSourceSize ? payload.recordSourceSize : null;
-        var thumbSize = payload && payload.thumbSize ? payload.thumbSize : null;
-        var exportSize = payload && payload.exportSize ? payload.exportSize : null;
-        console.debug("[visual-qa][v1.2][record-perf]", {
-          recordId: this.recordId,
-          type: this.type,
-          phase: phase,
-          dpr: window.devicePixelRatio || 1,
-          screenshotSize: screenshotSize,
-          rawCropSize: rawCropSize,
-          recordSourceSize: recordSourceSize,
-          thumbSize: thumbSize,
-          exportSize: exportSize,
-          durations: this.getDurations()
-        });
+        return;
       }
     };
   }
@@ -2698,16 +2618,7 @@
         };
       },
       log: function (phase, payload) {
-        console.debug("[visual-qa][v1.2][popup-perf]", {
-          recordId: this.recordId,
-          type: this.type,
-          phase: phase,
-          dpr: window.devicePixelRatio || 1,
-          screenshotSize: payload && payload.screenshotSize ? payload.screenshotSize : null,
-          decodeSize: payload && payload.decodeSize ? payload.decodeSize : null,
-          popupSize: payload && payload.popupSize ? payload.popupSize : null,
-          durations: this.getDurations()
-        });
+        return;
       }
     };
   }
@@ -3092,42 +3003,6 @@
       height: Math.max(1, Math.round(rawCropSize.height * recordSourceScale))
     };
 
-    console.debug("[visual-qa][v1.2][shot-crop-real]", {
-      recordId: record && record.id ? record.id : "",
-      type: record && record.type ? record.type : "",
-      focusRect: focusRect,
-      visibleFocusRect: visibleFocusRect,
-      shotRect: rect,
-      focusContainsShot: focusContainsShot,
-      shotContainsFocus: shotContainsFocus,
-      focusRight: focusRight,
-      shotRight: shotRight,
-      focusBottom: focusBottom,
-      shotBottom: shotBottom,
-      captureScroll: captureScroll,
-      viewportRect: viewportRect,
-      visibleIntersection: visibleIntersection,
-      imageNaturalWidth: screenshotWidth,
-      imageNaturalHeight: screenshotHeight,
-      captureScale: scale,
-      rawCropSize: rawCropSize,
-      recordSourceSize: recordSourceSize,
-      dpr: window.devicePixelRatio || 1
-    });
-
-    console.debug("[visual-qa][v1.2][shot] crop", {
-      recordId: record && record.id ? record.id : "",
-      captureRect: rect,
-      visibleFocusRect: visibleFocusRect,
-      captureScroll: captureScroll,
-      viewportRect: viewportRect,
-      visibleIntersection: visibleIntersection,
-      cropRect: sourceBounds,
-      destRect: destBounds,
-      rawCropSize: rawCropSize,
-      recordSourceSize: recordSourceSize
-    });
-
     var sourceCanvas = createCanvas(recordSourceSize.width, recordSourceSize.height);
     var sourceCtx = sourceCanvas.getContext("2d");
     sourceCtx.fillStyle = "#ffffff";
@@ -3213,12 +3088,6 @@
       source: record.shot.source || null,
       marked: true
     });
-    console.debug("[visual-qa][v1.2][record-export-lazy]", {
-      recordId: record.id,
-      reason: reason || "",
-      exportSize: exportVariant.size,
-      elapsedMs: Math.round((nowMs() - startedAt) * 100) / 100
-    });
     schedule();
     void safePersistCurrentDraft();
     clearRecordSourceCanvas(record.id);
@@ -3266,14 +3135,6 @@
       };
       record.capture = nextCapture;
       updateRecordCaptureById(record.id, nextCapture);
-      console.debug("[visual-qa][v1.2][shot] capture-start", {
-        recordId: record.id,
-        type: record.type,
-        focusRect: nextCapture.focusRect,
-        visibleFocusRect: nextCapture.visibleFocusRect,
-        shotRect: nextCapture.shotRect,
-        captureScroll: nextCapture.scroll
-      });
       if (popupPerf) {
         popupPerf.mark("captureRequestStart");
         popupPerf.log("capture-request-start");
@@ -3356,11 +3217,6 @@
       record.shotReady = true;
       schedule();
       void safePersistCurrentDraft();
-      console.debug("[visual-qa][v1.2][shot] capture-thumb-ready", {
-        recordId: record.id,
-        thumb: !!thumbVariant.dataUrl,
-        export: false
-      });
       return;
     } catch (err) {
       if (recordShotCaptureTokens[record.id] !== token) return;
@@ -3450,6 +3306,7 @@
     draft.pageUrl = location.href;
     draft.pageTitle = document.title || "";
     draft.updatedAt = new Date().toISOString();
+    draft.version = DRAFT_SCHEMA_VERSION;
   }
 
   function createPendingRecord(type, targetName, focusRect, targetHint) {
@@ -3462,6 +3319,7 @@
     return {
       id: makeRecordId(),
       type: type,
+      version: DRAFT_SCHEMA_VERSION,
       category: category.id,
       note: "",
       changeSummary: null,
@@ -3914,6 +3772,22 @@
     );
   }
 
+  function getSelectedPanelRoot() {
+    return tooltip.querySelector(".v12-selected-panel");
+  }
+
+  function isEventInsideSelectedPanel(e) {
+    if (!e || !shouldShowSelectedPanel()) return false;
+    var root = getSelectedPanelRoot();
+    if (!root) return false;
+    if (typeof e.composedPath === "function") {
+      var path = e.composedPath();
+      if (path && path.indexOf && path.indexOf(root) !== -1) return true;
+    }
+    var target = e.target;
+    return !!(target && root.contains && root.contains(target));
+  }
+
   function isSelectedPanelSelectActive() {
     var active = document.activeElement;
     if (!active || !tooltip.contains(active)) return false;
@@ -3926,6 +3800,11 @@
       state.panelHoverFreezeTimerId = 0;
     }
     state.panelHoverFreeze = !!active;
+  }
+
+  function clearSelectedPanelHoverFreeze() {
+    setSelectedPanelHoverFreeze(false);
+    state.isPointerInsideSelectedPanel = false;
   }
 
   function scheduleSelectedPanelHoverUnfreeze(delay) {
@@ -4280,8 +4159,8 @@
     if (!el) return { hex: "", alpha: 100 };
     var style = getComputedStyle(el);
     var computed = getColorComponents(style[prop]);
-    var hexField = queryPanelOrBackgroundEditor('input[data-prop="' + prop + '"]');
-    var alphaField = queryPanelOrBackgroundEditor('input[data-color-alpha-prop="' + prop + '"]');
+    var hexField = queryPanelSelector('input[data-prop="' + prop + '"]');
+    var alphaField = queryPanelSelector('input[data-color-alpha-prop="' + prop + '"]');
     var draftHex = hexField ? String(hexField.value || "").trim() : "";
     var draftAlpha = alphaField ? String(alphaField.value || "").trim() : "";
     return {
@@ -4314,11 +4193,11 @@
       if (normalized === "#") normalized = "#000000";
     }
     var bare = normalized.replace(/^#/, "");
-    var pickerInput = queryPanelOrBackgroundEditor('input[data-color-picker-input="' + prop + '"]') || queryPanelOrBackgroundEditor('input[data-color-prop="' + prop + '"]');
+    var pickerInput = queryPanelSelector('input[data-color-picker-input="' + prop + '"]') || queryPanelSelector('input[data-color-prop="' + prop + '"]');
     if (pickerInput) pickerInput.value = normalized;
-    var swatchBox = queryPanelOrBackgroundEditor('[data-color-swatch="' + prop + '"]');
+    var swatchBox = queryPanelSelector('[data-color-swatch="' + prop + '"]');
     if (swatchBox) swatchBox.style.background = normalized;
-    var textInput = queryPanelOrBackgroundEditor('input[data-color-text-prop="' + prop + '"]');
+    var textInput = queryPanelSelector('input[data-color-text-prop="' + prop + '"]');
     if (textInput) textInput.value = bare;
   }
 
@@ -5091,6 +4970,7 @@
     if (!fieldId) return;
     if (isSelectedPanelInteractiveTarget(target)) {
       setSelectedPanelHoverFreeze(true);
+      state.isPointerInsideSelectedPanel = true;
     }
     syncFieldDraft(target);
     syncQuickRecordUiForCurrentPanel();
@@ -5138,6 +5018,11 @@
 
   function onPanelMouseMove(e) {
     if (isNumericScrubbingActive()) return;
+    if (isEventInsideSelectedPanel(e)) {
+      state.isPointerInsideSelectedPanel = true;
+      setSelectedPanelHoverFreeze(true);
+      return;
+    }
     setHoveredScrubIcon(getIconHoverTarget(e.target));
     setHoveredScrubInput(getScrubHoverTarget(e.target), !!e.altKey);
   }
@@ -5184,8 +5069,10 @@
   }
 
   function onPanelMouseLeave() {
+    state.isPointerInsideSelectedPanel = false;
     setHoveredScrubIcon(null);
     setHoveredScrubInput(null, false);
+    scheduleSelectedPanelHoverUnfreeze(0);
   }
 
   function onPanelMouseDown(e) {
@@ -6674,31 +6561,6 @@
     };
   }
 
-  function describeDebugNode(el) {
-    if (!el || !el.tagName) return null;
-    return {
-      label: label(el),
-      tag: el.tagName.toLowerCase(),
-      classes: classSummary(el),
-      classification: classifyTarget(el)
-    };
-  }
-
-  function logTargetDebug(reason, panelTarget) {
-    var payload = {
-      reason: reason,
-      rawEventTarget: describeDebugNode(state.debugRawTarget),
-      normalizedTarget: describeDebugNode(state.debugNormalizedTarget),
-      selectedA: describeDebugNode(getSelectedEl()),
-      panelDataSourceTarget: describeDebugNode(panelTarget),
-      hoverTarget: describeDebugNode(state.hoveredEl)
-    };
-    var signature = JSON.stringify(payload);
-    if (signature === state.debugLastSignature) return;
-    state.debugLastSignature = signature;
-    console.debug("[visual-qa][target-chain]", payload);
-  }
-
   function isOverlayElement(el) {
     return !!(
       el &&
@@ -7019,6 +6881,7 @@
   function setSelectedEl(el) {
     var prevSelected = state.selectedA;
     setSelectedPanelHoverFreeze(false);
+    state.isPointerInsideSelectedPanel = false;
     closeAddPropertyMenu();
     clearBackgroundFillMeta();
     if (state.editingFieldId) {
@@ -7038,6 +6901,13 @@
       state.panelNeedsPlacement = false;
       state.panelManualPosition = false;
       return;
+    }
+    if (prevSelected !== state.selectedA) {
+      clearMeasureSelection({ keepTopbarMode: isMeasureTopbarMode() });
+      state.modifiedProps = {};
+      state.editedProps = state.modifiedProps;
+      state.spacingExpanded = { padding: false, margin: false, radius: false };
+      clearEditingState();
     }
     if (!state.panelPinned && !state.panelManualPosition && prevSelected !== state.selectedA) {
       state.panelNeedsPlacement = true;
@@ -8423,12 +8293,6 @@
   }
 
   function reduceMeasureStructureGapsForDisplay(gaps) {
-    console.log('[measure-debug]', {
-      fn: 'reduceMeasureStructureGapsForDisplay',
-      phase: 'enter',
-      inputLen: gaps && gaps.length,
-      gapValues: gaps ? gaps.map(function (g) { return g.value; }) : []
-    });
     if (!gaps || !gaps.length) return [];
     if (gaps.length <= 5) return gaps;
     var middle = Math.floor(gaps.length / 2);
@@ -8438,13 +8302,6 @@
     if (picked.length < 2) {
       picked = [gaps[middle], gaps[Math.max(0, middle - 1)]].filter(Boolean);
     }
-    console.log('[measure-debug]', {
-      fn: 'reduceMeasureStructureGapsForDisplay',
-      phase: 'exit',
-      outputLen: picked && picked.length,
-      outputValues: picked ? picked.map(function (g) { return g.value; }) : [],
-      pickedIndexes: picked ? picked.map(function (g) { return gaps.indexOf(g); }) : []
-    });
     return picked;
   }
 
@@ -8483,21 +8340,6 @@
     if (contentStrong) result = "content-container";
     if (repeatedStrong || repeatedTextRow) result = "repeated-structure";
     if (!result) result = "content-container";
-    console.log('[measure-debug]', {
-      fn: 'resolveMeasureStructureOutputKind',
-      orderedLen: ordered && ordered.length,
-      childCount: childCount,
-      repeatedStrong: repeatedStrong,
-      contentStrong: contentStrong,
-      repeatedCoverage: repeatedCoverage,
-      repeatedItemRatio: repeatedItemRatio,
-      textLikeCount: textLikeCount,
-      containerLikeCount: containerLikeCount,
-      textDominant: textDominant,
-      repeatedFavor: repeatedFavor,
-      contentFavor: contentFavor,
-      result: result
-    });
     return result;
   }
 
@@ -8628,17 +8470,6 @@
     var style = getComputedStyle(measureA);
     var kind = classifyTarget(measureA);
     var boxLeaf = null;
-    console.log('[measure-debug]', {
-      fn: 'resolveMeasureLeafData',
-      phase: 'enter',
-      tag: measureA && measureA.tagName && measureA.tagName.toLowerCase(),
-      kind: kind,
-      role: measureA && measureA.getAttribute && (measureA.getAttribute("role") || "").toLowerCase(),
-      display: style && style.display,
-      hasPadding: !!(style && (num(style.paddingTop) || num(style.paddingRight) || num(style.paddingBottom) || num(style.paddingLeft))),
-      hasBorder: !!hasVisibleBorder(style),
-      hasBackground: !!(style && (!isTransparentColor(style.backgroundColor) || (style.backgroundImage && style.backgroundImage !== "none")))
-    });
     if (kind === "container-like" || kind === "text-like" || kind === "graphic-like") {
       var displayValue = String(style.display || "").toLowerCase();
       var role = (measureA.getAttribute && (measureA.getAttribute("role") || "").toLowerCase()) || "";
@@ -8721,15 +8552,6 @@
         }
       }
       if (boxy && boxData) {
-        console.log('[measure-debug]', {
-          fn: 'resolveMeasureLeafData',
-          phase: 'box-leaf-hit',
-          contentRect: boxData && boxData.contentRect,
-          edgeValues: boxData && boxData.edgeValues,
-          bandsLen: boxData && boxData.bands && boxData.bands.length,
-          bandKeys: boxData && boxData.bands ? boxData.bands.map(function (b) { return b.key; }) : [],
-          bandValues: boxData && boxData.bands ? boxData.bands.map(function (b) { return b.value; }) : []
-        });
         boxLeaf = {
           kind: "box-leaf",
           rect: rect,
@@ -8745,16 +8567,6 @@
       }
     }
     if (boxLeaf) return boxLeaf;
-    console.log('[measure-debug]', {
-      fn: 'resolveMeasureLeafData',
-      phase: 'leaf-fallback',
-      fallbackReason: boxLeaf ? 'box-leaf-hit' : 'not-boxy-or-no-boxData',
-      rect: rect,
-      label:
-        kind === "text-like" || kind === "icon-font-like"
-          ? "字号 " + px(style.fontSize) + " / 行高 " + px(style.lineHeight)
-          : px(rect.width) + " × " + px(rect.height)
-    });
     return {
       kind: "leaf",
       rect: rect,
@@ -8813,19 +8625,6 @@
     var structureKind = resolveMeasureStructureOutputKind(repeatedGroup, contentBox, ordered);
     var contentRect = null;
     var siblingGaps = [];
-    console.log('[measure-debug]', {
-      fn: 'resolveMeasureStructureData',
-      phase: 'before-contentRect',
-      structureKind: structureKind,
-      axis: axis,
-      orderedLen: ordered && ordered.length,
-      contentBoxPresent: !!(contentBox && contentBox.rect),
-      repeatedGroupPresent: !!repeatedGroup,
-      repeatedGroupItemsLen: repeatedGroup && repeatedGroup.items && repeatedGroup.items.length,
-      repeatedGroupGapLen: repeatedGroup && repeatedGroup.gaps && repeatedGroup.gaps.length,
-      containerRect: containerRect
-    });
-
     if (structureKind === "repeated-structure" && repeatedGroup) {
       contentRect = repeatedGroup.rect;
       siblingGaps = reduceMeasureStructureGapsForDisplay(resolveMeasureStructureSiblingGaps(repeatedGroup.items, axis));
@@ -8842,19 +8641,6 @@
       };
     }
     var inset = resolveMeasureStructureInsetData(containerRect, contentRect, axis);
-    console.log('[measure-debug]', {
-      fn: 'resolveMeasureStructureData',
-      phase: 'before-return',
-      structureKind: structureKind,
-      rawSiblingGapLen: repeatedGroup ? resolveMeasureStructureSiblingGaps(repeatedGroup.items, axis).length : 0,
-      rawSiblingGapValues: repeatedGroup ? resolveMeasureStructureSiblingGaps(repeatedGroup.items, axis).map(function (g) { return g.value; }) : [],
-      reducedSiblingGapLen: siblingGaps && siblingGaps.length,
-      reducedSiblingGapValues: siblingGaps ? siblingGaps.map(function (g) { return g.value; }) : [],
-      contentRect: contentRect,
-      insetBandsLen: inset && inset.bands && inset.bands.length,
-      insetBandKeys: inset && inset.bands ? inset.bands.map(function (b) { return b.key; }) : []
-    });
-
     return {
       kind: "structure",
       structureKind: structureKind,
@@ -8872,18 +8658,6 @@
   function resolveMeasureSingleState(measureA) {
     if (!measureA) return null;
     var data = resolveMeasureStructureData(measureA);
-    console.log('[measure-debug]', {
-      fn: 'resolveMeasureSingleState',
-      measureTag: measureA && measureA.tagName && measureA.tagName.toLowerCase(),
-      measureClass: measureA && measureA.className,
-      kind: data && data.kind,
-      dataKind: data && data.kind,
-      structureKind: data && data.structureKind,
-      itemsLen: data && data.items && data.items.length,
-      siblingGapsLen: data && data.siblingGaps && data.siblingGaps.length,
-      insetBandsLen: data && data.inset && data.inset.bands && data.inset.bands.length,
-      hoveringSelf: state.hoveredEl === measureA
-    });
     return {
       kind: data && data.kind === "structure" ? "structure" : "leaf",
       data: data,
@@ -9059,13 +8833,6 @@
   var topbarTooltipCard = topbarTooltip.querySelector("[data-v12-topbar-tooltip-card]");
   var topbarTooltipLabel = topbarTooltip.querySelector("[data-v12-topbar-tooltip-label]");
   var topbarTooltipShortcut = topbarTooltip.querySelector("[data-v12-topbar-tooltip-shortcut]");
-
-  var backgroundEditor = make(
-    "div",
-    "position:fixed;left:0;top:0;z-index:" +
-      (CONFIG.zIndexTooltip + 7) +
-      ";pointer-events:none;opacity:0;transition:opacity 120ms ease;will-change:opacity;display:none;"
-  );
 
   var topbarDom = {
     ready: false,
@@ -10237,13 +10004,6 @@
       height: Math.round(rect.height)
     };
     var captureRect = viewportRectToDocumentRect(rawViewportRect);
-    console.debug("[visual-qa][v1.2][shot] element-record", {
-      scrollX: window.scrollX || window.pageXOffset || 0,
-      scrollY: window.scrollY || window.pageYOffset || 0,
-      rawRect: rawViewportRect,
-      boundingClientRect: rawViewportRect,
-      captureRect: captureRect
-    });
     var record = createPendingRecord(
       "element",
       buildElementTargetName(el),
@@ -10279,12 +10039,6 @@
   function createRegionPendingRecord(rect) {
     var rawViewportRect = normalizeRect(rect);
     var captureRect = viewportRectToDocumentRect(rawViewportRect);
-    console.debug("[visual-qa][v1.2][shot] region-record", {
-      scrollX: window.scrollX || window.pageXOffset || 0,
-      scrollY: window.scrollY || window.pageYOffset || 0,
-      rawRect: rawViewportRect,
-      captureRect: captureRect
-    });
     var record = createPendingRecord(
       "region",
       "区域记录",
@@ -10437,6 +10191,7 @@
       setDrawerCategoryFilter(target.getAttribute("data-filter-id") || "all");
     } else if (action === "drawer-open-preview") {
       state.v12.drawerMenuRecordId = "";
+      clearSelectedPanelHoverFreeze();
       openRecordPreview(target.getAttribute("data-record-id") || "");
     } else if (action === "drawer-toggle-menu") {
       openDrawerRecordMenu(target.getAttribute("data-record-id") || "");
@@ -10448,8 +10203,10 @@
       cancelDrawerNoteEdit();
     } else if (action === "drawer-close-preview") {
       closeRecordPreview();
+      clearSelectedPanelHoverFreeze();
     } else if (action === "drawer-delete") {
       state.v12.drawerMenuRecordId = "";
+      clearSelectedPanelHoverFreeze();
       deleteDraftRecord(target.getAttribute("data-record-id") || "");
     } else if (action === "drawer-clear") {
       if (state.v12.drawerClearConfirmArmed) {
@@ -10622,6 +10379,7 @@
     var nextCollapsed = !!next;
     if (nextCollapsed) closeAddPropertyMenu();
     if (nextCollapsed) clearBackgroundFillMeta();
+    clearSelectedPanelHoverFreeze();
     if (state.v12.toolbarCollapsed === nextCollapsed && state.panelCollapsed === nextCollapsed) {
       if (state.v12.topbarCollapseAnimTimerId) return;
       syncTopbar();
@@ -10631,11 +10389,26 @@
     }
     state.v12.toolbarCollapsed = nextCollapsed;
     state.panelCollapsed = nextCollapsed;
-    if (nextCollapsed && state.v12.drawerOpen) {
-      state.v12.drawerOpen = false;
+    if (nextCollapsed) {
       clearDrawerClearConfirm();
     }
+    if (nextCollapsed && state.v12.drawerOpen) {
+      state.v12.drawerOpen = false;
+    }
     if (state.panelCollapsed) clearEditingState();
+    if (nextCollapsed) {
+      state.v12.recordMenuOpen = false;
+      state.v12.categoryMenuOpen = false;
+      state.v12.drawerMenuRecordId = "";
+      state.v12.drawerEditingNoteId = "";
+      state.v12.drawerEditingNoteValue = "";
+      state.v12.previewRecordId = "";
+      state.v12.recordPopoverOpen = false;
+      clearMeasureSelection({ keepTopbarMode: isMeasureTopbarMode() });
+      state.modifiedProps = {};
+      state.editedProps = state.modifiedProps;
+      state.spacingExpanded = { padding: false, margin: false, radius: false };
+    }
     window.clearTimeout(state.v12.topbarCollapseAnimTimerId);
     state.v12.topbarCollapseAnimTimerId = window.setTimeout(function () {
       state.v12.topbarCollapseAnimTimerId = 0;
@@ -11138,15 +10911,6 @@
   }
 
   function renderMeasureBoxLeafGuides(layer, leafData, showContentLabel) {
-    console.log('[measure-debug]', {
-      fn: 'renderMeasureBoxLeafGuides',
-      contentRect: leafData && leafData.contentRect,
-      contentLabel: leafData && leafData.contentLabel,
-      edgeValues: leafData && leafData.edgeValues,
-      bandsLen: leafData && leafData.bands && leafData.bands.length,
-      bandKeys: leafData && leafData.bands ? leafData.bands.map(function (b) { return b.key; }) : [],
-      bandValues: leafData && leafData.bands ? leafData.bands.map(function (b) { return b.value; }) : []
-    });
     if (!leafData || !leafData.contentRect) return;
     if (showContentLabel) {
       addMeasureInsetBox(layer, leafData.contentRect, "rgba(85,168,255,.95)", "rgba(85,168,255,.04)");
@@ -11204,14 +10968,6 @@
   }
 
   function renderMeasureLeafHoverGuides(layer, leafData, isVisible) {
-    console.log('[measure-debug]', {
-      fn: 'renderMeasureLeafHoverGuides',
-      leafKind: leafData && leafData.kind,
-      isVisible: isVisible,
-      leafRect: leafData && leafData.rect,
-      contentRectPresent: !!(leafData && leafData.contentRect),
-      bandsLen: leafData && leafData.bands && leafData.bands.length
-    });
     if (!leafData || !leafData.rect) return;
     if (leafData.kind === "box-leaf") {
       if (!isVisible || !leafData.contentRect) return;
@@ -11234,58 +10990,23 @@
   }
 
   function renderMeasureSingleHoverGuides(measureState) {
-    console.log('[render single hover enter]', {
-      singleType: measureState && measureState.type,
-      singleKind: measureState && measureState.kind,
-      role: measureState && measureState.data && measureState.data.structureKind,
-      label: measureState && measureState.data && (measureState.data.label || measureState.data.contentLabel),
-      rect: measureState && measureState.data && (measureState.data.rect || measureState.data.containerRect)
-    });
     clearLayer(measureLayer);
     if (!measureState || !measureState.data) {
-      console.log('[render single hover skipped]', {
-        reason: '!measureState || !measureState.data',
-        singleType: measureState && measureState.type,
-        rect: measureState && measureState.data && (measureState.data.rect || measureState.data.containerRect)
-      });
       return;
     }
-    console.log('[single hover guides]', {
-      type: measureState && measureState.kind,
-      role: measureState && measureState.data && measureState.data.structureKind,
-      raw: measureState
-    });
     var hoverWithinA = measureState.kind === "structure"
       ? isHoverWithinMeasureA(measureState.data && measureState.data.measureA)
       : true;
     if (measureState.kind === "structure") {
       renderMeasureStructureHoverGuides(measureLayer, measureState.data, hoverWithinA);
-      console.log('[render single hover mounted]', {
-        text: measureState.data && measureState.data.containerRect ? px(measureState.data.containerRect.width) + " × " + px(measureState.data.containerRect.height) : null,
-        left: measureState.data && measureState.data.containerRect && measureState.data.containerRect.left,
-        top: measureState.data && measureState.data.containerRect && measureState.data.containerRect.top,
-        width: measureState.data && measureState.data.containerRect && measureState.data.containerRect.width,
-        height: measureState.data && measureState.data.containerRect && measureState.data.containerRect.height
-      });
       return;
     }
     renderMeasureLeafHoverGuides(measureLayer, measureState.data, hoverWithinA);
-    console.log('[render single hover mounted]', {
-      text: measureState.data && (measureState.data.label || measureState.data.contentLabel),
-      left: measureState.data && measureState.data.rect && measureState.data.rect.left,
-      top: measureState.data && measureState.data.rect && measureState.data.rect.top,
-      width: measureState.data && measureState.data.rect && measureState.data.rect.width,
-      height: measureState.data && measureState.data.rect && measureState.data.rect.height
-    });
   }
 
   function renderMeasurePairGuides(pairState) {
     clearLayer(measureLayer);
     if (!pairState) return;
-    console.log('[pair guides]', {
-      kind: pairState && pairState.pairKind,
-      raw: pairState
-    });
     renderMeasureHoverTargetReferenceGuides(measureLayer, pairState);
     if (pairState.pairKind === "edge-to-edge") {
       renderSeparatedPairMeasurementGuides(measureLayer, pairState);
@@ -11642,8 +11363,7 @@
         hasBackgroundImage: false,
         backgroundColor: "",
         backgroundImage: "",
-        background: "",
-        gradient: null
+        background: ""
       };
     }
     var computed = style || getComputedStyle(hostEl);
@@ -11653,122 +11373,16 @@
     var resolvedBackgroundColor = inlineBackgroundColor || String((computed && computed.backgroundColor) || "").trim();
     var resolvedBackgroundImage = inlineBackgroundImage || String((computed && computed.backgroundImage) || "").trim();
     var resolvedBackground = inlineBackground || String((computed && computed.background) || "").trim();
-    var parsedGradient = parseLinearGradientBackground(resolvedBackgroundImage) || parseLinearGradientBackground(resolvedBackground);
     var hasBackgroundImage = !!(resolvedBackgroundImage && resolvedBackgroundImage.toLowerCase() !== "none");
     var hasBackgroundColor = !isTransparentColor(resolvedBackgroundColor);
-    var mode = parsedGradient ? "gradient" : hasBackgroundColor ? "solid" : "none";
     return {
-      mode: mode,
+      mode: hasBackgroundColor ? "solid" : "none",
       hasBackgroundColor: hasBackgroundColor,
       hasBackgroundImage: hasBackgroundImage,
       backgroundColor: resolvedBackgroundColor,
       backgroundImage: resolvedBackgroundImage,
-      background: resolvedBackground,
-      gradient: parsedGradient
+      background: resolvedBackground
     };
-  }
-
-  function splitCssTopLevelCommas(value) {
-    var text = String(value == null ? "" : value);
-    if (!text) return [];
-    var parts = [];
-    var current = "";
-    var depth = 0;
-    for (var i = 0; i < text.length; i++) {
-      var ch = text.charAt(i);
-      if (ch === "(") depth += 1;
-      else if (ch === ")") depth = Math.max(0, depth - 1);
-      if (ch === "," && depth === 0) {
-        if (String(current).trim()) parts.push(String(current).trim());
-        current = "";
-        continue;
-      }
-      current += ch;
-    }
-    if (String(current).trim()) parts.push(String(current).trim());
-    return parts;
-  }
-
-  function normalizeLinearGradientAngle(rawAngle) {
-    var value = String(rawAngle == null ? "" : rawAngle).trim().toLowerCase();
-    if (!value) return "180deg";
-    if (/^-?\d+(\.\d+)?deg$/.test(value)) return String(parseFloat(value)) + "deg";
-    if (/^-?\d+(\.\d+)?$/.test(value)) return String(parseFloat(value)) + "deg";
-    if (value === "to top") return "0deg";
-    if (value === "to right") return "90deg";
-    if (value === "to bottom") return "180deg";
-    if (value === "to left") return "270deg";
-    if (value === "to top right") return "45deg";
-    if (value === "to bottom right") return "135deg";
-    if (value === "to bottom left") return "225deg";
-    if (value === "to top left") return "315deg";
-    return "180deg";
-  }
-
-  function splitGradientStopColorAndPosition(token) {
-    var text = String(token == null ? "" : token).trim();
-    if (!text) return { color: "", position: "" };
-    var match = text.match(/^(.*?)(\s+-?\d+(\.\d+)?%?)$/);
-    if (match && match[1]) {
-      return { color: String(match[1]).trim(), position: String(match[2]).trim() };
-    }
-    return { color: text, position: "" };
-  }
-
-  function parseLinearGradientBackground(value) {
-    var text = String(value == null ? "" : value).trim();
-    if (!text) return null;
-    var match = text.match(/linear-gradient\s*\((.*)\)/i);
-    if (!match) return null;
-    var args = splitCssTopLevelCommas(match[1]);
-    if (args.length < 2) return null;
-    var first = args[0];
-    var stopStartIndex = 0;
-    var angle = "180deg";
-    if (/^(to\s|[-+]?\d|\d+(\.\d+)?(deg|rad|turn))$/i.test(String(first).trim())) {
-      angle = normalizeLinearGradientAngle(first);
-      stopStartIndex = 1;
-    }
-    var stops = args.slice(stopStartIndex);
-    if (stops.length < 2) return null;
-    var stop1Parts = splitGradientStopColorAndPosition(stops[0]);
-    var stop2Parts = splitGradientStopColorAndPosition(stops[1]);
-    var stop1Meta = getColorComponents(stop1Parts.color);
-    var stop2Meta = getColorComponents(stop2Parts.color);
-    if (!stop1Meta.hex || !stop2Meta.hex) return null;
-    return {
-      angle: angle,
-      stop1: {
-        hex: stop1Meta.hex,
-        alpha: stop1Meta.alpha
-      },
-      stop2: {
-        hex: stop2Meta.hex,
-        alpha: stop2Meta.alpha
-      }
-    };
-  }
-
-  function mixHexColors(hexA, hexB, amount) {
-    var first = getColorComponents(hexA);
-    var second = getColorComponents(hexB);
-    var ratio = clamp(parsePercentValue(amount) === "" ? 50 : parsePercentValue(amount), 0, 100) / 100;
-    if (!first.hex || !second.hex) return hexA || hexB || "#FFFFFF";
-    var a = first.hex.length === 4 ? "#" + first.hex.charAt(1) + first.hex.charAt(1) + first.hex.charAt(2) + first.hex.charAt(2) + first.hex.charAt(3) + first.hex.charAt(3) : first.hex;
-    var b = second.hex.length === 4 ? "#" + second.hex.charAt(1) + second.hex.charAt(1) + second.hex.charAt(2) + second.hex.charAt(2) + second.hex.charAt(3) + second.hex.charAt(3) : second.hex;
-    var ar = parseInt(a.slice(1, 3), 16);
-    var ag = parseInt(a.slice(3, 5), 16);
-    var ab = parseInt(a.slice(5, 7), 16);
-    var br = parseInt(b.slice(1, 3), 16);
-    var bg = parseInt(b.slice(3, 5), 16);
-    var bb = parseInt(b.slice(5, 7), 16);
-    var r = Math.round(ar + (br - ar) * ratio);
-    var g = Math.round(ag + (bg - ag) * ratio);
-    var bl = Math.round(ab + (bb - ab) * ratio);
-    return "#" + [r, g, bl].map(function (n) {
-      var v = Math.max(0, Math.min(255, n || 0)).toString(16);
-      return v.length < 2 ? "0" + v : v;
-    }).join("").toUpperCase();
   }
 
   function isBackgroundHostTag(tagName) {
@@ -11954,7 +11568,6 @@
       "</div>";
     var textEditor = tooltip.querySelector('textarea[data-field-id="text-content"]');
     if (textEditor) syncTextareaAutoHeight(textEditor);
-    logTargetDebug("render-selected-panel", el);
   }
 
   function renderTooltip(el) {
@@ -12161,40 +11774,17 @@
     }
     syncRecordComposerFocus();
     var measureHitWithinA = !!(measureSingleState && state.measureA && measureHoverEl && isHitWithinMeasureA(state.measureA, measureHoverEl));
-    var measureBranch = null;
-    if (measurementModeActive) {
-      measureBranch = !state.measureA
-        ? (measureSingleState ? 'noA-hover' : 'neither')
-        : (measurePairState ? 'hitB' : (measureHitWithinA ? 'hitA' : 'neither'));
-      console.log('[measure refresh]', {
-        hasA: !!state.measureA,
-        hasB: !!state.measureB,
-        hitWithinA: state.measureA ? measureHitWithinA : null,
-        hoverEl: measureHoverEl,
-        branch: measureBranch
-      });
-    }
     if (measurementModeActive) {
       renderMeasureSinglePersistentGuides(state.measureA ? measureSingleState : null);
       if (measurePairState) {
         renderMeasurePairGuides(measurePairState);
       } else if (!state.measureA) {
         if (measureSingleState) {
-          console.log('[noA hover branch]', {
-            elTag: measureHoverEl && measureHoverEl.tagName,
-            elClass: measureHoverEl && measureHoverEl.className
-          });
           renderMeasureSingleHoverGuides(measureSingleState);
         } else {
           clearLayer(measureLayer);
         }
       } else if (measureHitWithinA) {
-        console.log('[hitA branch]', {
-          hasA: !!state.measureA,
-          hasB: !!state.measureB,
-          elTag: el && el.tagName,
-          elClass: el && el.className
-        });
         renderMeasureSingleHoverGuides(measureSingleState);
       } else {
         clearLayer(measureLayer);
@@ -12225,6 +11815,13 @@
     if (shouldBlockPageSelectionDuringScrub()) return;
     if (state.floatDragging) return;
     if (state.v12.pendingRecord) return;
+
+    if (isEventInsideSelectedPanel(e)) {
+      state.isPointerInsideSelectedPanel = true;
+      setSelectedPanelHoverFreeze(true);
+      return;
+    }
+
     state.mouseX = e.clientX;
     state.mouseY = e.clientY;
 
@@ -12252,13 +11849,6 @@
 
     var el = fromPoint(e.clientX, e.clientY);
     setPageHover(el);
-    console.log('[measure move]', {
-      hitTag: el && el.tagName,
-      hitClass: el && el.className,
-      hasA: !!state.measureA,
-      hasB: !!state.measureB,
-      hitWithinA: state.measureA ? isHitWithinMeasureA(state.measureA, el) : null
-    });
     if (isMeasureTopbarMode() || isPlainSelectMode()) {
       if (state.measureA && el && !isHitWithinMeasureA(state.measureA, el)) {
         state.measureB = el;
@@ -12338,6 +11928,7 @@
     if (isAddPropertyUiTarget(e.target)) return;
     if (state.addPropMenuOpen && (!e.target || !tooltip.contains(e.target))) {
       closeAddPropertyMenu();
+      clearSelectedPanelHoverFreeze();
       if (!state.panelCollapsed) schedule();
     }
     if (state.v12.suppressNextClick) {
@@ -12354,6 +11945,7 @@
     }
     if (state.v12.recordMenuOpen && !topbar.contains(e.target) && !recordMenu.contains(e.target)) {
       closeRecordMenu();
+      clearSelectedPanelHoverFreeze();
       schedule();
       e.preventDefault();
       e.stopPropagation();
@@ -12365,9 +11957,7 @@
     if (state.panelHoverFreeze) {
       scheduleSelectedPanelHoverUnfreeze(0);
     }
-    state.debugRawTarget = e.target || null;
     var el = fromPoint(e.clientX, e.clientY);
-    state.debugNormalizedTarget = el || null;
 
     if (isRecordMode()) {
       if (state.v12.pendingRecord) {
@@ -12422,7 +12012,6 @@
       state.editedProps = state.modifiedProps;
       state.spacingSide = nearestSide(el, e.clientX, e.clientY);
     }
-    logTargetDebug("click-select", getSelectedEl());
     schedule();
     e.preventDefault();
     e.stopPropagation();
@@ -12507,26 +12096,32 @@
       clearDrawerClearConfirm();
     } else if (state.addPropMenuOpen) {
       closeAddPropertyMenu();
+      clearSelectedPanelHoverFreeze();
       schedule();
     } else if (state.v12.previewRecordId) {
       closeRecordPreview();
+      clearSelectedPanelHoverFreeze();
     } else if (state.v12.regionSelection.active) {
       resetRegionSelection();
       schedule();
     } else if (state.v12.recordMenuOpen) {
       closeRecordMenu();
+      clearSelectedPanelHoverFreeze();
       schedule();
     } else if (state.v12.categoryMenuOpen) {
       state.v12.categoryMenuOpen = false;
+      clearSelectedPanelHoverFreeze();
       schedule();
     } else if (state.v12.drawerMenuRecordId) {
       state.v12.drawerMenuRecordId = "";
+      clearSelectedPanelHoverFreeze();
       schedule();
     } else if (state.v12.drawerEditingNoteId) {
       cancelDrawerNoteEdit();
       schedule();
     } else if (state.v12.recordPopoverOpen) {
       closePendingRecord();
+      clearSelectedPanelHoverFreeze();
     } else if ((isMeasureTopbarMode() || isPlainSelectMode()) && (state.measureA || state.measureB || state.primaryMeasure)) {
       clearMeasureSelection({ keepTopbarMode: isMeasureTopbarMode() });
       if (isPlainSelectMode()) {
