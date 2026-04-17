@@ -308,6 +308,8 @@
       recordMenuOpen: false,
       categoryMenuOpen: false,
       recordPopoverOpen: false,
+      feedbackPopoverOpen: false,
+      feedbackPopoverSuppressOutsideClose: false,
       pendingRecord: null,
       recordTargetEl: null,
       quickRecord: {
@@ -337,7 +339,11 @@
         startX: 0,
         startY: 0,
         currentX: 0,
-        currentY: 0
+        currentY: 0,
+        pointerId: -1,
+        dragging: false,
+        hitEl: null,
+        startedAt: 0
       },
       suppressNextClick: false
     },
@@ -387,7 +393,7 @@
     "mode-select": { label: "选择", shortcut: "V" },
     "mode-measure": { label: "测量", shortcut: "C" },
     "record-element": { label: "记录元素", shortcut: "O" },
-    "record-region": { label: "记录框选", shortcut: "R" },
+    "record-region": { label: "反馈", shortcut: "R" },
     "toggle-drawer": { label: "记录抽屉", shortcut: "M" }
   };
   var TOPBAR_ICON_PLACEHOLDER_SRC = "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
@@ -1804,6 +1810,14 @@
     return !isRecordMode() && !state.v12.drawerOpen && !isMeasureTopbarMode() && !isPlainSelectMode();
   }
 
+  function shouldShowRecordElementHoverCard() {
+    if (!isRecordElementMode()) return false;
+    if (state.v12.drawerOpen || state.v12.pendingRecord || state.v12.recordPopoverOpen) return false;
+    if (state.v12.regionSelection.active && (state.v12.regionSelection.dragging || state.v12.regionSelection.moved)) return false;
+    if (!state.hoveredEl && !getRecordTargetEl()) return false;
+    return true;
+  }
+
   function shouldShowHoverHighlight() {
     return !isRecordRegionMode();
   }
@@ -1934,6 +1948,7 @@
 
   function setV12Mode(mode) {
     if (mode !== "select" && mode !== "record-element" && mode !== "record-region") return;
+    closeFeedbackPopover({ schedule: false });
     closeAddPropertyMenu();
     clearBackgroundFillMeta();
     if (mode !== "select") {
@@ -1983,6 +1998,7 @@
   }
 
   function setMeasureTopbarMode(enabled) {
+    closeFeedbackPopover({ schedule: false });
     closeAddPropertyMenu();
     clearBackgroundFillMeta();
     if (enabled) {
@@ -2036,6 +2052,7 @@
   }
 
   function handleRecordElementAction() {
+    closeFeedbackPopover({ schedule: false }, "record-element-action");
     if (state.v12.pendingRecord) {
       showV12Notice("请先保存或取消当前记录");
       return;
@@ -2043,19 +2060,21 @@
     enterRecordModeWithSubMode("element");
   }
 
-  function handleRecordRegionAction() {
-    if (state.v12.pendingRecord) {
-      showV12Notice("请先保存或取消当前记录");
-      return;
+  function handleRecordRegionAction(e) {
+    var sourceType = e && e.type ? e.type : "unknown";
+    if (sourceType === "pointerup" || sourceType === "click") {
+      state.v12.feedbackPopoverSuppressOutsideClose = true;
     }
-    enterRecordModeWithSubMode("region");
+    toggleFeedbackPopover(topbar.querySelector('[data-v12-action="record-region"]'), sourceType);
   }
 
   function toggleV12Drawer() {
+    closeFeedbackPopover({ schedule: false }, "drawer-toggle");
     if (state.v12.pendingRecord) {
       showV12Notice("请先保存或取消当前记录");
       return;
     }
+    clearRecordCaptureState();
     state.v12.drawerOpen = !state.v12.drawerOpen;
     clearSelectedPanelHoverFreeze();
     closeAddPropertyMenu();
@@ -2119,8 +2138,18 @@
       startX: 0,
       startY: 0,
       currentX: 0,
-      currentY: 0
+      currentY: 0,
+      pointerId: -1,
+      dragging: false,
+      hitEl: null,
+      startedAt: 0
     };
+  }
+
+  function clearRecordCaptureState() {
+    state.v12.suppressNextClick = false;
+    resetRegionSelection();
+    setPageHover(null);
   }
 
   function cleanupRecordInteractionState(options) {
@@ -2128,12 +2157,11 @@
     state.v12.recordMenuOpen = false;
     state.v12.categoryMenuOpen = false;
     clearDrawerClearConfirm();
-    state.v12.suppressNextClick = false;
+    clearRecordCaptureState();
     if (!keepPendingRecord) {
       state.v12.pendingRecord = null;
       state.v12.recordPopoverOpen = false;
     }
-    resetRegionSelection();
     clearRecordTarget();
   }
 
@@ -3636,6 +3664,8 @@
   }
 
   function openPendingRecord(record) {
+    closeFeedbackPopover({ schedule: false });
+    clearRecordCaptureState();
     state.v12.pendingRecord = record;
     state.v12.recordPopoverOpen = true;
     state.v12.drawerOpen = false;
@@ -6581,15 +6611,23 @@
     );
   }
 
+  function isFeedbackUiElement(el) {
+    return !!(
+      el &&
+      (el === feedbackPopover ||
+        (el.closest && el.closest("[data-v12-feedback-popover]")))
+    );
+  }
+
   function deepElementFromPoint(root, x, y) {
     if (!root || !root.elementFromPoint) return null;
     var el = root.elementFromPoint(x, y);
     if (!el) return null;
-    if (isOverlayElement(el)) return null;
+    if (isOverlayElement(el) || isFeedbackUiElement(el)) return null;
 
     while (el && el.shadowRoot && el.shadowRoot.elementFromPoint) {
       var shadowEl = el.shadowRoot.elementFromPoint(x, y);
-      if (!shadowEl || shadowEl === el || isOverlayElement(shadowEl)) break;
+      if (!shadowEl || shadowEl === el || isOverlayElement(shadowEl) || isFeedbackUiElement(shadowEl)) break;
       el = shadowEl;
     }
     return el;
@@ -7721,7 +7759,7 @@
 
   function getActiveEl() {
     if (isRecordRegionMode()) return null;
-    if (isRecordElementMode()) return getRecordTargetEl() || state.hoveredEl || state.lastPageEl;
+    if (isRecordElementMode()) return state.hoveredEl || getRecordTargetEl();
     if (isMeasureTopbarMode()) return state.hoveredEl || state.measureB || state.measureA || state.lastPageEl;
     return getSelectedEl() || state.hoveredEl || state.lastPageEl;
   }
@@ -8834,6 +8872,20 @@
   var topbarTooltipLabel = topbarTooltip.querySelector("[data-v12-topbar-tooltip-label]");
   var topbarTooltipShortcut = topbarTooltip.querySelector("[data-v12-topbar-tooltip-shortcut]");
 
+  var feedbackPopover = make(
+    "div",
+    "position:fixed;left:0;top:0;z-index:" +
+      (CONFIG.zIndexTooltip + 7) +
+      ";display:none;opacity:0;will-change:transform,opacity;pointer-events:auto;"
+  );
+  feedbackPopover.setAttribute("data-v12-feedback-popover", "1");
+  feedbackPopover.className = "v12-feedback-popover";
+  feedbackPopover.innerHTML =
+    '<div class="v12-feedback-popover-panel" style="min-width:242px;max-width:280px;padding:12px;border-radius:26px;background:rgba(31,32,36,.96);border:1px solid rgba(255,255,255,.08);box-shadow:0 18px 44px rgba(0,0,0,.36);backdrop-filter:blur(18px);box-sizing:border-box;">' +
+    '<button type="button" data-v12-feedback-action="issue" style="display:flex;width:100%;align-items:center;justify-content:flex-start;padding:14px 16px;border:0;border-radius:16px;background:transparent;color:#f8fafc;font:15px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;text-align:left;cursor:pointer;transition:background-color 120ms ease;">问题反馈</button>' +
+    '<button type="button" data-v12-feedback-action="xhs" style="display:flex;width:100%;align-items:center;justify-content:flex-start;margin-top:6px;padding:14px 16px;border:0;border-radius:16px;background:transparent;color:#f8fafc;font:15px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;text-align:left;cursor:pointer;transition:background-color 120ms ease;">小红书</button>' +
+    "</div>";
+
   var topbarDom = {
     ready: false,
     shell: null,
@@ -8899,7 +8951,7 @@
       topbarButtonHtml("mode-select", "选择", TOPBAR_ICON_URLS && TOPBAR_ICON_URLS.select, isSelectMode()) +
       topbarButtonHtml("mode-measure", "测量", TOPBAR_ICON_URLS && TOPBAR_ICON_URLS.measure, false) +
       topbarButtonHtml("record-element", "记录元素", TOPBAR_ICON_URLS && TOPBAR_ICON_URLS.recordElement, isRecordElementMode()) +
-      topbarButtonHtml("record-region", "记录框选", TOPBAR_ICON_URLS && TOPBAR_ICON_URLS.recordRegion, isRecordRegionMode()) +
+      topbarButtonHtml("record-region", "反馈", TOPBAR_ICON_URLS && TOPBAR_ICON_URLS.recordRegion, state.v12.feedbackPopoverOpen) +
       "</div>" +
       '<div class="v12-topbar-divider" aria-hidden="true" data-v12-topbar-divider="1"></div>' +
       '<div class="v12-topbar-drawer-slot" data-v12-topbar-drawer-slot="1">' +
@@ -9156,6 +9208,33 @@
     document.head.appendChild(style);
   }
 
+  function ensureFeedbackPopoverStyles() {
+    if (document.getElementById("v12-feedback-popover-styles")) return;
+    var style = document.createElement("style");
+    style.id = "v12-feedback-popover-styles";
+    style.textContent =
+      ".v12-feedback-popover [data-v12-feedback-action]{transition:background-color 120ms ease,color 120ms ease,transform 120ms ease;}" +
+      ".v12-feedback-popover [data-v12-feedback-action]:hover{background:rgba(255,255,255,.06)!important;color:#fff!important;}" +
+      ".v12-feedback-popover [data-v12-feedback-action]:active{transform:translateY(1px);background:rgba(255,255,255,.1)!important;color:#fff!important;}";
+    document.head.appendChild(style);
+  }
+
+  function isFeedbackAnchorElement(el) {
+    return !!(
+      el &&
+      el.closest &&
+      el.closest('[data-v12-action="record-region"]') &&
+      topbar.contains(el.closest('[data-v12-action="record-region"]'))
+    );
+  }
+
+  function feedbackDebugLog() {}
+
+  function feedbackDebugNodeLabel(node) {
+    if (!node) return "null";
+    return node.tagName ? node.tagName.toLowerCase() : String(node.nodeName || typeof node);
+  }
+
   function ensureRecordDrawerStyles() {
     if (document.getElementById("v12-record-drawer-styles")) return;
     var style = document.createElement("style");
@@ -9291,6 +9370,117 @@
     syncTopbarTooltipGeometry(tooltipState.anchorRect);
   }
 
+  function getFeedbackPopoverAnchorRect() {
+    var anchor = topbar.querySelector('[data-v12-action="record-region"]');
+    if (!anchor || !anchor.getBoundingClientRect) return null;
+    var rect = anchor.getBoundingClientRect();
+    return {
+      left: rect.left,
+      top: rect.top,
+      right: rect.right,
+      bottom: rect.bottom,
+      width: rect.width,
+      height: rect.height
+    };
+  }
+
+  function syncFeedbackPopoverGeometry(anchorRect) {
+    if (!anchorRect) return;
+    var popoverRect = feedbackPopover.getBoundingClientRect();
+    var width = popoverRect.width || feedbackPopover.offsetWidth || 0;
+    var height = popoverRect.height || feedbackPopover.offsetHeight || 0;
+    if (!(width > 0) || !(height > 0)) return;
+    var left = clamp(anchorRect.left + anchorRect.width / 2 - width / 2, 8, Math.max(8, window.innerWidth - width - 8));
+    var top = anchorRect.bottom + 10;
+    if (top + height + 8 > window.innerHeight) {
+      top = Math.max(8, anchorRect.top - height - 10);
+    }
+    feedbackPopover.style.left = left + "px";
+    feedbackPopover.style.top = top + "px";
+  }
+
+  function closeFeedbackPopover(options, source) {
+    var opts = options || {};
+    if (!state.v12.feedbackPopoverOpen && !opts.force) {
+      feedbackPopover.style.display = "none";
+      feedbackPopover.style.opacity = "0";
+      return;
+    }
+    state.v12.feedbackPopoverOpen = false;
+    state.v12.feedbackPopoverSuppressOutsideClose = false;
+    feedbackPopover.style.opacity = "0";
+    feedbackPopover.style.display = "none";
+    if (opts.schedule !== false) schedule();
+  }
+
+  function openFeedbackPopover(anchorEl, source) {
+    ensureFeedbackPopoverStyles();
+    state.v12.feedbackPopoverOpen = true;
+    feedbackPopover.style.display = "block";
+    feedbackPopover.style.opacity = "0";
+    var anchorRect = anchorEl && anchorEl.getBoundingClientRect ? anchorEl.getBoundingClientRect() : getFeedbackPopoverAnchorRect();
+    if (anchorRect) {
+      syncFeedbackPopoverGeometry({
+        left: anchorRect.left,
+        top: anchorRect.top,
+        right: anchorRect.right,
+        bottom: anchorRect.bottom,
+        width: anchorRect.width,
+        height: anchorRect.height
+      });
+    }
+    void feedbackPopover.offsetWidth;
+    feedbackPopover.style.opacity = "1";
+    schedule();
+  }
+
+  function toggleFeedbackPopover(anchorEl, source) {
+    if (state.v12.feedbackPopoverOpen) {
+      closeFeedbackPopover(null, source || "toggle");
+      return;
+    }
+    openFeedbackPopover(anchorEl, source || "toggle");
+  }
+
+  function renderFeedbackPopover() {
+    ensureFeedbackPopoverStyles();
+    if (!state.v12.feedbackPopoverOpen) {
+      feedbackPopover.style.opacity = "0";
+      feedbackPopover.style.display = "none";
+      return;
+    }
+    feedbackPopover.style.display = "block";
+    var anchorRect = getFeedbackPopoverAnchorRect();
+    if (anchorRect) {
+      syncFeedbackPopoverGeometry(anchorRect);
+    }
+    feedbackPopover.style.opacity = "1";
+  }
+
+  function openFeedbackUrl(url) {
+    if (!url) return;
+    var win = window.open(url, "_blank", "noopener,noreferrer");
+    if (win && win.opener) {
+      try {
+        win.opener = null;
+      } catch (err) {}
+    }
+  }
+
+  function onFeedbackPopoverClick(e) {
+    var target = e.target && e.target.closest ? e.target.closest("[data-v12-feedback-action]") : null;
+    if (!target || !feedbackPopover.contains(target)) return;
+    var action = target.getAttribute("data-v12-feedback-action") || "";
+    if (action === "issue") {
+      openFeedbackUrl("https://my.feishu.cn/share/base/form/shrcnfNUNjoSiHuwaGE4KELorOW");
+    } else if (action === "xhs") {
+      openFeedbackUrl("https://www.xiaohongshu.com/user/profile/6323ec9f000000002303947f");
+    }
+    closeFeedbackPopover(null, "button-click");
+    e.preventDefault();
+    e.stopPropagation();
+  }
+
   function hideTopbarTooltip(immediate) {
     window.clearTimeout(topbarTooltipHideTimerId);
     topbarTooltipHideTimerId = 0;
@@ -9345,7 +9535,7 @@
     syncTopbarButton(topbarDom.selectBtn, isPlainSelectMode(), state.v12.topbarPressedAction === "mode-select");
     syncTopbarButton(topbarDom.measureBtn, isMeasureTopbarMode(), state.v12.topbarPressedAction === "mode-measure");
     syncTopbarButton(topbarDom.recordElementBtn, isRecordElementMode(), state.v12.topbarPressedAction === "record-element");
-    syncTopbarButton(topbarDom.recordRegionBtn, isRecordRegionMode(), state.v12.topbarPressedAction === "record-region");
+    syncTopbarButton(topbarDom.recordRegionBtn, state.v12.feedbackPopoverOpen, state.v12.topbarPressedAction === "record-region");
     syncTopbarButton(topbarDom.drawerBtn, state.v12.drawerOpen, state.v12.topbarPressedAction === "toggle-drawer");
     if (topbarDom.drawerBtn) {
       var drawerLabel = topbarDom.drawerBtn.querySelector(".v12-topbar-count");
@@ -9512,16 +9702,10 @@
 
   function renderRegionCaptureOverlay() {
     regionCaptureOverlay.style.display = shouldShowRegionCaptureOverlay() ? "block" : "none";
+    regionCaptureOverlay.style.pointerEvents = "none";
   }
 
   function renderRegionSelection() {
-    if (!isRecordRegionMode()) {
-      regionSelectBox.style.display = "none";
-      regionSelectBox.style.width = "0";
-      regionSelectBox.style.height = "0";
-      return;
-    }
-
     var rect = null;
     var confirmedSelection = false;
     if (state.v12.regionSelection.active && state.v12.regionSelection.moved) {
@@ -10080,23 +10264,41 @@
   }
 
   function handleTopbarAction(action, target, e) {
+    var branch = "none";
+    feedbackDebugLog("handleTopbarAction enter", {
+      action: action,
+      target: feedbackDebugNodeLabel(target),
+      openBefore: !!state.v12.feedbackPopoverOpen
+    });
     if (action === "mode-select") {
+      branch = "mode-select";
+      closeFeedbackPopover({ schedule: false }, "topbar-mode-select");
       setV12Mode("select");
       clearMeasureSelection({ keepTopbarMode: false });
     } else if (action === "mode-measure") {
+      branch = "mode-measure";
+      closeFeedbackPopover({ schedule: false }, "topbar-mode-measure");
       if (!isSelectMode()) {
         setV12Mode("select");
       }
       setMeasureTopbarMode(!isMeasureTopbarMode());
     } else if (action === "record-element") {
-      clearMeasureSelection({ keepTopbarMode: false });
+      branch = "record-element";
       handleRecordElementAction();
     } else if (action === "record-region") {
-      clearMeasureSelection({ keepTopbarMode: false });
-      handleRecordRegionAction();
+      branch = "record-region-feedback";
+      handleRecordRegionAction(e);
     } else if (action === "toggle-drawer") {
+      branch = "toggle-drawer";
+      closeFeedbackPopover({ schedule: false }, "topbar-toggle-drawer");
       activateV12DrawerEntry();
     }
+    feedbackDebugLog("handleTopbarAction exit", {
+      action: action,
+      branch: branch,
+      returned: true,
+      openAfter: !!state.v12.feedbackPopoverOpen
+    });
     if (e) {
       e.preventDefault();
       e.stopPropagation();
@@ -10108,6 +10310,15 @@
     if (!target) return;
     var action = target.getAttribute("data-v12-action");
     if (!isTopbarAction(action)) return;
+    if (action === "record-region") {
+      feedbackDebugLog("topbar pointerdown", {
+        type: e.type,
+        target: feedbackDebugNodeLabel(e.target),
+        currentTarget: feedbackDebugNodeLabel(e.currentTarget),
+        mode: state.v12.mode,
+        open: !!state.v12.feedbackPopoverOpen
+      });
+    }
     if (e.button != null && e.button !== 0) return;
     state.v12.topbarPressedAction = action;
     state.v12.topbarPressedPointerId = e.pointerId != null ? e.pointerId : -1;
@@ -10124,6 +10335,15 @@
     if (!target) return;
     var action = target.getAttribute("data-v12-action");
     if (!isTopbarAction(action)) return;
+    if (action === "record-region") {
+      feedbackDebugLog("topbar pointerup", {
+        type: e.type,
+        target: feedbackDebugNodeLabel(e.target),
+        currentTarget: feedbackDebugNodeLabel(e.currentTarget),
+        mode: state.v12.mode,
+        open: !!state.v12.feedbackPopoverOpen
+      });
+    }
     var pointerId = e.pointerId != null ? e.pointerId : -1;
     if (state.v12.topbarPressedAction !== action && state.v12.topbarPressedPointerId !== pointerId) return;
     markTopbarPointerActivation(action);
@@ -10165,12 +10385,38 @@
     if (!target) return;
     var action = target.getAttribute("data-v12-action");
     if (isTopbarAction(action)) {
+      if (action === "record-region") {
+        feedbackDebugLog("button click", {
+          type: e.type,
+          target: feedbackDebugNodeLabel(e.target),
+          currentTarget: feedbackDebugNodeLabel(e.currentTarget),
+          openBefore: !!state.v12.feedbackPopoverOpen
+        });
+      }
       if (shouldSuppressTopbarClick(action)) {
+        if (action === "record-region") {
+          feedbackDebugLog("button click suppressed", {
+            action: action,
+            openAfter: !!state.v12.feedbackPopoverOpen
+          });
+        }
         e.preventDefault();
         e.stopPropagation();
         return;
       }
+      if (action === "record-region") {
+        feedbackDebugLog("button click dispatch", {
+          action: action,
+          openBefore: !!state.v12.feedbackPopoverOpen
+        });
+      }
       handleTopbarAction(action, target, e);
+      if (action === "record-region") {
+        feedbackDebugLog("button click done", {
+          action: action,
+          openAfter: !!state.v12.feedbackPopoverOpen
+        });
+      }
       return;
     }
     if (action === "record-submode-element") {
@@ -10341,6 +10587,28 @@
       return;
     }
 
+    if (shouldShowRecordElementHoverCard()) {
+      tooltip.style.minWidth = "0";
+      tooltip.style.maxWidth = "none";
+      tooltip.style.borderRadius = "999px";
+      tooltip.style.background = "transparent";
+      tooltip.style.border = "0";
+      tooltip.style.backdropFilter = "none";
+      tooltip.style.boxShadow = "none";
+      head.style.display = "none";
+      head.style.cursor = "default";
+      head.style.background = "transparent";
+      headActionsWrap.style.display = "none";
+      btnMeasure.style.display = "none";
+      btnReset.style.display = "none";
+      body.style.padding = "0";
+      headTitleEl.textContent = "视觉走查";
+      headTitleEl.title = "视觉走查";
+      headTitleEl.style.font = "600 16px/1.2 'PingFang SC',-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif";
+      headTitleEl.style.color = PANEL_UI.titleColor;
+      return;
+    }
+
     tooltip.style.minWidth = "0";
     tooltip.style.maxWidth = PANEL_UI.hoverMaxWidth;
     tooltip.style.borderRadius = PANEL_UI.radius;
@@ -10377,8 +10645,10 @@
 
   function setCollapsed(next) {
     var nextCollapsed = !!next;
+    if (nextCollapsed) closeFeedbackPopover({ schedule: false });
     if (nextCollapsed) closeAddPropertyMenu();
     if (nextCollapsed) clearBackgroundFillMeta();
+    if (nextCollapsed) clearRecordCaptureState();
     clearSelectedPanelHoverFreeze();
     if (state.v12.toolbarCollapsed === nextCollapsed && state.panelCollapsed === nextCollapsed) {
       if (state.v12.topbarCollapseAnimTimerId) return;
@@ -11113,6 +11383,18 @@
   }
 
   function renderHoverCard(el) {
+    if (shouldShowRecordElementHoverCard()) {
+      if (!el) {
+        body.innerHTML = "";
+        return;
+      }
+      var recordMeta = hoverMeta(el);
+      body.innerHTML =
+        '<div style="display:inline-flex;align-items:center;justify-content:center;min-height:24px;padding:3px 8px;border-radius:999px;background:#2F7BFF;border:2px solid rgba(255,255,255,.14);color:#ffffff;font:11px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;font-weight:700;box-shadow:0 6px 16px rgba(47,123,255,.22);white-space:nowrap;">' +
+        esc(recordMeta) +
+        "</div>";
+      return;
+    }
     if (!el) {
       body.innerHTML = '<div style="color:#8FA1B3;">移动到页面元素上开始走查</div>';
       return;
@@ -11571,7 +11853,7 @@
   }
 
   function renderTooltip(el) {
-    if (!shouldShowHoverCard() && !shouldShowSelectedPanel()) return;
+    if (!shouldShowHoverCard() && !shouldShowSelectedPanel() && !shouldShowRecordElementHoverCard()) return;
     if (shouldShowSelectedPanel()) {
       if (isEditingPanel()) return;
       renderSelectedPanel(getSelectedPanelTarget());
@@ -11739,10 +12021,9 @@
       measureLayer.style.display = "none";
     } else {
       tooltip.style.display =
-        isRecordMode() ||
         state.v12.drawerOpen ||
         isMeasureTopbarMode() ||
-        (!shouldShowSelectedPanel() && !shouldShowHoverCard())
+        (!shouldShowSelectedPanel() && !shouldShowHoverCard() && !shouldShowRecordElementHoverCard())
           ? "none"
           : "block";
       topbar.style.display = "flex";
@@ -11757,6 +12038,7 @@
       renderRegionSelection();
     }
     if (!collapsed && state.v12.topbarTooltip.visible) renderTopbarTooltip();
+    if (!collapsed) renderFeedbackPopover();
     renderDrawerStub();
     var el = getActiveEl();
     state.primaryMeasure = collapsed || isRecordMode() || measurementModeActive ? null : hasSelectedEl() ? resolvePrimaryMeasure(state.mouseX, state.mouseY, state.hoveredEl) : null;
@@ -11769,7 +12051,7 @@
     if (!isEditingPanel()) renderTooltip(el);
     if (shouldShowSelectedPanel()) {
       positionSelectedPanel(getSelectedPanelTarget());
-    } else if (shouldShowHoverCard()) {
+    } else if (shouldShowHoverCard() || shouldShowRecordElementHoverCard()) {
       positionHoverTooltip();
     }
     syncRecordComposerFocus();
@@ -11808,7 +12090,7 @@
   function fromPoint(x, y) {
     if (shouldBlockPageSelectionDuringScrub()) return null;
     var el = deepElementFromPoint(document, x, y);
-    if (!el || tooltip.contains(el) || isOverlayElement(el)) return null;
+    if (!el || tooltip.contains(el) || isOverlayElement(el) || isFeedbackUiElement(el)) return null;
     return el;
   }
   function onMouseMove(e) {
@@ -11825,7 +12107,7 @@
     state.mouseX = e.clientX;
     state.mouseY = e.clientY;
 
-    if (shouldShowRegionCaptureOverlay()) {
+    if (state.v12.regionSelection.active && state.v12.regionSelection.moved) {
       setPageHover(null);
       return;
     }
@@ -11868,28 +12150,71 @@
     if (!state.panelCollapsed) schedule();
   }
 
+  function isRecordCapturePointerEventAllowed(e) {
+    if (!state.v12.regionSelection.active) return true;
+    if (state.v12.regionSelection.pointerId === -1) return true;
+    return e && e.pointerId != null && e.pointerId === state.v12.regionSelection.pointerId;
+  }
+
   function startRegionCapture(e) {
     if (state.panelCollapsed) return;
-    if (!shouldShowRegionCaptureOverlay()) return;
+    if (!isRecordMode()) return;
+    if (state.v12.pendingRecord || state.v12.drawerOpen || state.v12.recordPopoverOpen) {
+      clearRecordCaptureState();
+      return;
+    }
+    if (state.v12.regionSelection.active) return;
+    if (e && e.button != null && e.button !== 0) return;
+    if (e && (isFeedbackUiElement(e.target) || state.v12.feedbackPopoverOpen)) {
+      feedbackDebugLog("document pointerdown", {
+        type: e.type,
+        target: feedbackDebugNodeLabel(e.target),
+        currentTarget: feedbackDebugNodeLabel(e.currentTarget),
+        mode: state.v12.mode,
+        open: !!state.v12.feedbackPopoverOpen,
+        observed: true
+      });
+    }
+    if (isFeedbackUiElement(e && e.target)) return;
+    if (isEventInsideSelectedPanel(e)) return;
+    if (e && e.target && (tooltip.contains(e.target) || topbar.contains(e.target) || recordMenu.contains(e.target) || drawerStub.contains(e.target) || recordComposer.contains(e.target) || recordPreview.contains(e.target) || isFeedbackUiElement(e.target))) {
+      return;
+    }
+    var el = fromPoint(e.clientX, e.clientY);
     state.v12.regionSelection.active = true;
     state.v12.regionSelection.moved = false;
+    state.v12.regionSelection.dragging = false;
+    state.v12.regionSelection.pointerId = e && e.pointerId != null ? e.pointerId : -1;
+    state.v12.regionSelection.hitEl = el || null;
+    state.v12.regionSelection.startedAt = Date.now();
     state.v12.regionSelection.startX = e.clientX;
     state.v12.regionSelection.startY = e.clientY;
     state.v12.regionSelection.currentX = e.clientX;
     state.v12.regionSelection.currentY = e.clientY;
+    state.mouseX = e.clientX;
+    state.mouseY = e.clientY;
+    schedule();
     e.preventDefault();
     e.stopPropagation();
-    schedule();
   }
 
   function updateRegionCapture(e) {
     if (!state.v12.regionSelection.active) return;
+    if (!isRecordCapturePointerEventAllowed(e)) return;
     state.v12.regionSelection.currentX = e.clientX;
     state.v12.regionSelection.currentY = e.clientY;
     if (!state.v12.regionSelection.moved) {
       state.v12.regionSelection.moved =
-        Math.abs(state.v12.regionSelection.currentX - state.v12.regionSelection.startX) > 4 ||
-        Math.abs(state.v12.regionSelection.currentY - state.v12.regionSelection.startY) > 4;
+        Math.abs(state.v12.regionSelection.currentX - state.v12.regionSelection.startX) > 5 ||
+        Math.abs(state.v12.regionSelection.currentY - state.v12.regionSelection.startY) > 5;
+      if (state.v12.regionSelection.moved) {
+        state.v12.regionSelection.dragging = true;
+      }
+    }
+    state.mouseX = e.clientX;
+    state.mouseY = e.clientY;
+    if (state.v12.regionSelection.dragging) {
+      setPageHover(null);
     }
     e.preventDefault();
     e.stopPropagation();
@@ -11898,16 +12223,48 @@
 
   function finishRegionCapture(e) {
     if (!state.v12.regionSelection.active) return;
-    var shouldCreate = isRecordRegionMode() && state.v12.regionSelection.moved;
-    var rect = shouldCreate ? getRegionSelectionRect() : null;
-    resetRegionSelection();
-    if (shouldCreate && rect && rect.width >= 12 && rect.height >= 12) {
-      state.v12.suppressNextClick = true;
-      createRegionPendingRecord(rect);
-      e.preventDefault();
-      e.stopPropagation();
-      return;
+    if (!isRecordCapturePointerEventAllowed(e)) return;
+    if (e && (isFeedbackUiElement(e.target) || state.v12.feedbackPopoverOpen)) {
+      feedbackDebugLog("document pointerup", {
+        type: e.type,
+        target: feedbackDebugNodeLabel(e.target),
+        currentTarget: feedbackDebugNodeLabel(e.currentTarget),
+        mode: state.v12.mode,
+        open: !!state.v12.feedbackPopoverOpen
+      });
     }
+    var shouldCreateRegion = !!state.v12.regionSelection.moved;
+    var rect = shouldCreateRegion ? getRegionSelectionRect() : null;
+    var hitEl = state.v12.regionSelection.hitEl || fromPoint(e.clientX, e.clientY);
+    var createElementRecord = !shouldCreateRegion && !!hitEl;
+    var createdRecord = false;
+    resetRegionSelection();
+    if (shouldCreateRegion && rect && rect.width >= 12 && rect.height >= 12) {
+      createRegionPendingRecord(rect);
+      createdRecord = true;
+    } else if (createElementRecord) {
+      createElementPendingRecord(hitEl);
+      createdRecord = true;
+    }
+    state.v12.suppressNextClick = createdRecord;
+    e.preventDefault();
+    e.stopPropagation();
+    schedule();
+  }
+
+  function cancelRegionCapture(e) {
+    if (!state.v12.regionSelection.active) return;
+    if (!isRecordCapturePointerEventAllowed(e)) return;
+    if (e && (isFeedbackUiElement(e.target) || state.v12.feedbackPopoverOpen)) {
+      feedbackDebugLog("document pointercancel", {
+        type: e.type,
+        target: feedbackDebugNodeLabel(e.target),
+        currentTarget: feedbackDebugNodeLabel(e.currentTarget),
+        mode: state.v12.mode,
+        open: !!state.v12.feedbackPopoverOpen
+      });
+    }
+    clearRecordCaptureState();
     e.preventDefault();
     e.stopPropagation();
     schedule();
@@ -11925,6 +12282,28 @@
   function onClick(e) {
     if (state.panelCollapsed) return;
     if (isNumericScrubbingActive() || consumeSuppressedSelectionEvent(e)) return;
+    if (state.v12.feedbackPopoverOpen) {
+      var popoverAction = e.target && e.target.closest ? e.target.closest("[data-v12-feedback-action]") : null;
+      var feedbackTarget = e.target && e.target.closest ? e.target.closest("[data-v12-feedback-popover]") : null;
+      var feedbackAnchor = isFeedbackAnchorElement(e.target);
+      var strongUiTarget = topbar.contains(e.target) || recordMenu.contains(e.target) || drawerStub.contains(e.target) || recordComposer.contains(e.target) || recordPreview.contains(e.target) || tooltip.contains(e.target);
+      if (popoverAction && feedbackPopover.contains(popoverAction)) {
+        onFeedbackPopoverClick(e);
+        return;
+      }
+      if (state.v12.feedbackPopoverSuppressOutsideClose) {
+        state.v12.feedbackPopoverSuppressOutsideClose = false;
+        return;
+      }
+      if (feedbackTarget || feedbackAnchor || isFeedbackUiElement(e.target) || strongUiTarget) {
+        state.v12.feedbackPopoverSuppressOutsideClose = false;
+        return;
+      }
+      closeFeedbackPopover();
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     if (isAddPropertyUiTarget(e.target)) return;
     if (state.addPropMenuOpen && (!e.target || !tooltip.contains(e.target))) {
       closeAddPropertyMenu();
@@ -11957,23 +12336,17 @@
     if (state.panelHoverFreeze) {
       scheduleSelectedPanelHoverUnfreeze(0);
     }
-    var el = fromPoint(e.clientX, e.clientY);
 
     if (isRecordMode()) {
-      if (state.v12.pendingRecord) {
-        state.v12.categoryMenuOpen = false;
-        schedule();
-        e.preventDefault();
-        e.stopPropagation();
-        return;
-      }
-      if (isRecordElementMode() && el) {
-        createElementPendingRecord(el);
+      if (state.v12.suppressNextClick) {
+        state.v12.suppressNextClick = false;
       }
       e.preventDefault();
       e.stopPropagation();
       return;
     }
+
+    var el = fromPoint(e.clientX, e.clientY);
 
     if (isMeasureTopbarMode() || isPlainSelectMode()) {
       if (!el) return;
@@ -12085,14 +12458,16 @@
 
   function shouldBlockTopbarShortcuts(e, key) {
     if (!state.v12.recordPopoverOpen) return false;
-    return key === "v" || key === "c" || key === "o" || key === "r" || key === "m";
+    return key === "v" || key === "c" || key === "o" || key === "m";
   }
 
   function handleEscapeKey(e, key) {
     if (key !== CONFIG.hotkeys.exit && key !== "esc") return false;
     if (!e || e.isComposing || e.metaKey || e.ctrlKey || e.altKey) return false;
 
-    if (state.v12.drawerClearConfirmArmed) {
+    if (state.v12.feedbackPopoverOpen) {
+      closeFeedbackPopover();
+    } else if (state.v12.drawerClearConfirmArmed) {
       clearDrawerClearConfirm();
     } else if (state.addPropMenuOpen) {
       closeAddPropertyMenu();
@@ -12102,7 +12477,7 @@
       closeRecordPreview();
       clearSelectedPanelHoverFreeze();
     } else if (state.v12.regionSelection.active) {
-      resetRegionSelection();
+      clearRecordCaptureState();
       schedule();
     } else if (state.v12.recordMenuOpen) {
       closeRecordMenu();
@@ -12254,10 +12629,15 @@
     state.v12.topbarCollapseAnimTimerId = 0;
     window.clearTimeout(state.colorPickerOpenTimerId);
     state.colorPickerOpenTimerId = 0;
+    closeFeedbackPopover({ force: true, schedule: false });
     stopNumericScrub({ silent: true });
     resetRegionSelection();
     releasePageScrollLock();
     document.removeEventListener("mousemove", onMouseMove, true);
+    document.removeEventListener("pointerdown", startRegionCapture, true);
+    document.removeEventListener("pointermove", updateRegionCapture, true);
+    document.removeEventListener("pointerup", finishRegionCapture, true);
+    document.removeEventListener("pointercancel", cancelRegionCapture, true);
     document.removeEventListener("mousemove", onScrubMouseMove, true);
     document.removeEventListener("mousemove", onFloatMove, true);
     document.removeEventListener("click", onClick, true);
@@ -12304,7 +12684,7 @@
     floating.removeEventListener("mouseenter", onFloatEnter, true);
     floating.removeEventListener("mouseleave", onFloatLeave, true);
     btnMeasure.removeEventListener("click", onMeasureClick, true);
-    [highlight, selectA, selectB, tooltip, topbarTooltip, spacingLayer, measureLayer, floating, topbar, recordMenu, regionCaptureOverlay, drawerStub, regionSelectBox, recordComposer, recordPreview, v12Notice].forEach(function (el) {
+    [highlight, selectA, selectB, tooltip, topbarTooltip, feedbackPopover, spacingLayer, measureLayer, floating, topbar, recordMenu, regionCaptureOverlay, drawerStub, regionSelectBox, recordComposer, recordPreview, v12Notice].forEach(function (el) {
       if (el && el.parentNode) el.parentNode.removeChild(el);
     });
     Object.keys(bridgePending).forEach(function (requestId) {
@@ -12320,6 +12700,7 @@
     [
       "v12-topbar-styles",
       "v12-floating-control-styles",
+      "v12-feedback-popover-styles",
       "v12-record-drawer-styles"
     ].forEach(function (id) {
       var styleEl = document.getElementById(id);
@@ -12436,6 +12817,10 @@
   tooltip.addEventListener("mouseleave", onPanelMouseLeave, true);
   tooltip.addEventListener("mousedown", onPanelMouseDown, true);
   document.addEventListener("mousemove", onMouseMove, true);
+  document.addEventListener("pointerdown", startRegionCapture, true);
+  document.addEventListener("pointermove", updateRegionCapture, true);
+  document.addEventListener("pointerup", finishRegionCapture, true);
+  document.addEventListener("pointercancel", cancelRegionCapture, true);
   document.addEventListener("mousemove", onScrubMouseMove, true);
   document.addEventListener("mousemove", onFloatMove, true);
   document.addEventListener("click", onClick, true);
