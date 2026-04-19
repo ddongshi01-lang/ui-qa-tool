@@ -6,15 +6,14 @@ var ACTION_ICON_PATHS = {
     32: "icons/action-off-32.png"
   },
   on: {
-    16: "icons/action-on-16.png",
-    32: "icons/action-on-32.png"
+    16: "icons/action-off-16.png",
+    32: "icons/action-off-32.png"
   }
 };
 var ACTION_TITLES = {
   off: "视觉走查助手（未开启）",
   on: "视觉走查助手（已开启）"
 };
-var ACTION_BADGE_COLOR = "#2F7BFF";
 var tabPluginState = {};
 
 function isInjectableUrl(url) {
@@ -152,14 +151,6 @@ async function setActionVisualState(tabId, isActive) {
     chrome.action.setTitle({
       tabId: tabId,
       title: ACTION_TITLES[stateKey]
-    }),
-    chrome.action.setBadgeText({
-      tabId: tabId,
-      text: isActive ? "ON" : ""
-    }),
-    chrome.action.setBadgeBackgroundColor({
-      tabId: tabId,
-      color: ACTION_BADGE_COLOR
     })
   ]);
 }
