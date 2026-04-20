@@ -255,6 +255,14 @@
     rafId: null,
     modifiedProps: {},
     editedProps: {},
+    sharedElements: {
+      enabled: false,
+      seedElement: null,
+      matches: [],
+      scope: "group",
+      originalInlineStyles: [],
+      lastScanHadMatches: false
+    },
     backgroundFillSources: typeof WeakMap !== "undefined" ? new WeakMap() : null,
     backgroundFillSnapshots: typeof WeakMap !== "undefined" ? new WeakMap() : null,
     backgroundFillMeta: null,
@@ -1952,6 +1960,7 @@
     closeAddPropertyMenu();
     clearBackgroundFillMeta();
     if (mode !== "select") {
+      resetSharedElements({ keepSnapshots: true });
       clearMeasureSelection({ keepTopbarMode: false });
       state.modifiedProps = {};
       state.editedProps = state.modifiedProps;
@@ -1979,6 +1988,7 @@
     state.measureA = null;
     state.measureB = null;
     state.primaryMeasure = null;
+    resetSharedElements({ keepSnapshots: true });
     if (!opts.keepTopbarMode) {
       state.measureMode = false;
     }
@@ -2002,6 +2012,7 @@
     closeAddPropertyMenu();
     clearBackgroundFillMeta();
     if (enabled) {
+      resetSharedElements({ keepSnapshots: true });
       state.measureMode = true;
       state.measureA = null;
       state.measureB = null;
@@ -2025,6 +2036,7 @@
       syncQuickRecordUiForCurrentPanel();
       return;
     }
+    resetSharedElements({ keepSnapshots: true });
     state.measureA = el;
     state.measureB = null;
     resetQuickRecordState();
@@ -3884,6 +3896,28 @@
     backgroundColor: true
   };
 
+  var sharedSafeProps = {
+    width: true,
+    height: true,
+    fontSize: true,
+    lineHeight: true,
+    fontWeight: true,
+    color: true,
+    backgroundColor: true,
+    borderRadius: true,
+    padding: true,
+    paddingTop: true,
+    paddingRight: true,
+    paddingBottom: true,
+    paddingLeft: true,
+    margin: true,
+    marginTop: true,
+    marginRight: true,
+    marginBottom: true,
+    marginLeft: true,
+    opacity: true
+  };
+
   var FONT_FAMILY_PRESETS = [
     "PingFang SC",
     "Microsoft YaHei",
@@ -4078,10 +4112,20 @@
     if (!el) return;
     if (prop === "opacity") {
       var opacityValue = parseOpacityPercent(rawValue);
-      el.style[prop] = opacityValue || "";
+      if (isSharedElementsActiveForTarget(el)) {
+        applyStyle(prop, opacityValue || "");
+      } else {
+        if (isSharedSessionSeedTarget(el)) rememberSharedOriginalInlineStyle(el);
+        el.style[prop] = opacityValue || "";
+      }
       return;
     }
-    el.style[prop] = normalizeValue(prop, rawValue);
+    if (isSharedElementsActiveForTarget(el) && isSharedSafeStyleProp(prop)) {
+      applyStyle(prop, normalizeValue(prop, rawValue));
+    } else {
+      if (isSharedSessionSeedTarget(el)) rememberSharedOriginalInlineStyle(el);
+      el.style[prop] = normalizeValue(prop, rawValue);
+    }
   }
 
   function previewPercentInputValue(input, value) {
@@ -4421,7 +4465,13 @@
     if (!el || !box) return;
     ["Top", "Right", "Bottom", "Left"].forEach(function (suffix, index) {
       var value = [box.t, box.r, box.b, box.l][index];
-      el.style[prefix + suffix] = toCssLength(value);
+      var prop = prefix + suffix;
+      if (isSharedElementsActiveForTarget(el) && isSharedSafeStyleProp(prop)) {
+        applyStyle(prop, toCssLength(value));
+      } else {
+        if (isSharedSessionSeedTarget(el)) rememberSharedOriginalInlineStyle(el);
+        el.style[prop] = toCssLength(value);
+      }
     });
   }
 
@@ -4894,9 +4944,13 @@
   function applyStyle(prop, value, targetOverride) {
     var el = targetOverride || getEditableTargetEl();
     if (!el) return;
+    if (isSharedSessionSeedTarget(el)) {
+      rememberSharedOriginalInlineStyle(el);
+    }
     el.style[prop] = value;
     state.modifiedProps[prop] = true;
     state.editedProps = state.modifiedProps;
+    applySharedStyle(prop, value, el);
   }
 
   function clearEditedStyles() {
@@ -4913,6 +4967,8 @@
     if (backgroundTarget) {
       clearBackgroundModifiedProps();
     }
+    restoreSharedOriginalInlineStyles();
+    resetSharedElements({ keepSnapshots: true });
     state.modifiedProps = {};
     state.editedProps = state.modifiedProps;
     clearEditingState();
@@ -5176,6 +5232,21 @@
       closeAddPropertyMenu();
       clearEditedStyles();
       e.preventDefault();
+      return;
+    }
+    if (action === "toggle-shared-elements") {
+      closeAddPropertyMenu();
+      setSharedElementsEnabled(!(state.sharedElements && state.sharedElements.enabled && state.sharedElements.seedElement === getSelectedPanelTarget()));
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    if (action === "refresh-shared-elements") {
+      closeAddPropertyMenu();
+      refreshSharedElements(getSelectedPanelTarget());
+      schedule();
+      e.preventDefault();
+      e.stopPropagation();
       return;
     }
     if (action === "quick-add-record") {
@@ -6598,6 +6669,7 @@
         el === highlight ||
         el === selectA ||
         el === selectB ||
+        el === sharedHighlightLayer ||
         el === spacingLayer ||
         el === measureLayer ||
         el === floating ||
@@ -6609,6 +6681,530 @@
         el === regionSelectBox ||
         el === v12Notice)
     );
+  }
+
+  function isPluginDomElement(el) {
+    if (!el || !el.nodeType) return false;
+    if (isOverlayElement(el)) return true;
+    var roots = [
+      tooltip,
+      highlight,
+      selectA,
+      selectB,
+      sharedHighlightLayer,
+      spacingLayer,
+      measureLayer,
+      floating,
+      topbar,
+      recordMenu,
+      drawerStub,
+      recordComposer,
+      regionCaptureOverlay,
+      regionSelectBox,
+      recordPreview,
+      v12Notice,
+      topbarTooltip,
+      feedbackPopover
+    ];
+    for (var i = 0; i < roots.length; i++) {
+      if (roots[i] && roots[i].contains && roots[i].contains(el)) return true;
+    }
+    return false;
+  }
+
+  function resetSharedElements(options) {
+    var opts = options || {};
+    state.sharedElements.enabled = false;
+    state.sharedElements.seedElement = null;
+    state.sharedElements.matches = [];
+    state.sharedElements.scope = "group";
+    state.sharedElements.lastScanHadMatches = false;
+    if (!opts.keepSnapshots) {
+      state.sharedElements.originalInlineStyles = [];
+    }
+    if (sharedHighlightLayer) clearLayer(sharedHighlightLayer);
+  }
+
+  function isSharedElementsActiveForTarget(targetEl) {
+    var shared = state.sharedElements;
+    return !!(
+      shared &&
+      shared.enabled &&
+      targetEl &&
+      shared.seedElement === targetEl &&
+      shared.matches &&
+      shared.matches.length
+    );
+  }
+
+  function isSharedSessionSeedTarget(targetEl) {
+    var shared = state.sharedElements;
+    return !!(shared && shared.enabled && targetEl && shared.seedElement === targetEl);
+  }
+
+  function isSharedSafeStyleProp(prop) {
+    return !!(prop && sharedSafeProps[prop]);
+  }
+
+  function rememberSharedOriginalInlineStyle(el) {
+    if (!el || !el.style) return;
+    var list = state.sharedElements.originalInlineStyles || [];
+    for (var i = 0; i < list.length; i++) {
+      if (list[i] && list[i].el === el) return;
+    }
+    list.push({
+      el: el,
+      cssText: String(el.getAttribute("style") || "")
+    });
+    state.sharedElements.originalInlineStyles = list;
+  }
+
+  function restoreSharedOriginalInlineStyles() {
+    var list = state.sharedElements.originalInlineStyles || [];
+    list.forEach(function (item) {
+      if (!item || !item.el || !item.el.setAttribute) return;
+      if (item.cssText) {
+        item.el.setAttribute("style", item.cssText);
+      } else {
+        item.el.removeAttribute("style");
+      }
+    });
+    state.sharedElements.originalInlineStyles = [];
+  }
+
+  function getSharedSyncTargets(sourceEl) {
+    if (!isSharedElementsActiveForTarget(sourceEl)) return [];
+    return (state.sharedElements.matches || []).filter(function (candidate) {
+      return candidate && candidate !== sourceEl && candidate.isConnected !== false;
+    });
+  }
+
+  function applySharedStyle(prop, value, sourceEl) {
+    if (!isSharedSafeStyleProp(prop)) return;
+    var targets = getSharedSyncTargets(sourceEl);
+    if (!targets.length) return;
+    rememberSharedOriginalInlineStyle(sourceEl);
+    targets.forEach(function (targetEl) {
+      rememberSharedOriginalInlineStyle(targetEl);
+      targetEl.style[prop] = value;
+    });
+  }
+
+  function getClassTokens(el) {
+    if (!el || !el.classList) return [];
+    return Array.prototype.slice.call(el.classList).filter(function (token) {
+      return !!token && !/^vqa-|^v12-|^qa-/.test(token);
+    });
+  }
+
+  function tokenSimilarity(a, b) {
+    var left = a || [];
+    var right = b || [];
+    if (!left.length && !right.length) return 1;
+    if (!left.length || !right.length) return 0;
+    var rightMap = {};
+    right.forEach(function (token) {
+      rightMap[token] = true;
+    });
+    var hit = 0;
+    left.forEach(function (token) {
+      if (rightMap[token]) hit += 1;
+    });
+    return hit / Math.max(left.length, right.length);
+  }
+
+  function numericCloseness(a, b) {
+    var left = parseFloat(a);
+    var right = parseFloat(b);
+    if (isNaN(left) || isNaN(right)) return 0;
+    var maxValue = Math.max(Math.abs(left), Math.abs(right), 1);
+    return clamp(1 - Math.abs(left - right) / maxValue, 0, 1);
+  }
+
+  function rectOverlapRatio(aStart, aEnd, bStart, bEnd) {
+    var overlap = Math.max(0, Math.min(aEnd, bEnd) - Math.max(aStart, bStart));
+    var minSpan = Math.max(1, Math.min(Math.abs(aEnd - aStart), Math.abs(bEnd - bStart)));
+    return overlap / minSpan;
+  }
+
+  function areRectsSameRowOrColumn(seedRect, candidateRect) {
+    if (!seedRect || !candidateRect) return false;
+    var rowTolerance = Math.max(8, Math.min(seedRect.height, candidateRect.height) * 0.6);
+    var colTolerance = Math.max(8, Math.min(seedRect.width, candidateRect.width) * 0.6);
+    var seedCenterY = seedRect.top + seedRect.height / 2;
+    var candidateCenterY = candidateRect.top + candidateRect.height / 2;
+    var seedCenterX = seedRect.left + seedRect.width / 2;
+    var candidateCenterX = candidateRect.left + candidateRect.width / 2;
+    var sameRow = Math.abs(seedCenterY - candidateCenterY) <= rowTolerance || rectOverlapRatio(seedRect.top, seedRect.bottom, candidateRect.top, candidateRect.bottom) >= 0.55;
+    var sameColumn = Math.abs(seedCenterX - candidateCenterX) <= colTolerance || rectOverlapRatio(seedRect.left, seedRect.right, candidateRect.left, candidateRect.right) >= 0.55;
+    return sameRow || sameColumn;
+  }
+
+  function isButtonLikeElement(el) {
+    if (!el || !el.tagName) return false;
+    var tag = String(el.tagName || "").toLowerCase();
+    var role = el.getAttribute ? String(el.getAttribute("role") || "").toLowerCase() : "";
+    var inputType = tag === "input" && el.getAttribute ? String(el.getAttribute("type") || "").toLowerCase() : "";
+    if (/^(button|a|select|textarea|label|summary)$/.test(tag)) return true;
+    if (tag === "input" && /^(button|submit|reset|radio|checkbox|text|search)$/.test(inputType || "text")) return true;
+    return /^(button|tab|menuitem|option|radio|checkbox|switch|link)$/.test(role);
+  }
+
+  function isSharedCandidateTypeCompatible(seedEl, candidateEl) {
+    if (!seedEl || !candidateEl || !seedEl.tagName || !candidateEl.tagName) return false;
+    if (String(seedEl.tagName || "").toLowerCase() === String(candidateEl.tagName || "").toLowerCase()) return true;
+    return isButtonLikeElement(seedEl) && isButtonLikeElement(candidateEl);
+  }
+
+  function getCompactElementText(el) {
+    if (!el) return "";
+    return String(el.innerText || el.textContent || "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function isStrictSharedSeed(seedEl) {
+    if (!seedEl) return true;
+    var role = seedEl.getAttribute ? String(seedEl.getAttribute("role") || "").toLowerCase() : "";
+    var parentRole = seedEl.parentElement && seedEl.parentElement.getAttribute ? String(seedEl.parentElement.getAttribute("role") || "").toLowerCase() : "";
+    var text = getCompactElementText(seedEl);
+    if (role === "tab" || parentRole === "tablist") return true;
+    if (isButtonLikeElement(seedEl) && text && text.length <= 24) return true;
+    if (/^(span|button|a)$/i.test(seedEl.tagName || "") && text && text.length <= 16) return true;
+    return false;
+  }
+
+  function getSharedGroupCompatibleCount(container, seedEl) {
+    if (!container || !seedEl || !container.querySelectorAll) return 0;
+    var count = 0;
+    Array.prototype.some.call(container.querySelectorAll("*"), function (candidate) {
+      if (candidate === seedEl || !isVisibleSharedCandidate(candidate)) return false;
+      if (!isSharedCandidateTypeCompatible(seedEl, candidate)) return false;
+      count += 1;
+      return count >= 2;
+    });
+    return count;
+  }
+
+  function hasSharedGroupingRole(el) {
+    if (!el || !el.getAttribute) return false;
+    var role = String(el.getAttribute("role") || "").toLowerCase();
+    if (/^(tablist|group|radiogroup|toolbar|listbox|menu|menubar)$/.test(role)) return true;
+    return !!(el.getAttribute("aria-label") || el.getAttribute("aria-labelledby") || el.getAttribute("aria-describedby"));
+  }
+
+  function hasAlignedSharedChildren(container, seedEl) {
+    if (!container || !container.querySelectorAll || !seedEl) return false;
+    var seedRect = seedEl.getBoundingClientRect();
+    var alignedCount = 0;
+    Array.prototype.some.call(container.querySelectorAll("*"), function (candidate) {
+      if (candidate === seedEl || !isVisibleSharedCandidate(candidate)) return false;
+      if (!isSharedCandidateTypeCompatible(seedEl, candidate)) return false;
+      if (!areRectsSameRowOrColumn(seedRect, candidate.getBoundingClientRect())) return false;
+      alignedCount += 1;
+      return alignedCount >= 1;
+    });
+    return alignedCount >= 1;
+  }
+
+  function isSharedFlexOrGridGroup(el, seedEl) {
+    if (!el || !seedEl || el === document.body || el === document.documentElement) return false;
+    var style = getComputedStyle(el);
+    if (!style || !/^(flex|inline-flex|grid|inline-grid)$/.test(String(style.display || "").toLowerCase())) return false;
+    return getSharedGroupCompatibleCount(el, seedEl) >= 1 && hasAlignedSharedChildren(el, seedEl);
+  }
+
+  function isSharedMultiControlGroup(el, seedEl) {
+    if (!el || !seedEl || !el.querySelectorAll) return false;
+    var controls = Array.prototype.filter.call(el.querySelectorAll("button,a,input,span,[role]"), function (candidate) {
+      return candidate !== seedEl && isVisibleSharedCandidate(candidate) && isSharedCandidateTypeCompatible(seedEl, candidate);
+    });
+    return controls.length >= 1 && hasAlignedSharedChildren(el, seedEl);
+  }
+
+  function getSharedGroupAncestors(seedEl) {
+    var ancestors = [];
+    var current = seedEl ? seedEl.parentElement : null;
+    while (current && current !== document.body && current !== document.documentElement) {
+      if (!isPluginDomElement(current)) ancestors.push(current);
+      current = current.parentElement;
+    }
+    return ancestors;
+  }
+
+  function findSharedGroupContainer(seedEl) {
+    var ancestors = getSharedGroupAncestors(seedEl);
+    var passes = [
+      function (el) {
+        return hasSharedGroupingRole(el) && getSharedGroupCompatibleCount(el, seedEl) >= 1;
+      },
+      function (el) {
+        return /^(ul|ol)$/i.test(el.tagName || "") && getSharedGroupCompatibleCount(el, seedEl) >= 1;
+      },
+      function (el) {
+        return isSharedFlexOrGridGroup(el, seedEl);
+      },
+      function (el) {
+        return isSharedMultiControlGroup(el, seedEl);
+      }
+    ];
+    for (var passIndex = 0; passIndex < passes.length; passIndex++) {
+      for (var i = 0; i < ancestors.length; i++) {
+        if (passes[passIndex](ancestors[i])) return ancestors[i];
+      }
+    }
+    return seedEl && seedEl.parentElement ? seedEl.parentElement : null;
+  }
+
+  function styleFieldSimilarity(seedStyle, candidateStyle) {
+    if (!seedStyle || !candidateStyle) return 0;
+    var exactFields = ["display", "fontFamily", "fontWeight", "textAlign", "whiteSpace", "boxSizing"];
+    var numericFields = ["fontSize", "lineHeight", "borderRadius", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft"];
+    var score = 0;
+    var total = exactFields.length + numericFields.length + 2;
+    exactFields.forEach(function (field) {
+      if (String(seedStyle[field] || "") === String(candidateStyle[field] || "")) score += 1;
+    });
+    numericFields.forEach(function (field) {
+      score += numericCloseness(seedStyle[field], candidateStyle[field]);
+    });
+    if (String(seedStyle.color || "") === String(candidateStyle.color || "")) score += 1;
+    if (String(seedStyle.backgroundColor || "") === String(candidateStyle.backgroundColor || "")) score += 1;
+    return score / total;
+  }
+
+  function layoutSimilarity(seedParent, candidateParent) {
+    if (!seedParent || !candidateParent) return 0;
+    var score = 0;
+    var total = 4;
+    if ((seedParent.tagName || "") === (candidateParent.tagName || "")) score += 1;
+    score += tokenSimilarity(getClassTokens(seedParent), getClassTokens(candidateParent));
+    var seedStyle = getComputedStyle(seedParent);
+    var candidateStyle = getComputedStyle(candidateParent);
+    if (String(seedStyle.display || "") === String(candidateStyle.display || "")) score += 1;
+    if (String(seedStyle.flexDirection || "") === String(candidateStyle.flexDirection || "") && String(seedStyle.gridTemplateColumns || "") === String(candidateStyle.gridTemplateColumns || "")) score += 1;
+    return score / total;
+  }
+
+  function childFingerprint(el) {
+    if (!el || !el.children) return "";
+    return Array.prototype.slice.call(el.children)
+      .slice(0, 8)
+      .map(function (child) {
+        return String(child.tagName || "").toLowerCase() + ":" + getClassTokens(child).slice(0, 2).join(".");
+      })
+      .join("|");
+  }
+
+  function fingerprintSimilarity(a, b) {
+    if (!a && !b) return 1;
+    if (!a || !b) return 0;
+    if (a === b) return 1;
+    return tokenSimilarity(a.split("|"), b.split("|"));
+  }
+
+  function isVisibleSharedCandidate(el) {
+    if (!el || el.nodeType !== 1 || !el.getBoundingClientRect) return false;
+    if (isPluginDomElement(el)) return false;
+    var style = getComputedStyle(el);
+    if (!style || style.display === "none" || style.visibility === "hidden") return false;
+    if (style.opacity != null && parseFloat(style.opacity) <= 0) return false;
+    var rect = el.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || rect.height <= 0) return false;
+    return rect.bottom >= 0 && rect.right >= 0 && rect.top <= (window.innerHeight || 0) && rect.left <= (window.innerWidth || 0);
+  }
+
+  function scoreSharedCandidate(seedEl, candidateEl, seedMeta) {
+    if (!seedEl || !candidateEl || seedEl === candidateEl) return 0;
+    if (!isSharedCandidateTypeCompatible(seedEl, candidateEl)) return 0;
+    var candidateStyle = getComputedStyle(candidateEl);
+    var candidateRect = candidateEl.getBoundingClientRect();
+    var widthScore = numericCloseness(seedMeta.rect.width, candidateRect.width);
+    var heightScore = numericCloseness(seedMeta.rect.height, candidateRect.height);
+    if (widthScore < 0.45 || heightScore < 0.65) return 0;
+    if (!areRectsSameRowOrColumn(seedMeta.rect, candidateRect)) return 0;
+    var tagScore = String(seedEl.tagName || "").toLowerCase() === String(candidateEl.tagName || "").toLowerCase() ? 1 : 0.82;
+    var classScore = tokenSimilarity(seedMeta.classTokens, getClassTokens(candidateEl));
+    var styleScore = styleFieldSimilarity(seedMeta.style, candidateStyle);
+    var parentScore = layoutSimilarity(seedEl.parentElement, candidateEl.parentElement);
+    var childScore = fingerprintSimilarity(seedMeta.childFingerprint, childFingerprint(candidateEl));
+    var siblingBonus = seedEl.parentElement && candidateEl.parentElement === seedEl.parentElement ? 0.08 : 0;
+    return (
+      tagScore * 0.18 +
+      classScore * 0.2 +
+      styleScore * 0.22 +
+      widthScore * 0.11 +
+      heightScore * 0.11 +
+      parentScore * 0.1 +
+      childScore * 0.08 +
+      siblingBonus
+    );
+  }
+
+  function collectSharedCandidates(seedEl, groupEl) {
+    var seen = [];
+    var candidates = [];
+    function add(el) {
+      if (!el || el === seedEl || seen.indexOf(el) !== -1) return;
+      seen.push(el);
+      if (isVisibleSharedCandidate(el) && isSharedCandidateTypeCompatible(seedEl, el)) candidates.push(el);
+    }
+    if (seedEl && seedEl.parentElement && groupEl && seedEl.parentElement !== groupEl && groupEl.contains(seedEl.parentElement)) {
+      Array.prototype.forEach.call(seedEl.parentElement.querySelectorAll("*"), add);
+    }
+    if (groupEl && groupEl.querySelectorAll) {
+      Array.prototype.forEach.call(groupEl.querySelectorAll("*"), add);
+    } else if (seedEl && seedEl.parentElement && seedEl.parentElement.querySelectorAll) {
+      Array.prototype.forEach.call(seedEl.parentElement.querySelectorAll("*"), add);
+    }
+    return candidates;
+  }
+
+  function scoreAndFilterSharedCandidates(seedEl, candidates, seedMeta, threshold) {
+    return candidates
+      .map(function (candidate) {
+        return {
+          el: candidate,
+          score: scoreSharedCandidate(seedEl, candidate, seedMeta)
+        };
+      })
+      .filter(function (item) {
+        return item.score >= threshold;
+      })
+      .sort(function (a, b) {
+        var aSibling = a.el.parentElement === seedEl.parentElement ? 1 : 0;
+        var bSibling = b.el.parentElement === seedEl.parentElement ? 1 : 0;
+        if (aSibling !== bSibling) return bSibling - aSibling;
+        return b.score - a.score;
+      });
+  }
+
+  function getSameParentStrongSharedMatches(seedEl, seedMeta, threshold) {
+    if (!seedEl || !seedEl.parentElement || !seedEl.parentElement.querySelectorAll) return [];
+    var candidates = [];
+    Array.prototype.forEach.call(seedEl.parentElement.querySelectorAll("*"), function (candidate) {
+      if (candidate === seedEl || !isVisibleSharedCandidate(candidate)) return;
+      if (!isSharedCandidateTypeCompatible(seedEl, candidate)) return;
+      candidates.push(candidate);
+    });
+    return scoreAndFilterSharedCandidates(seedEl, candidates, seedMeta, threshold + 0.08).map(function (item) {
+      return item.el;
+    });
+  }
+
+  function identifySharedElements(seedEl) {
+    if (!seedEl || !isVisibleSharedCandidate(seedEl)) return [];
+    var groupEl = findSharedGroupContainer(seedEl);
+    var seedMeta = {
+      rect: seedEl.getBoundingClientRect(),
+      style: getComputedStyle(seedEl),
+      classTokens: getClassTokens(seedEl),
+      childFingerprint: childFingerprint(seedEl)
+    };
+    var strictMode = isStrictSharedSeed(seedEl);
+    var threshold = strictMode ? 0.82 : 0.78;
+    var scored = scoreAndFilterSharedCandidates(seedEl, collectSharedCandidates(seedEl, groupEl), seedMeta, threshold);
+    var matches = scored.map(function (item) {
+      return item.el;
+    });
+    if (matches.length > 12) {
+      var sameParentMatches = getSameParentStrongSharedMatches(seedEl, seedMeta, threshold);
+      if (sameParentMatches.length) return sameParentMatches.slice(0, 12);
+      return matches.slice(0, 12);
+    }
+    return matches;
+  }
+
+  function refreshSharedElements(seedEl) {
+    var seed = seedEl || getSelectedPanelTarget();
+    if (!seed) return;
+    var matches = identifySharedElements(seed);
+    state.sharedElements.seedElement = seed;
+    state.sharedElements.matches = matches;
+    state.sharedElements.scope = "group";
+    state.sharedElements.lastScanHadMatches = !!matches.length;
+  }
+
+  function setSharedElementsEnabled(enabled) {
+    var seed = getSelectedPanelTarget();
+    if (!enabled || !seed || !isPlainSelectMode()) {
+      resetSharedElements({ keepSnapshots: true });
+      schedule();
+      return;
+    }
+    state.sharedElements.enabled = true;
+    refreshSharedElements(seed);
+    schedule();
+  }
+
+  function renderSelectedSharedElementsControl() {
+    var seed = getSelectedPanelTarget();
+    var shared = state.sharedElements;
+    var enabled = !!(shared && shared.enabled && shared.seedElement === seed);
+    var count = enabled ? (shared.matches || []).length : 0;
+    var scopeText = shared && shared.scope === "page" ? "全页面相似元素" : "同组元素";
+    var hint = enabled ? (count ? "当前命中 " + count + " 个" + scopeText : "未发现同类元素") : "开启后同步安全样式到同组元素";
+    return (
+      '<div data-vqa-shared-elements-control="1" style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px;padding:10px 12px;border-radius:14px;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.045);">' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">' +
+      '<div style="min-width:0;color:#fff;font:600 12px/1.25 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;">共享元素</div>' +
+      '<button type="button" data-action="toggle-shared-elements" aria-pressed="' +
+      (enabled ? "true" : "false") +
+      '" style="position:relative;display:inline-flex;align-items:center;width:46px;height:26px;padding:3px;border:0;border-radius:999px;background:' +
+      (enabled ? "#1F8CFF" : "rgba(255,255,255,.14)") +
+      ';box-shadow:' +
+      (enabled ? "0 0 0 1px rgba(117,190,255,.36) inset,0 8px 18px rgba(31,140,255,.18)" : "0 0 0 1px rgba(255,255,255,.06) inset") +
+      ';cursor:pointer;transition:background 120ms ease,box-shadow 120ms ease;">' +
+      '<span aria-hidden="true" style="display:block;width:20px;height:20px;border-radius:50%;background:#fff;transform:translateX(' +
+      (enabled ? "20px" : "0") +
+      ');transition:transform 140ms ease;"></span>' +
+      "</button>" +
+      "</div>" +
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">' +
+      '<div style="min-width:0;color:' +
+      (enabled && !count ? "rgba(255,207,119,.92)" : "rgba(255,255,255,.56)") +
+      ';font:12px/1.35 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' +
+      esc(hint) +
+      '">' +
+      esc(hint) +
+      "</div>" +
+      (enabled
+        ? '<button type="button" data-action="refresh-shared-elements" style="flex:0 0 auto;padding:0;border:0;background:transparent;color:rgba(255,255,255,.72);font:12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;">重新识别</button>'
+        : "") +
+      "</div>" +
+      "</div>"
+    );
+  }
+
+  function renderSharedElementHighlights() {
+    if (!sharedHighlightLayer) return;
+    clearLayer(sharedHighlightLayer);
+    var shared = state.sharedElements;
+    if (!shared || !shared.enabled || !shared.seedElement || !isPlainSelectMode() || state.panelCollapsed || isRecordMode()) return;
+    var nodes = [shared.seedElement].concat(shared.matches || []);
+    nodes.forEach(function (el, index) {
+      if (!isVisibleSharedCandidate(el)) return;
+      var rect = el.getBoundingClientRect();
+      var box = document.createElement("div");
+      box.style.position = "fixed";
+      box.style.pointerEvents = "none";
+      box.style.left = rect.left + "px";
+      box.style.top = rect.top + "px";
+      box.style.width = rect.width + "px";
+      box.style.height = rect.height + "px";
+      box.style.boxSizing = "border-box";
+      box.style.borderRadius = "8px";
+      if (index === 0) {
+        box.style.border = "2px solid rgba(47,132,255,.95)";
+        box.style.background = "rgba(47,132,255,.1)";
+        box.style.boxShadow = "0 0 0 1px rgba(255,255,255,.8) inset,0 0 0 4px rgba(47,132,255,.18)";
+      } else {
+        box.style.border = "1px dashed rgba(47,132,255,.64)";
+        box.style.background = "rgba(47,132,255,.045)";
+        box.style.boxShadow = "0 0 0 1px rgba(255,255,255,.3) inset";
+      }
+      sharedHighlightLayer.appendChild(box);
+    });
   }
 
   function isFeedbackUiElement(el) {
@@ -8741,6 +9337,13 @@
       ";box-shadow:" +
       OVERLAY_STYLE.selectB.boxShadow +
       ";display:none;"
+  );
+
+  var sharedHighlightLayer = make(
+    "div",
+    "position:fixed;left:0;top:0;width:0;height:0;pointer-events:none;z-index:" +
+      (CONFIG.zIndexSelection + 1) +
+      ";display:block;"
   );
 
   var tooltip = make(
@@ -11833,10 +12436,12 @@
     var quickRecordAction = renderSelectedPanelQuickRecordAction(el, {
       containerStyle: "display:flex;justify-content:flex-start;"
     });
+    var sharedElementsControl = isPlainSelectMode() && state.measureA === el ? renderSelectedSharedElementsControl() : "";
     body.innerHTML =
       '<div class="v12-selected-panel" data-vqa-panel-stack data-vqa-panel-kind="' +
       esc(capabilities.canEditTextContent ? "text" : "element") +
       '" style="display:flex;flex-direction:column;min-height:0;max-height:72vh;overflow:visible;">' +
+      sharedElementsControl +
       '<div data-vqa-panel-scroll="1" style="display:flex;flex-direction:column;gap:' +
       PANEL_UI.sectionGap +
       ';min-height:0;overflow-y:auto;overflow-x:visible;padding-bottom:18px;box-sizing:border-box;">' +
@@ -12017,6 +12622,7 @@
       highlight.style.display = "none";
       selectA.style.display = "none";
       selectB.style.display = "none";
+      clearLayer(sharedHighlightLayer);
       spacingLayer.style.display = "none";
       measureLayer.style.display = "none";
     } else {
@@ -12045,6 +12651,7 @@
     updateHighlight(el);
     updateBox(selectA, !collapsed && !isRecordMode() && measurementModeActive ? state.measureA : null);
     updateBox(selectB, !collapsed && !isRecordMode() ? (measurementModeActive ? state.measureB : getPrimaryHoverMeasureTarget()) : null);
+    renderSharedElementHighlights();
     if (!collapsed && !isRecordMode()) {
       applyOverlayStyle(selectB, measurementModeActive && measurePairState ? OVERLAY_STYLE.selectPair : OVERLAY_STYLE.selectB);
     }
@@ -12684,7 +13291,7 @@
     floating.removeEventListener("mouseenter", onFloatEnter, true);
     floating.removeEventListener("mouseleave", onFloatLeave, true);
     btnMeasure.removeEventListener("click", onMeasureClick, true);
-    [highlight, selectA, selectB, tooltip, topbarTooltip, feedbackPopover, spacingLayer, measureLayer, floating, topbar, recordMenu, regionCaptureOverlay, drawerStub, regionSelectBox, recordComposer, recordPreview, v12Notice].forEach(function (el) {
+    [highlight, selectA, selectB, sharedHighlightLayer, tooltip, topbarTooltip, feedbackPopover, spacingLayer, measureLayer, floating, topbar, recordMenu, regionCaptureOverlay, drawerStub, regionSelectBox, recordComposer, recordPreview, v12Notice].forEach(function (el) {
       if (el && el.parentNode) el.parentNode.removeChild(el);
     });
     Object.keys(bridgePending).forEach(function (requestId) {
