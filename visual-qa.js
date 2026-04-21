@@ -260,6 +260,10 @@
       seedElement: null,
       matches: [],
       scope: "group",
+      matchMode: null,
+      repeatRoot: null,
+      collectionRoot: null,
+      slotPath: [],
       originalInlineStyles: [],
       lastScanHadMatches: false
     },
@@ -379,6 +383,7 @@
     regionCheck: null
   };
   var topbarTooltipHideTimerId = 0;
+  var sharedElementsTooltipHideTimerId = 0;
   var recordComposerRenderKey = "";
   var drawerRenderKey = "";
   var draftPersistTimer = 0;
@@ -5104,11 +5109,23 @@
 
   function onPanelMouseMove(e) {
     if (isNumericScrubbingActive()) return;
+    var sharedAction = getSharedElementsActionFromTarget(e.target);
+    if (sharedAction === "toggle-shared-elements") {
+      var sharedButton = e.target && e.target.closest ? e.target.closest('[data-action="toggle-shared-elements"]') : null;
+      if (sharedButton) {
+        state.isPointerInsideSelectedPanel = true;
+        setSelectedPanelHoverFreeze(true);
+        showSharedElementsTooltip(sharedButton);
+        return;
+      }
+    }
     if (isEventInsideSelectedPanel(e)) {
       state.isPointerInsideSelectedPanel = true;
       setSelectedPanelHoverFreeze(true);
+      scheduleHideSharedElementsTooltip();
       return;
     }
+    scheduleHideSharedElementsTooltip();
     setHoveredScrubIcon(getIconHoverTarget(e.target));
     setHoveredScrubInput(getScrubHoverTarget(e.target), !!e.altKey);
   }
@@ -5158,6 +5175,7 @@
     state.isPointerInsideSelectedPanel = false;
     setHoveredScrubIcon(null);
     setHoveredScrubInput(null, false);
+    hideSharedElementsTooltip(true);
     scheduleSelectedPanelHoverUnfreeze(0);
   }
 
@@ -6704,6 +6722,7 @@
       recordPreview,
       v12Notice,
       topbarTooltip,
+      sharedElementsTooltip,
       feedbackPopover
     ];
     for (var i = 0; i < roots.length; i++) {
@@ -6718,6 +6737,10 @@
     state.sharedElements.seedElement = null;
     state.sharedElements.matches = [];
     state.sharedElements.scope = "group";
+    state.sharedElements.matchMode = null;
+    state.sharedElements.repeatRoot = null;
+    state.sharedElements.collectionRoot = null;
+    state.sharedElements.slotPath = [];
     state.sharedElements.lastScanHadMatches = false;
     if (!opts.keepSnapshots) {
       state.sharedElements.originalInlineStyles = [];
@@ -6733,7 +6756,7 @@
       targetEl &&
       shared.seedElement === targetEl &&
       shared.matches &&
-      shared.matches.length
+      shared.matches.length > 1
     );
   }
 
@@ -6956,6 +6979,377 @@
     return seedEl && seedEl.parentElement ? seedEl.parentElement : null;
   }
 
+  function getStructuralElementChildren(el) {
+    if (!el || !el.children) return [];
+    return Array.prototype.filter.call(el.children, function (child) {
+      if (!child || child.nodeType !== 1) return false;
+      if (isPluginDomElement(child)) return false;
+      var tag = String(child.tagName || "").toUpperCase();
+      return tag !== "SCRIPT" && tag !== "STYLE" && tag !== "TEMPLATE";
+    });
+  }
+
+  function getVisibleStructuralChildren(el) {
+    return getStructuralElementChildren(el).filter(isVisibleSharedCandidate);
+  }
+
+  function getElementPathFromAncestor(ancestor, node) {
+    if (!ancestor || !node) return null;
+    var path = [];
+    var current = node;
+    while (current && current !== ancestor) {
+      var parent = current.parentElement;
+      if (!parent) return null;
+      var children = getStructuralElementChildren(parent);
+      var index = children.indexOf(current);
+      if (index < 0) return null;
+      path.unshift(index);
+      current = parent;
+      if (path.length > 8) break;
+    }
+    return current === ancestor ? path : null;
+  }
+
+  function getPathSignatureFromAncestor(ancestor, node) {
+    if (!ancestor || !node) return null;
+    var parts = [];
+    var current = node;
+    while (current && current !== ancestor) {
+      parts.unshift(getSharedNodeSignature(current));
+      current = current.parentElement;
+      if (parts.length > 8) break;
+    }
+    return current === ancestor ? parts : null;
+  }
+
+  function getRelativeRect(rect, rootRect) {
+    if (!rect || !rootRect) return null;
+    var rootWidth = Math.max(1, rootRect.width || 0);
+    var rootHeight = Math.max(1, rootRect.height || 0);
+    return {
+      x: (rect.left - rootRect.left) / rootWidth,
+      y: (rect.top - rootRect.top) / rootHeight,
+      w: rect.width / rootWidth,
+      h: rect.height / rootHeight
+    };
+  }
+
+  function relativeRectSimilarity(a, b) {
+    if (!a || !b) return 0;
+    return (
+      numericCloseness(a.x, b.x) +
+      numericCloseness(a.y, b.y) +
+      numericCloseness(a.w, b.w) +
+      numericCloseness(a.h, b.h)
+    ) / 4;
+  }
+
+  function getSharedSemanticSlotKind(el) {
+    if (!el) return "other";
+    var tag = String(el.tagName || "").toLowerCase();
+    var role = el.getAttribute ? String(el.getAttribute("role") || "").toLowerCase() : "";
+    var text = getCompactElementText(el);
+    var style = getComputedStyle(el);
+    var bgImage = style ? String(style.backgroundImage || "").toLowerCase() : "";
+    if (/^(img|picture|svg|canvas|video|audio)$/.test(tag) || role === "img" || bgImage.indexOf("url(") !== -1) return "image";
+    if (/^(button|a|select|textarea|summary)$/.test(tag) || /^(button|tab|menuitem|option|radio|checkbox|switch|link)$/.test(role)) return "button";
+    if (/^(h[1-6])$/.test(tag) || role === "heading") return "title";
+    if (/^(input|textarea|select)$/.test(tag) || el.isContentEditable) return "field";
+    if (/(?:^|[\s(])[¥￥$€£]\s*\d|\d[\d,.]*(?:\s?(?:元|块|分|usd|cny|rmb))?/i.test(text)) return "price";
+    if (text && text.length <= 24) {
+      if (/^(span|div|p|strong|em|small|label|time)$/.test(tag)) return "label";
+      return "text";
+    }
+    if (text) return "content";
+    return "other";
+  }
+
+  function getSharedNodeSignature(el) {
+    if (!el) return "";
+    var tag = String(el.tagName || "").toLowerCase();
+    var role = el.getAttribute ? String(el.getAttribute("role") || "").toLowerCase() : "";
+    var kind = getSharedSemanticSlotKind(el);
+    var classTokens = getClassTokens(el).slice(0, 3).join(".");
+    return [tag, role, kind, classTokens].filter(Boolean).join("|");
+  }
+
+  function getRepeatCollectionRoot(repeatRoot) {
+    if (!repeatRoot) return null;
+    var current = repeatRoot.parentElement;
+    var steps = 0;
+    while (current && current !== document.body && current !== document.documentElement && steps < 6) {
+      if (!isPluginDomElement(current) && isRepeatCollectionContainer(current, repeatRoot)) return current;
+      current = current.parentElement;
+      steps += 1;
+    }
+    return repeatRoot.parentElement && !isPluginDomElement(repeatRoot.parentElement) ? repeatRoot.parentElement : null;
+  }
+
+  function isRepeatCollectionContainer(container, repeatRoot) {
+    if (!container || !repeatRoot || container === repeatRoot || container === document.body || container === document.documentElement) return false;
+    var children = getVisibleStructuralChildren(container);
+    if (children.length < 2) return false;
+    var style = getComputedStyle(container);
+    var display = String(style.display || "").toLowerCase();
+    var tag = String(container.tagName || "").toLowerCase();
+    var role = container.getAttribute ? String(container.getAttribute("role") || "").toLowerCase() : "";
+    if (/^(flex|inline-flex|grid|inline-grid)$/.test(display)) return true;
+    if (/^(ul|ol|table|tbody|thead|tfoot|tr)$/.test(tag)) return true;
+    if (/^(list|listbox|toolbar|tablist|menu|menubar|radiogroup|group|row|table|grid)$/.test(role)) return true;
+    return hasRepeatedCollectionLayout(container, repeatRoot, children);
+  }
+
+  function hasRepeatedCollectionLayout(container, repeatRoot, children) {
+    if (!container || !repeatRoot || !children || children.length < 2) return false;
+    var repeatRect = repeatRoot.getBoundingClientRect();
+    if (!repeatRect || repeatRect.width <= 0 || repeatRect.height <= 0) return false;
+    var alignedCount = 0;
+    var sizeCount = 0;
+    children.forEach(function (child) {
+      if (!child || child === repeatRoot) return;
+      var rect = child.getBoundingClientRect();
+      if (!rect || rect.width <= 0 || rect.height <= 0) return;
+      if (areRectsSameRowOrColumn(repeatRect, rect)) alignedCount += 1;
+      if (numericCloseness(repeatRect.width, rect.width) >= 0.5 && numericCloseness(repeatRect.height, rect.height) >= 0.5) sizeCount += 1;
+    });
+    return alignedCount >= 1 && sizeCount >= 1;
+  }
+
+  function isRepeatRootTypeCompatible(seedEl, candidateEl) {
+    if (!seedEl || !candidateEl || !seedEl.tagName || !candidateEl.tagName) return false;
+    if (String(seedEl.tagName || "").toLowerCase() === String(candidateEl.tagName || "").toLowerCase()) return true;
+    var seedRole = seedEl.getAttribute ? String(seedEl.getAttribute("role") || "").toLowerCase() : "";
+    var candidateRole = candidateEl.getAttribute ? String(candidateEl.getAttribute("role") || "").toLowerCase() : "";
+    if (seedRole && candidateRole && seedRole === candidateRole) return true;
+    var seedKind = getSharedSemanticSlotKind(seedEl);
+    var candidateKind = getSharedSemanticSlotKind(candidateEl);
+    if (seedKind !== "other" && seedKind === candidateKind) return true;
+    return isButtonLikeElement(seedEl) && isButtonLikeElement(candidateEl);
+  }
+
+  function scoreRepeatRootCandidate(seedEl, candidateEl, seedMeta, collectionRoot) {
+    if (!seedEl || !candidateEl || seedEl === candidateEl) return 0;
+    if (!isRepeatRootTypeCompatible(seedEl, candidateEl)) return 0;
+    var candidateRect = candidateEl.getBoundingClientRect();
+    if (!candidateRect || candidateRect.width <= 0 || candidateRect.height <= 0) return 0;
+    var widthScore = numericCloseness(seedMeta.rect.width, candidateRect.width);
+    var heightScore = numericCloseness(seedMeta.rect.height, candidateRect.height);
+    if (widthScore < 0.35 && heightScore < 0.35) return 0;
+    var candidateStyle = getComputedStyle(candidateEl);
+    var tagScore = String(seedEl.tagName || "").toLowerCase() === String(candidateEl.tagName || "").toLowerCase() ? 1 : 0.85;
+    var classScore = tokenSimilarity(seedMeta.classTokens, getClassTokens(candidateEl));
+    var styleScore = styleFieldSimilarity(seedMeta.style, candidateStyle);
+    var childScore = fingerprintSimilarity(seedMeta.childFingerprint, childFingerprint(candidateEl));
+    var relScore = collectionRoot && candidateEl.parentElement === collectionRoot ? 0.08 : 0;
+    return (
+      tagScore * 0.18 +
+      classScore * 0.24 +
+      styleScore * 0.24 +
+      widthScore * 0.12 +
+      heightScore * 0.12 +
+      childScore * 0.1 +
+      relScore
+    );
+  }
+
+  function findRepeatRootCandidates(seedEl) {
+    var candidates = [];
+    var seen = [];
+    var current = seedEl;
+    var steps = 0;
+    while (current && current !== document.body && current !== document.documentElement && steps < 6) {
+      if (!isPluginDomElement(current) && seen.indexOf(current) === -1) {
+        seen.push(current);
+        candidates.push(current);
+      }
+      current = current.parentElement;
+      steps += 1;
+    }
+    return candidates;
+  }
+
+  function collectRepeatInstanceRoots(collectionRoot, repeatRoot, seedMeta) {
+    if (!collectionRoot || !repeatRoot || !collectionRoot.children) return [];
+    var items = [];
+    Array.prototype.forEach.call(collectionRoot.children, function (child) {
+      if (!child || child === repeatRoot || child.nodeType !== 1 || isPluginDomElement(child)) return;
+      if (!isVisibleSharedCandidate(child)) return;
+      if (!isRepeatRootTypeCompatible(repeatRoot, child)) return;
+      var score = scoreRepeatRootCandidate(repeatRoot, child, seedMeta, collectionRoot);
+      if (score >= 0.58) items.push({ el: child, score: score });
+    });
+    return items.sort(function (a, b) {
+      return b.score - a.score;
+    });
+  }
+
+  function scoreRepeatSlotCandidate(seedEl, candidateEl, seedSignature, instanceRoot) {
+    if (!seedEl || !candidateEl || !seedSignature || !instanceRoot || seedEl === candidateEl) return 0;
+    if (!isVisibleSharedCandidate(candidateEl)) return 0;
+    if (!isRepeatSlotCandidateCompatible(seedEl, candidateEl)) return 0;
+    var candidateRect = candidateEl.getBoundingClientRect();
+    var instanceRect = instanceRoot.getBoundingClientRect();
+    if (!candidateRect || !instanceRect || candidateRect.width <= 0 || candidateRect.height <= 0) return 0;
+    var seedRel = seedSignature.relativeRect;
+    var candidateRel = getRelativeRect(candidateRect, instanceRect);
+    var relScore = relativeRectSimilarity(seedRel, candidateRel);
+    var sizeScore = (numericCloseness(seedSignature.rect.width, candidateRect.width) + numericCloseness(seedSignature.rect.height, candidateRect.height)) / 2;
+    var tagScore = String(seedSignature.tag || "") === String(candidateEl.tagName || "").toLowerCase() ? 1 : 0.8;
+    var seedRole = String(seedSignature.role || "");
+    var candidateRole = candidateEl.getAttribute ? String(candidateEl.getAttribute("role") || "").toLowerCase() : "";
+    var roleScore = seedRole && candidateRole && seedRole === candidateRole ? 1 : 0;
+    var classScore = tokenSimilarity(seedSignature.classTokens, getClassTokens(candidateEl));
+    var styleScore = styleFieldSimilarity(seedSignature.style, getComputedStyle(candidateEl));
+    var candidatePathParts = getPathSignatureFromAncestor(instanceRoot, candidateEl) || [];
+    var depthScore = seedSignature.depth ? clamp(1 - Math.abs(seedSignature.depth - candidatePathParts.length) / Math.max(seedSignature.depth, candidatePathParts.length, 1), 0, 1) : 0.5;
+    var pathScore = pathSignatureSimilarity(seedSignature.pathParts, candidatePathParts);
+    var kindScore = seedSignature.semanticKind && seedSignature.semanticKind === getSharedSemanticSlotKind(candidateEl) ? 1 : 0;
+    var fingerScore = fingerprintSimilarity(seedSignature.childFingerprint, childFingerprint(candidateEl));
+    return (
+      relScore * 0.22 +
+      sizeScore * 0.18 +
+      tagScore * 0.12 +
+      roleScore * 0.1 +
+      classScore * 0.1 +
+      styleScore * 0.1 +
+      depthScore * 0.08 +
+      pathScore * 0.1 +
+      kindScore * 0.05 +
+      fingerScore * 0.05
+    );
+  }
+
+  function pathSignatureSimilarity(seedParts, candidateParts) {
+    if (!seedParts || !candidateParts) return 0;
+    if (!seedParts.length && !candidateParts.length) return 1;
+    if (!seedParts.length || !candidateParts.length) return 0;
+    var compareLength = Math.min(seedParts.length, candidateParts.length);
+    var score = 0;
+    for (var i = 0; i < compareLength; i++) {
+      score += tokenSimilarity(seedParts[i].split("|"), candidateParts[i].split("|"));
+    }
+    var depthPenalty = Math.abs(seedParts.length - candidateParts.length) / Math.max(seedParts.length, candidateParts.length, 1);
+    return clamp(score / Math.max(compareLength, 1) - depthPenalty * 0.2, 0, 1);
+  }
+
+  function isRepeatSlotCandidateCompatible(seedEl, candidateEl) {
+    if (!seedEl || !candidateEl || !seedEl.tagName || !candidateEl.tagName) return false;
+    var seedTag = String(seedEl.tagName || "").toLowerCase();
+    var candidateTag = String(candidateEl.tagName || "").toLowerCase();
+    if (seedTag === candidateTag) return true;
+    var seedRole = seedEl.getAttribute ? String(seedEl.getAttribute("role") || "").toLowerCase() : "";
+    var candidateRole = candidateEl.getAttribute ? String(candidateEl.getAttribute("role") || "").toLowerCase() : "";
+    if (seedRole && candidateRole && seedRole === candidateRole) return true;
+    var seedKind = getSharedSemanticSlotKind(seedEl);
+    var candidateKind = getSharedSemanticSlotKind(candidateEl);
+    if (seedKind !== "other" && seedKind === candidateKind) return true;
+    return isButtonLikeElement(seedEl) && isButtonLikeElement(candidateEl);
+  }
+
+  function buildRepeatSlotSignature(seedEl, repeatRoot) {
+    var rootRect = repeatRoot.getBoundingClientRect();
+    var rect = seedEl.getBoundingClientRect();
+    var pathParts = getPathSignatureFromAncestor(repeatRoot, seedEl) || [];
+    return {
+      seedElement: seedEl,
+      rect: rect,
+      relativeRect: getRelativeRect(rect, rootRect),
+      tag: String(seedEl.tagName || "").toLowerCase(),
+      role: seedEl.getAttribute ? String(seedEl.getAttribute("role") || "").toLowerCase() : "",
+      classTokens: getClassTokens(seedEl),
+      style: getComputedStyle(seedEl),
+      childFingerprint: childFingerprint(seedEl),
+      semanticKind: getSharedSemanticSlotKind(seedEl),
+      pathParts: pathParts,
+      depth: pathParts.length
+    };
+  }
+
+  function findBestRepeatSlotMatch(instanceRoot, seedSignature) {
+    if (!instanceRoot || !seedSignature || !seedSignature.seedElement) return null;
+    var best = null;
+    Array.prototype.forEach.call(instanceRoot.querySelectorAll("*"), function (candidate) {
+      if (!candidate || isPluginDomElement(candidate) || !isVisibleSharedCandidate(candidate)) return;
+      var candidatePathParts = getPathSignatureFromAncestor(instanceRoot, candidate) || [];
+      if (seedSignature.depth && Math.abs(candidatePathParts.length - seedSignature.depth) > 3) return;
+      var score = scoreRepeatSlotCandidate(seedSignature.seedElement, candidate, seedSignature, instanceRoot);
+      if (score <= 0) return;
+      if (!best || score > best.score) {
+        best = {
+          el: candidate,
+          score: score
+        };
+      }
+    });
+    return best && best.score >= 0.55 ? best : null;
+  }
+
+  function isExplicitRepeatCollectionRoot(el) {
+    if (!el || !el.getAttribute) return false;
+    var style = getComputedStyle(el);
+    var display = String(style.display || "").toLowerCase();
+    var tag = String(el.tagName || "").toLowerCase();
+    var role = String(el.getAttribute("role") || "").toLowerCase();
+    return (
+      /^(flex|inline-flex|grid|inline-grid)$/.test(display) ||
+      /^(ul|ol|table|tbody|thead|tfoot|tr)$/.test(tag) ||
+      /^(list|listbox|toolbar|tablist|menu|menubar|radiogroup|group|row|table|grid)$/.test(role)
+    );
+  }
+
+  function identifyRepeatStructure(seedEl) {
+    if (!seedEl || !isVisibleSharedCandidate(seedEl)) return null;
+    var candidates = findRepeatRootCandidates(seedEl);
+    for (var i = 0; i < candidates.length; i++) {
+      var repeatRoot = candidates[i];
+      var collectionRoot = getRepeatCollectionRoot(repeatRoot);
+      if (!collectionRoot || collectionRoot === repeatRoot) continue;
+      if (!isExplicitRepeatCollectionRoot(collectionRoot)) {
+        var collectionChildren = getVisibleStructuralChildren(collectionRoot);
+        if (collectionChildren.length > 12) continue;
+      }
+      var seedMeta = {
+        rect: repeatRoot.getBoundingClientRect(),
+        style: getComputedStyle(repeatRoot),
+        classTokens: getClassTokens(repeatRoot),
+        childFingerprint: childFingerprint(repeatRoot)
+      };
+      var instanceRoots = collectRepeatInstanceRoots(collectionRoot, repeatRoot, seedMeta);
+      if (!instanceRoots.length) continue;
+      if (seedEl === repeatRoot) {
+        return {
+          mode: "repeat-root",
+          repeatRoot: repeatRoot,
+          collectionRoot: collectionRoot,
+          matches: instanceRoots.map(function (item) {
+            return item.el;
+          }).slice(0, 12),
+          slotPath: [],
+          scope: "repeat"
+        };
+      }
+      var seedSignature = buildRepeatSlotSignature(seedEl, repeatRoot);
+      var slotMatches = [];
+      instanceRoots.forEach(function (item) {
+        var matched = findBestRepeatSlotMatch(item.el, seedSignature);
+        if (matched && matched.el && slotMatches.indexOf(matched.el) === -1) {
+          slotMatches.push(matched.el);
+        }
+      });
+      if (!slotMatches.length) continue;
+      if (slotMatches.length > 12 && !isExplicitRepeatCollectionRoot(collectionRoot)) continue;
+      return {
+        mode: "repeat-slot",
+        repeatRoot: repeatRoot,
+        collectionRoot: collectionRoot,
+        matches: slotMatches.slice(0, 12),
+        slotPath: seedSignature.pathParts || [],
+        scope: "repeat"
+      };
+    }
+    return null;
+  }
+
   function styleFieldSimilarity(seedStyle, candidateStyle) {
     if (!seedStyle || !candidateStyle) return 0;
     var exactFields = ["display", "fontFamily", "fontWeight", "textAlign", "whiteSpace", "boxSizing"];
@@ -7093,7 +7487,16 @@
   }
 
   function identifySharedElements(seedEl) {
-    if (!seedEl || !isVisibleSharedCandidate(seedEl)) return [];
+    if (!seedEl || !isVisibleSharedCandidate(seedEl)) {
+      return {
+        mode: null,
+        scope: "group",
+        repeatRoot: null,
+        collectionRoot: null,
+        matches: [],
+        slotPath: []
+      };
+    }
     var groupEl = findSharedGroupContainer(seedEl);
     var seedMeta = {
       rect: seedEl.getBoundingClientRect(),
@@ -7109,19 +7512,59 @@
     });
     if (matches.length > 12) {
       var sameParentMatches = getSameParentStrongSharedMatches(seedEl, seedMeta, threshold);
-      if (sameParentMatches.length) return sameParentMatches.slice(0, 12);
-      return matches.slice(0, 12);
+      if (sameParentMatches.length) {
+        return {
+          mode: "group",
+          scope: "group",
+          repeatRoot: null,
+          collectionRoot: groupEl,
+          matches: sameParentMatches.slice(0, 12),
+          slotPath: []
+        };
+      }
+      return {
+        mode: "group",
+        scope: "group",
+        repeatRoot: null,
+        collectionRoot: groupEl,
+        matches: matches.slice(0, 12),
+        slotPath: []
+      };
     }
-    return matches;
+    if (matches.length) {
+      return {
+        mode: "group",
+        scope: "group",
+        repeatRoot: null,
+        collectionRoot: groupEl,
+        matches: matches,
+        slotPath: []
+      };
+    }
+    var repeatResult = identifyRepeatStructure(seedEl);
+    if (repeatResult && repeatResult.matches && repeatResult.matches.length) return repeatResult;
+    return {
+      mode: null,
+      scope: "group",
+      repeatRoot: null,
+      collectionRoot: groupEl,
+      matches: [],
+      slotPath: []
+    };
   }
 
   function refreshSharedElements(seedEl) {
     var seed = seedEl || getSelectedPanelTarget();
     if (!seed) return;
-    var matches = identifySharedElements(seed);
+    var result = identifySharedElements(seed) || {};
+    var matches = result.matches || [];
     state.sharedElements.seedElement = seed;
     state.sharedElements.matches = matches;
-    state.sharedElements.scope = "group";
+    state.sharedElements.scope = result.scope || "group";
+    state.sharedElements.matchMode = result.mode || null;
+    state.sharedElements.repeatRoot = result.repeatRoot || null;
+    state.sharedElements.collectionRoot = result.collectionRoot || null;
+    state.sharedElements.slotPath = result.slotPath || [];
     state.sharedElements.lastScanHadMatches = !!matches.length;
   }
 
@@ -7135,45 +7578,6 @@
     state.sharedElements.enabled = true;
     refreshSharedElements(seed);
     schedule();
-  }
-
-  function renderSelectedSharedElementsControl() {
-    var seed = getSelectedPanelTarget();
-    var shared = state.sharedElements;
-    var enabled = !!(shared && shared.enabled && shared.seedElement === seed);
-    var count = enabled ? (shared.matches || []).length : 0;
-    var scopeText = shared && shared.scope === "page" ? "全页面相似元素" : "同组元素";
-    var hint = enabled ? (count ? "当前命中 " + count + " 个" + scopeText : "未发现同类元素") : "开启后同步安全样式到同组元素";
-    return (
-      '<div data-vqa-shared-elements-control="1" style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px;padding:10px 12px;border-radius:14px;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.045);">' +
-      '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">' +
-      '<div style="min-width:0;color:#fff;font:600 12px/1.25 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;">共享元素</div>' +
-      '<button type="button" data-action="toggle-shared-elements" aria-pressed="' +
-      (enabled ? "true" : "false") +
-      '" style="position:relative;display:inline-flex;align-items:center;width:46px;height:26px;padding:3px;border:0;border-radius:999px;background:' +
-      (enabled ? "#1F8CFF" : "rgba(255,255,255,.14)") +
-      ';box-shadow:' +
-      (enabled ? "0 0 0 1px rgba(117,190,255,.36) inset,0 8px 18px rgba(31,140,255,.18)" : "0 0 0 1px rgba(255,255,255,.06) inset") +
-      ';cursor:pointer;transition:background 120ms ease,box-shadow 120ms ease;">' +
-      '<span aria-hidden="true" style="display:block;width:20px;height:20px;border-radius:50%;background:#fff;transform:translateX(' +
-      (enabled ? "20px" : "0") +
-      ');transition:transform 140ms ease;"></span>' +
-      "</button>" +
-      "</div>" +
-      '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">' +
-      '<div style="min-width:0;color:' +
-      (enabled && !count ? "rgba(255,207,119,.92)" : "rgba(255,255,255,.56)") +
-      ';font:12px/1.35 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' +
-      esc(hint) +
-      '">' +
-      esc(hint) +
-      "</div>" +
-      (enabled
-        ? '<button type="button" data-action="refresh-shared-elements" style="flex:0 0 auto;padding:0;border:0;background:transparent;color:rgba(255,255,255,.72);font:12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;">重新识别</button>'
-        : "") +
-      "</div>" +
-      "</div>"
-    );
   }
 
   function renderSharedElementHighlights() {
@@ -9474,6 +9878,19 @@
   var topbarTooltipCard = topbarTooltip.querySelector("[data-v12-topbar-tooltip-card]");
   var topbarTooltipLabel = topbarTooltip.querySelector("[data-v12-topbar-tooltip-label]");
   var topbarTooltipShortcut = topbarTooltip.querySelector("[data-v12-topbar-tooltip-shortcut]");
+  var sharedElementsTooltip = make(
+    "div",
+    "position:fixed;left:0;top:0;z-index:" +
+      (CONFIG.zIndexTooltip + 7) +
+      ";pointer-events:none;opacity:0;transition:opacity 120ms ease;will-change:opacity;"
+  );
+  sharedElementsTooltip.innerHTML =
+    '<div data-v12-shared-elements-tooltip-card="1" style="position:relative;display:inline-flex;align-items:flex-start;min-width:0;max-width:240px;padding:8px 12px;border-radius:6px;background:#101216;border:0;box-shadow:0 1px 0 rgba(255,255,255,.04) inset,0 10px 24px rgba(0,0,0,.28);color:#fff;backdrop-filter:none;">' +
+    '<div data-v12-shared-elements-tooltip-arrow="1" style="position:absolute;left:50%;top:-4px;transform:translateX(-50%);width:0;height:0;border-left:4px solid transparent;border-right:4px solid transparent;border-bottom:4px solid #101216;filter:none;"></div>' +
+    '<div data-v12-shared-elements-tooltip-label="1" style="min-width:0;flex:1 1 auto;color:rgba(255,255,255,.94);font:400 11px/1.45 \'PingFang SC\',-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;white-space:pre-line;letter-spacing:0;"></div>' +
+    "</div>";
+  var sharedElementsTooltipCard = sharedElementsTooltip.querySelector("[data-v12-shared-elements-tooltip-card]");
+  var sharedElementsTooltipLabel = sharedElementsTooltip.querySelector("[data-v12-shared-elements-tooltip-label]");
 
   var feedbackPopover = make(
     "div",
@@ -9908,6 +10325,13 @@
     return getTopbarTooltipMeta(action) ? action : "";
   }
 
+  function getSharedElementsActionFromTarget(target) {
+    if (!target || !target.closest) return "";
+    var button = target.closest('[data-action="toggle-shared-elements"]');
+    if (!button || !tooltip.contains(button)) return "";
+    return button.getAttribute("data-action") || "";
+  }
+
   function syncTopbarTooltipGeometry(anchorRect) {
     if (!anchorRect) return;
     var tooltipRect = topbarTooltip.getBoundingClientRect();
@@ -9971,6 +10395,110 @@
     if (topbarTooltipShortcut) topbarTooltipShortcut.textContent = meta.shortcut;
     topbarTooltip.style.opacity = "1";
     syncTopbarTooltipGeometry(tooltipState.anchorRect);
+  }
+
+  function getSharedElementsTooltipText() {
+    var shared = state.sharedElements || {};
+    if (!shared.enabled) {
+      return "共享元素已关闭\n开启后将自动识别同类元素";
+    }
+    var count = (shared.matches || []).length;
+    if (count <= 1) return "未发现同类元素";
+    var mode = shared.matchMode || "group";
+    var scopeText = mode === "repeat-root" ? "同类组件" : mode === "repeat-slot" ? "同类卡片槽位" : "同组元素";
+    return "当前命中 " + count + " 个" + scopeText;
+  }
+
+  function syncSharedElementsTooltipGeometry(anchorRect) {
+    if (!anchorRect) return;
+    var tooltipRect = sharedElementsTooltip.getBoundingClientRect();
+    var width = tooltipRect.width || sharedElementsTooltip.offsetWidth || 0;
+    var height = tooltipRect.height || sharedElementsTooltip.offsetHeight || 0;
+    if (!(width > 0) || !(height > 0)) return;
+    var desiredLeft = anchorRect.left + anchorRect.width / 2 - width / 2;
+    var left = clamp(desiredLeft, 8, Math.max(8, window.innerWidth - width - 8));
+    var top = anchorRect.top - height - 9;
+    var placement = "above";
+    if (top < 8) {
+      top = anchorRect.bottom + 9;
+      placement = "below";
+    }
+    sharedElementsTooltip.style.left = left + "px";
+    sharedElementsTooltip.style.top = top + "px";
+    if (sharedElementsTooltipCard) {
+      sharedElementsTooltipCard.setAttribute("data-placement", placement);
+      var arrowLeft = clamp(anchorRect.left + anchorRect.width / 2 - left, 18, Math.max(18, width - 18));
+      var arrow = sharedElementsTooltip.querySelector("[data-v12-shared-elements-tooltip-arrow]");
+      if (arrow) {
+        arrow.style.left = arrowLeft + "px";
+        if (placement === "above") {
+          arrow.style.top = "auto";
+          arrow.style.bottom = "-5px";
+          arrow.style.borderBottom = "0";
+          arrow.style.borderTop = "5px solid #101216";
+        } else {
+          arrow.style.bottom = "auto";
+          arrow.style.top = "-5px";
+          arrow.style.borderTop = "0";
+          arrow.style.borderBottom = "5px solid #101216";
+        }
+      }
+    }
+  }
+
+  function renderSharedElementsTooltip() {
+    var stateRef = sharedElementsTooltip.__state || null;
+    if (!stateRef || !stateRef.visible || !stateRef.anchorRect) {
+      sharedElementsTooltip.style.opacity = "0";
+      return;
+    }
+    if (sharedElementsTooltipLabel) {
+      sharedElementsTooltipLabel.textContent = stateRef.text || getSharedElementsTooltipText();
+    }
+    sharedElementsTooltip.style.opacity = "1";
+    syncSharedElementsTooltipGeometry(stateRef.anchorRect);
+  }
+
+  function hideSharedElementsTooltip(immediate) {
+    window.clearTimeout(sharedElementsTooltipHideTimerId);
+    sharedElementsTooltipHideTimerId = 0;
+    sharedElementsTooltip.__state = {
+      visible: false,
+      text: "",
+      anchorRect: null
+    };
+    if (immediate) {
+      sharedElementsTooltip.style.opacity = "0";
+      return;
+    }
+    renderSharedElementsTooltip();
+  }
+
+  function showSharedElementsTooltip(anchorEl) {
+    if (!anchorEl || !anchorEl.getBoundingClientRect) return;
+    window.clearTimeout(sharedElementsTooltipHideTimerId);
+    sharedElementsTooltipHideTimerId = 0;
+    var rect = anchorEl.getBoundingClientRect();
+    sharedElementsTooltip.__state = {
+      visible: true,
+      text: getSharedElementsTooltipText(),
+      anchorRect: {
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+        width: rect.width,
+        height: rect.height
+      }
+    };
+    renderSharedElementsTooltip();
+  }
+
+  function scheduleHideSharedElementsTooltip() {
+    window.clearTimeout(sharedElementsTooltipHideTimerId);
+    sharedElementsTooltipHideTimerId = window.setTimeout(function () {
+      hideSharedElementsTooltip(true);
+    }, 140);
   }
 
   function getFeedbackPopoverAnchorRect() {
@@ -11145,6 +11673,10 @@
     ';">视觉走查</div>' +
     '<div id="vqa-actions" style="display:flex;flex-wrap:nowrap;justify-content:flex-end;gap:6px;flex:0 0 auto;">' +
     '<button id="vqa-measure" style="display:none;border:0;white-space:nowrap;flex:0 0 auto;background:#1F6BFF;color:#FFF;border-radius:999px;padding:4px 9px;font:inherit;cursor:pointer;">辅助测距</button>' +
+    '<button id="vqa-shared-elements-toggle" data-action="toggle-shared-elements" aria-pressed="false" aria-label="共享元素" style="display:none;align-items:center;justify-content:flex-start;gap:8px;flex:0 0 auto;min-width:88px;height:28px;padding:0 8px 0 10px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.08);color:#fff;border-radius:999px;cursor:pointer;box-sizing:border-box;transition:background-color 120ms ease,border-color 120ms ease,box-shadow 120ms ease,transform 120ms ease;">' +
+    '<span aria-hidden="true" style="display:inline-flex;align-items:center;min-width:0;flex:1 1 auto;font:600 12px/1 \'PingFang SC\',-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;white-space:nowrap;letter-spacing:0;">共享元素</span>' +
+    '<span aria-hidden="true" style="display:block;flex:0 0 auto;width:18px;height:18px;border-radius:999px;background:#fff;transform:translateX(-8px);box-shadow:0 1px 3px rgba(0,0,0,.22);transition:transform 140ms ease,background-color 120ms ease;"></span>' +
+    '</button>' +
     '<button id="vqa-reset" data-action="reset-styles" title="重置本次修改" aria-label="重置本次修改" style="display:none;border:1px solid ' +
     PANEL_UI.buttonBorder +
     ';flex:0 0 auto;align-items:center;justify-content:center;width:28px;height:28px;background:' +
@@ -11167,6 +11699,7 @@
   var headTitleEl = tooltip.querySelector("#vqa-title");
   var headActionsWrap = tooltip.querySelector("#vqa-actions");
   var btnMeasure = tooltip.querySelector("#vqa-measure");
+  var btnSharedElements = tooltip.querySelector("#vqa-shared-elements-toggle");
   var btnReset = tooltip.querySelector("#vqa-reset");
   function updatePanelChrome() {
     if (shouldShowSelectedPanel()) {
@@ -11183,6 +11716,7 @@
       head.style.background = PANEL_UI.headBg;
       headActionsWrap.style.display = "flex";
       btnMeasure.style.display = "none";
+      if (btnSharedElements) btnSharedElements.style.display = "inline-flex";
       btnReset.style.display = "inline-flex";
       body.style.padding = "16px 16px 16px";
       headTitleEl.style.font = "600 16px/1.2 'PingFang SC',-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif";
@@ -11203,6 +11737,7 @@
       head.style.background = "transparent";
       headActionsWrap.style.display = "none";
       btnMeasure.style.display = "none";
+      if (btnSharedElements) btnSharedElements.style.display = "none";
       btnReset.style.display = "none";
       body.style.padding = "0";
       headTitleEl.textContent = "视觉走查";
@@ -11224,6 +11759,7 @@
     head.style.background = PANEL_UI.headBg;
     headActionsWrap.style.display = "none";
     btnMeasure.style.display = "none";
+    if (btnSharedElements) btnSharedElements.style.display = "none";
     btnReset.style.display = "none";
     body.style.padding = "8px 8px 9px";
     headTitleEl.textContent = "视觉走查";
@@ -12419,6 +12955,9 @@
     }
     var style = getComputedStyle(el);
     var capabilities = buildSelectedCapabilities(el, style);
+    if (state.sharedElements.enabled && state.sharedElements.seedElement !== el) {
+      refreshSharedElements(el);
+    }
     var modifiedCount = Object.keys(state.modifiedProps).length;
     var resetDisabled = !modifiedCount;
 
@@ -12429,6 +12968,24 @@
     btnReset.style.opacity = resetDisabled ? "0.45" : "1";
     btnReset.style.cursor = resetDisabled ? "default" : "pointer";
     btnReset.title = "重置本次修改";
+    if (btnSharedElements) {
+      var sharedEnabled = !!(state.sharedElements && state.sharedElements.enabled && state.sharedElements.seedElement === el);
+      btnSharedElements.setAttribute("aria-pressed", sharedEnabled ? "true" : "false");
+      btnSharedElements.setAttribute("data-active", sharedEnabled ? "true" : "false");
+      btnSharedElements.title = "";
+      btnSharedElements.style.background = sharedEnabled ? "#0084ff" : "rgba(255,255,255,.08)";
+      btnSharedElements.style.borderColor = sharedEnabled ? "rgba(117,190,255,.36)" : "rgba(255,255,255,.12)";
+      btnSharedElements.style.boxShadow = sharedEnabled ? "0 0 0 1px rgba(117,190,255,.2) inset,0 6px 14px rgba(31,140,255,.16)" : "none";
+      var knob = btnSharedElements.querySelectorAll("span")[1];
+      if (knob) {
+        knob.style.transform = sharedEnabled ? "translateX(0)" : "translateX(-8px)";
+        knob.style.background = sharedEnabled ? "#fff" : "rgba(255,255,255,.92)";
+      }
+      var label = btnSharedElements.querySelectorAll("span")[0];
+      if (label) {
+        label.style.color = sharedEnabled ? "#fff" : "rgba(255,255,255,.84)";
+      }
+    }
 
     var textValue = capabilities.canEditTextContent ? getEditableTextValue(el) : "";
     var sections = buildSelectedPanelSections(el, style, capabilities, textValue);
@@ -12436,12 +12993,10 @@
     var quickRecordAction = renderSelectedPanelQuickRecordAction(el, {
       containerStyle: "display:flex;justify-content:flex-start;"
     });
-    var sharedElementsControl = isPlainSelectMode() && state.measureA === el ? renderSelectedSharedElementsControl() : "";
     body.innerHTML =
       '<div class="v12-selected-panel" data-vqa-panel-stack data-vqa-panel-kind="' +
       esc(capabilities.canEditTextContent ? "text" : "element") +
       '" style="display:flex;flex-direction:column;min-height:0;max-height:72vh;overflow:visible;">' +
-      sharedElementsControl +
       '<div data-vqa-panel-scroll="1" style="display:flex;flex-direction:column;gap:' +
       PANEL_UI.sectionGap +
       ';min-height:0;overflow-y:auto;overflow-x:visible;padding-bottom:18px;box-sizing:border-box;">' +
@@ -12613,6 +13168,7 @@
     if (collapsed) {
       tooltip.style.display = "none";
       hideTopbarTooltip(true);
+      hideSharedElementsTooltip(true);
       recordMenu.style.display = "none";
       regionCaptureOverlay.style.display = "none";
       recordComposer.style.display = "none";
@@ -12644,6 +13200,7 @@
       renderRegionSelection();
     }
     if (!collapsed && state.v12.topbarTooltip.visible) renderTopbarTooltip();
+    if (!collapsed && sharedElementsTooltip.__state && sharedElementsTooltip.__state.visible) renderSharedElementsTooltip();
     if (!collapsed) renderFeedbackPopover();
     renderDrawerStub();
     var el = getActiveEl();
@@ -13232,6 +13789,8 @@
     drawerClearConfirmTimerId = 0;
     window.clearTimeout(topbarTooltipHideTimerId);
     topbarTooltipHideTimerId = 0;
+    window.clearTimeout(sharedElementsTooltipHideTimerId);
+    sharedElementsTooltipHideTimerId = 0;
     window.clearTimeout(state.v12.topbarCollapseAnimTimerId);
     state.v12.topbarCollapseAnimTimerId = 0;
     window.clearTimeout(state.colorPickerOpenTimerId);
@@ -13291,7 +13850,7 @@
     floating.removeEventListener("mouseenter", onFloatEnter, true);
     floating.removeEventListener("mouseleave", onFloatLeave, true);
     btnMeasure.removeEventListener("click", onMeasureClick, true);
-    [highlight, selectA, selectB, sharedHighlightLayer, tooltip, topbarTooltip, feedbackPopover, spacingLayer, measureLayer, floating, topbar, recordMenu, regionCaptureOverlay, drawerStub, regionSelectBox, recordComposer, recordPreview, v12Notice].forEach(function (el) {
+    [highlight, selectA, selectB, sharedHighlightLayer, tooltip, topbarTooltip, sharedElementsTooltip, feedbackPopover, spacingLayer, measureLayer, floating, topbar, recordMenu, regionCaptureOverlay, drawerStub, regionSelectBox, recordComposer, recordPreview, v12Notice].forEach(function (el) {
       if (el && el.parentNode) el.parentNode.removeChild(el);
     });
     Object.keys(bridgePending).forEach(function (requestId) {
