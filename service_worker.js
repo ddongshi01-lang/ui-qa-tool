@@ -108,7 +108,8 @@ function getTopbarIconUrls() {
     select: chrome.runtime.getURL("assets/ui/topbar/select.svg"),
     measure: chrome.runtime.getURL("assets/ui/topbar/measure.svg"),
     recordElement: chrome.runtime.getURL("assets/ui/topbar/record-element.svg"),
-    recordRegion: chrome.runtime.getURL("assets/ui/topbar/record-region.svg")
+    recordRegion: chrome.runtime.getURL("assets/ui/topbar/record-region.svg"),
+    more: chrome.runtime.getURL("assets/ui/topbar/gengduo.svg")
   };
 }
 

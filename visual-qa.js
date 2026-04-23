@@ -406,11 +406,11 @@
     "mode-select": { label: "选择", shortcut: "V" },
     "mode-measure": { label: "测量", shortcut: "C" },
     "record-element": { label: "记录元素", shortcut: "O" },
-    "record-region": { label: "反馈", shortcut: "R" },
+    "topbar-more": { label: "反馈", shortcut: "" },
     "toggle-drawer": { label: "记录抽屉", shortcut: "M" }
   };
   var TOPBAR_ICON_PLACEHOLDER_SRC = "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
-  var TOPBAR_EXPANDED_WIDTH = 265;
+  var TOPBAR_EXPANDED_WIDTH = 304;
   var TOPBAR_COLLAPSED_WIDTH = 50;
   var TOPBAR_ICON_URLS = null;
   var TOPBAR_ICON_URLS_READY = false;
@@ -434,7 +434,8 @@
           !iconUrls.select ||
           !iconUrls.measure ||
           !iconUrls.recordElement ||
-          !iconUrls.recordRegion
+          !iconUrls.recordRegion ||
+          !iconUrls.more
         ) {
           throw new Error("Missing topbar icon urls");
         }
@@ -2082,7 +2083,7 @@
     if (sourceType === "pointerup" || sourceType === "click") {
       state.v12.feedbackPopoverSuppressOutsideClose = true;
     }
-    toggleFeedbackPopover(topbar.querySelector('[data-v12-action="record-region"]'), sourceType);
+    toggleFeedbackPopover(topbar.querySelector('[data-v12-action="topbar-more"]'), sourceType);
   }
 
   function toggleV12Drawer() {
@@ -3609,10 +3610,10 @@
     var quickState = computeQuickRecordStateForMeasureA();
     var enabled = !!quickState.enabled;
     return (
-      '<div data-vqa-selected-quick-record="1" style="display:flex;justify-content:flex-end;align-items:center;flex:0 0 auto;min-width:0;">' +
+      '<div data-vqa-selected-quick-record="1" style="display:flex;justify-content:stretch;align-items:center;width:100%;min-width:0;">' +
       '<button type="button" data-action="quick-add-record" data-vqa-footer-primary="1" ' +
       (enabled ? "" : 'disabled aria-disabled="true" ') +
-      'style="min-width:112px;height:36px;padding:0 16px;border-radius:12px;box-sizing:border-box;">加入记录</button>' +
+      'style="width:100%;min-width:0;height:36px;padding:0 14px;border-radius:12px;box-sizing:border-box;">加入记录</button>' +
       "</div>"
     );
   }
@@ -5888,7 +5889,10 @@
       ';' +
       (opts.flex ? "flex:" + opts.flex + ";" : "") +
       '">' +
-      '<div style="min-width:0;display:flex;align-items:center;justify-content:center;flex:0 0 auto;">' +
+      '<div' +
+      ' data-vqa-icon-hit="1"' +
+      (opts.iconCursor ? ' data-vqa-scrub-hover="1"' : "") +
+      ' style="min-width:0;display:flex;align-items:center;justify-content:center;flex:0 0 auto;">' +
       atomIcon +
       "</div>" +
       '<div style="min-width:0;width:100%;display:flex;align-items:' +
@@ -5959,6 +5963,7 @@
 
   function panelIconValueCell(iconText, prop, value, opts) {
     opts = opts || {};
+    var scrubEnabled = !opts.disabled && isScrubbableField(prop, !!opts.disabled);
     return panelAtomCell(
       panelAtomIcon(iconText, {
         size: opts.iconSize || PANEL_UI.atomIconSize,
@@ -5988,6 +5993,7 @@
         height: opts.height || PANEL_UI.atomHeight,
         flex: opts.flex || "",
         iconWidth: opts.iconWidth || null,
+        iconCursor: scrubEnabled ? "ew-resize" : "",
         gap: opts.gap != null ? opts.gap : "0px",
         padding: opts.padding || null
       }
@@ -9917,6 +9923,7 @@
     measureBtn: null,
     recordElementBtn: null,
     recordRegionBtn: null,
+    moreBtn: null,
     drawerBtn: null,
   };
 
@@ -9971,7 +9978,8 @@
       topbarButtonHtml("mode-select", "选择", TOPBAR_ICON_URLS && TOPBAR_ICON_URLS.select, isSelectMode()) +
       topbarButtonHtml("mode-measure", "测量", TOPBAR_ICON_URLS && TOPBAR_ICON_URLS.measure, false) +
       topbarButtonHtml("record-element", "记录元素", TOPBAR_ICON_URLS && TOPBAR_ICON_URLS.recordElement, isRecordElementMode()) +
-      topbarButtonHtml("record-region", "反馈", TOPBAR_ICON_URLS && TOPBAR_ICON_URLS.recordRegion, state.v12.feedbackPopoverOpen) +
+      topbarButtonHtml("record-region", "反馈", TOPBAR_ICON_URLS && TOPBAR_ICON_URLS.recordRegion, false) +
+      topbarButtonHtml("topbar-more", "反馈", TOPBAR_ICON_URLS && TOPBAR_ICON_URLS.more, state.v12.feedbackPopoverOpen) +
       "</div>" +
       '<div class="v12-topbar-divider" aria-hidden="true" data-v12-topbar-divider="1"></div>' +
       '<div class="v12-topbar-drawer-slot" data-v12-topbar-drawer-slot="1">' +
@@ -9993,7 +10001,7 @@
       ".v12-topbar-toolbar{display:inline-flex;align-items:center;gap:0;width:100%;height:50px;box-sizing:border-box;background:#343434;border:0;box-shadow:0 1px 0 rgba(255,255,255,.03) inset,0 8px 20px rgba(0,0,0,.18);backdrop-filter:none;overflow:hidden;transition:padding 180ms cubic-bezier(0.2,0,0,1),border-radius 180ms cubic-bezier(0.2,0,0,1),box-shadow 180ms cubic-bezier(0.2,0,0,1);}" +
       ".v12-topbar-shell.is-expanded .v12-topbar-toolbar{padding:6.9px 8.6px 6.9px 6.9px;border-radius:12px;}" +
       ".v12-topbar-shell.is-collapsed .v12-topbar-toolbar{padding:6.9px;border-radius:7px;}" +
-      ".v12-topbar-group{display:flex;align-items:center;gap:13.793px;min-width:0;overflow:hidden;flex:0 0 auto;max-width:186.207px;opacity:1;transform:translateX(0) scale(1);visibility:visible;transition:max-width 180ms cubic-bezier(0.2,0,0,1),gap 180ms cubic-bezier(0.2,0,0,1),opacity 160ms ease,transform 180ms cubic-bezier(0.2,0,0,1),visibility 0s linear 0s;will-change:max-width,gap,opacity,transform;}" +
+      ".v12-topbar-group{display:flex;align-items:center;gap:13.793px;min-width:0;overflow:hidden;flex:0 0 auto;max-width:227.906px;opacity:1;transform:translateX(0) scale(1);visibility:visible;transition:max-width 180ms cubic-bezier(0.2,0,0,1),gap 180ms cubic-bezier(0.2,0,0,1),opacity 160ms ease,transform 180ms cubic-bezier(0.2,0,0,1),visibility 0s linear 0s;will-change:max-width,gap,opacity,transform;}" +
       ".v12-topbar-shell.is-collapsed .v12-topbar-group{max-width:0;gap:0;opacity:0;transform:translateX(8px) scale(0.96);visibility:hidden;pointer-events:none;transition:visibility 0s linear 180ms,max-width 180ms cubic-bezier(0.2,0,0,1),gap 180ms cubic-bezier(0.2,0,0,1),opacity 160ms ease,transform 180ms cubic-bezier(0.2,0,0,1);}" +
       ".v12-topbar-group .v12-topbar-btn{opacity:1;transform:translateY(0) scale(1);transition:opacity 140ms ease,transform 180ms cubic-bezier(0.2,0,0,1);}" +
       ".v12-topbar-shell.is-collapsed .v12-topbar-group .v12-topbar-btn{opacity:0;transform:translateY(-2px) scale(0.96);}" +
@@ -10003,6 +10011,7 @@
       ".v12-topbar-btn{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;border:0;background:transparent;color:rgba(255,255,255,.82);cursor:pointer;user-select:none;touch-action:manipulation;transition:background-color 120ms ease,color 120ms ease,box-shadow 120ms ease,transform 220ms cubic-bezier(0.22,1,0.36,1),filter 120ms ease,opacity 220ms cubic-bezier(0.22,1,0.36,1);will-change:transform,opacity;}" +
       ".v12-topbar-btn:focus{outline:none;}" +
       ".v12-topbar-icon-btn{width:36.207px;height:36.207px;border-radius:5px;}" +
+      ".v12-topbar-icon-btn[data-v12-action=\"topbar-more\"]{width:27.906px;}" +
       ".v12-topbar-icon-btn:hover{background:rgba(255,255,255,.05);}" +
       ".v12-topbar-icon-btn:active,.v12-topbar-icon-btn[data-pressed=\"true\"]{background:rgba(255,255,255,.09);transform:translateY(1px);}" +
       ".v12-topbar-icon-btn[data-active=\"true\"]{background:#0084ff;color:#fff;box-shadow:none;}" +
@@ -10011,6 +10020,7 @@
       ".v12-topbar-icon-btn[data-active=\"true\"] .v12-topbar-icon{filter:brightness(0) invert(1);}" +
       ".v12-topbar-icon-slot{display:inline-flex;align-items:center;justify-content:center;width:100%;height:100%;pointer-events:none;}" +
       ".v12-topbar-icon{display:block;width:23.2px;height:23.2px;pointer-events:none;object-fit:contain;}" +
+      ".v12-topbar-icon-btn[data-v12-action=\"topbar-more\"] .v12-topbar-icon{width:19.286px;height:27px;}" +
       ".v12-topbar-drawer-entry{width:36.207px;height:36.207px;border-radius:5px;color:rgba(255,255,255,.84);font-variant-numeric:tabular-nums;background:#404040;}" +
       ".v12-topbar-drawer-entry:hover{background:#4a4a4a;color:#fff;}" +
       ".v12-topbar-drawer-entry:active,.v12-topbar-drawer-entry[data-pressed=\"true\"]{background:#4f4f4f;transform:translateY(1px);}" +
@@ -10033,7 +10043,8 @@
       topbarDom.selectBtn,
       topbarDom.measureBtn,
       topbarDom.recordElementBtn,
-      topbarDom.recordRegionBtn
+      topbarDom.recordRegionBtn,
+      topbarDom.moreBtn
     ].forEach(function (btn) {
       if (!btn) return;
       btn.disabled = collapsed;
@@ -10051,7 +10062,8 @@
       "mode-select": TOPBAR_ICON_URLS && TOPBAR_ICON_URLS.select,
       "mode-measure": TOPBAR_ICON_URLS && TOPBAR_ICON_URLS.measure,
       "record-element": TOPBAR_ICON_URLS && TOPBAR_ICON_URLS.recordElement,
-      "record-region": TOPBAR_ICON_URLS && TOPBAR_ICON_URLS.recordRegion
+      "record-region": TOPBAR_ICON_URLS && TOPBAR_ICON_URLS.recordRegion,
+      "topbar-more": TOPBAR_ICON_URLS && TOPBAR_ICON_URLS.more
     };
     Object.keys(iconMap).forEach(function (action) {
       var iconEl = topbarDom.shell.querySelector('[data-v12-topbar-icon="' + action + '"]');
@@ -10080,6 +10092,7 @@
       ".v12-selected-panel [data-vqa-field=\"color-value\"]:hover," +
       ".v12-selected-panel [data-vqa-field-row] div:has(> input[data-editable=\"1\"], > select[data-editable=\"1\"], > textarea[data-editable=\"1\"]):hover," +
       ".v12-selected-panel [data-vqa-field-grid] div:has(> input[data-editable=\"1\"], > select[data-editable=\"1\"], > textarea[data-editable=\"1\"]):hover{border-color:rgba(255,255,255,.1)!important;background:rgba(255,255,255,.08)!important;}" +
+      ".v12-selected-panel [data-vqa-atom-cell] [data-vqa-scrub-hover=\"1\"]{cursor:ew-resize;}" +
       ".v12-selected-panel [data-vqa-atom-cell]:focus-within," +
       ".v12-selected-panel [data-vqa-field=\"color-value\"]:focus-within," +
       ".v12-selected-panel [data-vqa-field-row] div:has(> input[data-editable=\"1\"], > select[data-editable=\"1\"], > textarea[data-editable=\"1\"]):focus-within," +
@@ -10123,8 +10136,8 @@
       ".v12-selected-panel [data-vqa-selected-add-property] > button[data-vqa-footer-secondary=\"1\"]{display:inline-flex;align-items:center;justify-content:center;width:100%;height:36px;padding:0 14px;border:1px solid rgba(255,255,255,.14);border-radius:12px;background:rgba(255,255,255,.05);color:rgba(255,255,255,.80);font:500 12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;box-sizing:border-box;transition:background-color 120ms ease,border-color 120ms ease,color 120ms ease,box-shadow 120ms ease,transform 120ms ease;}" +
       ".v12-selected-panel [data-vqa-selected-add-property] > button[data-vqa-footer-secondary=\"1\"]:hover{background:rgba(255,255,255,.09)!important;border-color:rgba(255,255,255,.22)!important;color:rgba(255,255,255,.92)!important;}" +
       ".v12-selected-panel [data-vqa-selected-add-property] > button[data-vqa-footer-secondary=\"1\"]:active{transform:translateY(1px);}" +
-      ".v12-selected-panel [data-vqa-selected-quick-record]{display:flex;justify-content:flex-end;align-items:center;min-width:0;}" +
-      ".v12-selected-panel [data-vqa-selected-quick-record] > button[data-vqa-footer-primary=\"1\"]{display:inline-flex;align-items:center;justify-content:center;min-width:112px;height:36px;padding:0 16px;border:1px solid rgba(10,118,240,.88);border-radius:12px;background:linear-gradient(180deg,#2F8FFF 0%,#0A76F0 100%);box-shadow:0 8px 18px rgba(10,118,240,.28);color:#fff;font:600 12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;box-sizing:border-box;transition:background-color 120ms ease,border-color 120ms ease,box-shadow 120ms ease,transform 120ms ease,opacity 120ms ease;}" +
+      ".v12-selected-panel [data-vqa-selected-quick-record]{display:flex;justify-content:stretch;align-items:center;width:100%;min-width:0;}" +
+      ".v12-selected-panel [data-vqa-selected-quick-record] > button[data-vqa-footer-primary=\"1\"]{display:inline-flex;align-items:center;justify-content:center;width:100%;min-width:0;height:36px;padding:0 14px;border:1px solid rgba(10,118,240,.88);border-radius:12px;background:linear-gradient(180deg,#2F8FFF 0%,#0A76F0 100%);box-shadow:0 8px 18px rgba(10,118,240,.28);color:#fff;font:600 12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;box-sizing:border-box;transition:background-color 120ms ease,border-color 120ms ease,box-shadow 120ms ease,transform 120ms ease,opacity 120ms ease;}" +
       ".v12-selected-panel [data-vqa-selected-quick-record] > button[data-vqa-footer-primary=\"1\"]:hover:not(:disabled){background:linear-gradient(180deg,#43A0FF 0%,#1282FF 100%)!important;border-color:rgba(65,160,255,.96)!important;box-shadow:0 10px 20px rgba(10,118,240,.34)!important;}" +
       ".v12-selected-panel [data-vqa-selected-quick-record] > button[data-vqa-footer-primary=\"1\"]:active:not(:disabled){transform:translateY(1px);}" +
       ".v12-selected-panel [data-vqa-selected-quick-record] > button[data-vqa-footer-primary=\"1\"]:disabled{background:linear-gradient(180deg,rgba(49,66,92,.98),rgba(34,46,67,.98))!important;border-color:rgba(255,255,255,.08)!important;box-shadow:none!important;color:rgba(255,255,255,.42)!important;cursor:not-allowed!important;}" +
@@ -10243,8 +10256,8 @@
     return !!(
       el &&
       el.closest &&
-      el.closest('[data-v12-action="record-region"]') &&
-      topbar.contains(el.closest('[data-v12-action="record-region"]'))
+      el.closest('[data-v12-action="topbar-more"]') &&
+      topbar.contains(el.closest('[data-v12-action="topbar-more"]'))
     );
   }
 
@@ -10303,6 +10316,7 @@
     topbarDom.measureBtn = topbar.querySelector('[data-v12-action="mode-measure"]');
     topbarDom.recordElementBtn = topbar.querySelector('[data-v12-action="record-element"]');
     topbarDom.recordRegionBtn = topbar.querySelector('[data-v12-action="record-region"]');
+    topbarDom.moreBtn = topbar.querySelector('[data-v12-action="topbar-more"]');
     topbarDom.drawerBtn = topbar.querySelector('[data-v12-action="toggle-drawer"]');
     topbarDom.shell = topbar.querySelector("[data-v12-topbar-shell]");
     topbarDom.toolbar = topbar.querySelector(".v12-topbar-toolbar");
@@ -10391,7 +10405,7 @@
         height: rect.height
       };
     }
-    if (topbarTooltipLabel) topbarTooltipLabel.textContent = meta.label + " " + meta.shortcut;
+    if (topbarTooltipLabel) topbarTooltipLabel.textContent = meta.label + (meta.shortcut ? " " + meta.shortcut : "");
     if (topbarTooltipShortcut) topbarTooltipShortcut.textContent = meta.shortcut;
     topbarTooltip.style.opacity = "1";
     syncTopbarTooltipGeometry(tooltipState.anchorRect);
@@ -10502,7 +10516,7 @@
   }
 
   function getFeedbackPopoverAnchorRect() {
-    var anchor = topbar.querySelector('[data-v12-action="record-region"]');
+    var anchor = topbar.querySelector('[data-v12-action="topbar-more"]');
     if (!anchor || !anchor.getBoundingClientRect) return null;
     var rect = anchor.getBoundingClientRect();
     return {
@@ -10666,7 +10680,8 @@
     syncTopbarButton(topbarDom.selectBtn, isPlainSelectMode(), state.v12.topbarPressedAction === "mode-select");
     syncTopbarButton(topbarDom.measureBtn, isMeasureTopbarMode(), state.v12.topbarPressedAction === "mode-measure");
     syncTopbarButton(topbarDom.recordElementBtn, isRecordElementMode(), state.v12.topbarPressedAction === "record-element");
-    syncTopbarButton(topbarDom.recordRegionBtn, state.v12.feedbackPopoverOpen, state.v12.topbarPressedAction === "record-region");
+    syncTopbarButton(topbarDom.recordRegionBtn, false, false);
+    syncTopbarButton(topbarDom.moreBtn, state.v12.feedbackPopoverOpen, state.v12.topbarPressedAction === "topbar-more");
     syncTopbarButton(topbarDom.drawerBtn, state.v12.drawerOpen, state.v12.topbarPressedAction === "toggle-drawer");
     if (topbarDom.drawerBtn) {
       var drawerLabel = topbarDom.drawerBtn.querySelector(".v12-topbar-count");
@@ -11374,7 +11389,7 @@
       action === "mode-select" ||
       action === "mode-measure" ||
       action === "record-element" ||
-      action === "record-region" ||
+      action === "topbar-more" ||
       action === "toggle-drawer"
     );
   }
@@ -11416,8 +11431,8 @@
     } else if (action === "record-element") {
       branch = "record-element";
       handleRecordElementAction();
-    } else if (action === "record-region") {
-      branch = "record-region-feedback";
+    } else if (action === "topbar-more") {
+      branch = "topbar-more-feedback";
       handleRecordRegionAction(e);
     } else if (action === "toggle-drawer") {
       branch = "toggle-drawer";
@@ -11441,7 +11456,7 @@
     if (!target) return;
     var action = target.getAttribute("data-v12-action");
     if (!isTopbarAction(action)) return;
-    if (action === "record-region") {
+    if (action === "topbar-more") {
       feedbackDebugLog("topbar pointerdown", {
         type: e.type,
         target: feedbackDebugNodeLabel(e.target),
@@ -11466,7 +11481,7 @@
     if (!target) return;
     var action = target.getAttribute("data-v12-action");
     if (!isTopbarAction(action)) return;
-    if (action === "record-region") {
+    if (action === "topbar-more") {
       feedbackDebugLog("topbar pointerup", {
         type: e.type,
         target: feedbackDebugNodeLabel(e.target),
@@ -11516,7 +11531,7 @@
     if (!target) return;
     var action = target.getAttribute("data-v12-action");
     if (isTopbarAction(action)) {
-      if (action === "record-region") {
+      if (action === "topbar-more") {
         feedbackDebugLog("button click", {
           type: e.type,
           target: feedbackDebugNodeLabel(e.target),
@@ -11525,7 +11540,7 @@
         });
       }
       if (shouldSuppressTopbarClick(action)) {
-        if (action === "record-region") {
+        if (action === "topbar-more") {
           feedbackDebugLog("button click suppressed", {
             action: action,
             openAfter: !!state.v12.feedbackPopoverOpen
@@ -11535,14 +11550,14 @@
         e.stopPropagation();
         return;
       }
-      if (action === "record-region") {
+      if (action === "topbar-more") {
         feedbackDebugLog("button click dispatch", {
           action: action,
           openBefore: !!state.v12.feedbackPopoverOpen
         });
       }
       handleTopbarAction(action, target, e);
-      if (action === "record-region") {
+      if (action === "topbar-more") {
         feedbackDebugLog("button click done", {
           action: action,
           openAfter: !!state.v12.feedbackPopoverOpen
