@@ -315,6 +315,11 @@
       drawerClearConfirmArmed: false,
       previewRecordId: "",
       draft: null,
+      changeDraft: null,
+      changeRecordSkipDepth: 0,
+      aiChangePanelOpen: false,
+      aiChangeRenderSignature: "",
+      aiChangePanelScrollTop: 0,
       draftStatus: "idle",
       bridgeReady: false,
       recordMenuOpen: false,
@@ -388,6 +393,8 @@
   var drawerRenderKey = "";
   var draftPersistTimer = 0;
   var draftPersistSeq = 0;
+  var aiChangeDraftPersistTimer = 0;
+  var aiChangeReplayTimerIds = [];
   var drawerClearConfirmTimerId = 0;
   var recordShotCaptureSeq = 0;
   var recordShotCaptureTokens = {};
@@ -398,6 +405,8 @@
   var captureRestoreTimerId = 0;
   var captureRestoreSeq = 0;
   var RECORD_SUB_MODE_STORAGE_KEY = "visual-qa.record-sub-mode";
+  var AI_CHANGE_DRAFT_STORAGE_KEY_PREFIX = "visual-qa:ai-change-draft:";
+  var AI_CHANGE_DRAFT_PERSIST_DELAY = 320;
   var CAPTURE_RESTORE_DURATION_MS = 150;
   var RECORD_SOURCE_LONG_EDGE = 900;
   var RECORD_THUMB_LONG_EDGE = 320;
@@ -406,6 +415,7 @@
     "mode-select": { label: "选择", shortcut: "V" },
     "mode-measure": { label: "测量", shortcut: "C" },
     "record-element": { label: "记录元素", shortcut: "O" },
+    "record-region": { label: "AI 修改", shortcut: "" },
     "topbar-more": { label: "反馈", shortcut: "" },
     "toggle-drawer": { label: "记录抽屉", shortcut: "M" }
   };
@@ -585,6 +595,470 @@
     };
   }
 
+  function makeChangeEntityId(prefix) {
+    return String(prefix || "change") + ":" + Date.now() + ":" + Math.random().toString(36).slice(2, 8);
+  }
+
+  function buildViewportSnapshot() {
+    return {
+      width: Math.max(0, Math.round(window.innerWidth || 0)),
+      height: Math.max(0, Math.round(window.innerHeight || 0))
+    };
+  }
+
+  function buildEmptyChangeDraft(pageKey) {
+    var now = new Date().toISOString();
+    return {
+      draftId: "change-draft:" + pageKey,
+      pageKey: pageKey,
+      pageUrl: location.href,
+      pageTitle: document.title || "",
+      viewport: buildViewportSnapshot(),
+      createdAt: now,
+      updatedAt: now,
+      version: DRAFT_SCHEMA_VERSION,
+      changes: []
+    };
+  }
+
+  function ensureActiveChangeDraft() {
+    var pageKey = normalizePageKey(location.href);
+    var current = state.v12.changeDraft;
+    if (!current || current.pageKey !== pageKey) {
+      state.v12.changeDraft = buildEmptyChangeDraft(pageKey);
+      current = state.v12.changeDraft;
+    }
+    current.pageUrl = location.href;
+    current.pageTitle = document.title || "";
+    current.viewport = buildViewportSnapshot();
+    current.version = DRAFT_SCHEMA_VERSION;
+    if (!Array.isArray(current.changes)) current.changes = [];
+    return current;
+  }
+
+  function normalizeChangeComparableValue(value) {
+    return String(value == null ? "" : value).trim();
+  }
+
+  function getComputedStyleValue(el, prop) {
+    if (!el || !prop) return "";
+    var style = getComputedStyle(el);
+    if (!style) return "";
+    return normalizeChangeComparableValue(style[prop]);
+  }
+
+  function getElementNthOfTypeIndex(el) {
+    if (!el || !el.parentElement || !el.tagName) return 1;
+    var tagName = el.tagName.toLowerCase();
+    var index = 0;
+    var children = el.parentElement.children || [];
+    for (var i = 0; i < children.length; i++) {
+      var child = children[i];
+      if (!child || !child.tagName || child.tagName.toLowerCase() !== tagName) continue;
+      index += 1;
+      if (child === el) return index;
+    }
+    return 1;
+  }
+
+  function buildLightSelector(el) {
+    if (!el || !el.tagName) return "";
+    var tagName = el.tagName.toLowerCase();
+    if (el.id) return tagName + "#" + String(el.id).trim();
+    var classTokens = [];
+    if (el.classList && el.classList.length) {
+      classTokens = Array.prototype.slice.call(el.classList).filter(Boolean).slice(0, 2);
+    }
+    return classTokens.length ? tagName + "." + classTokens.join(".") : tagName;
+  }
+
+  function buildLightSelectorPath(el) {
+    if (!el || !el.tagName) return "";
+    var segments = [];
+    var current = el;
+    var depth = 0;
+    while (current && current.nodeType === 1 && depth < 4) {
+      var segment = buildLightSelector(current);
+      if (!segment) break;
+      if (!current.id) {
+        var nthIndex = getElementNthOfTypeIndex(current);
+        if (nthIndex > 1) segment += ":nth-of-type(" + nthIndex + ")";
+      }
+      segments.unshift(segment);
+      if (current.id) break;
+      current = current.parentElement;
+      depth += 1;
+    }
+    return segments.join(" > ");
+  }
+
+  function buildChangeTargetMeta(el) {
+    var rect = el && typeof el.getBoundingClientRect === "function" ? el.getBoundingClientRect() : null;
+    return {
+      targetName: panelTitle(el) || "页面元素",
+      targetHint: buildElementTargetHint(el),
+      selector: buildLightSelector(el),
+      selectorPath: buildLightSelectorPath(el),
+      textHint: truncateText((el && (el.innerText || el.textContent)) || "", 120),
+      rect: normalizeRect(rect),
+      scroll: getCurrentScrollOffset(),
+      elementRef: el || null
+    };
+  }
+
+  function findChangeItemByElement(changeDraft, el) {
+    if (!changeDraft || !Array.isArray(changeDraft.changes) || !el) return null;
+    for (var i = 0; i < changeDraft.changes.length; i++) {
+      var item = changeDraft.changes[i];
+      if (!item) continue;
+      if (item.elementRef === el) return item;
+    }
+    return null;
+  }
+
+  function findChangeItemBySelectorPath(changeDraft, selectorPath) {
+    if (!changeDraft || !Array.isArray(changeDraft.changes) || !selectorPath) return null;
+    for (var i = 0; i < changeDraft.changes.length; i++) {
+      var item = changeDraft.changes[i];
+      if (!item) continue;
+      if (item.selectorPath === selectorPath) return item;
+    }
+    return null;
+  }
+
+  function refreshChangeItemRuntimeMeta(changeItem, el, targetMeta) {
+    if (!changeItem) return changeItem;
+    var meta = targetMeta || buildChangeTargetMeta(el || changeItem.elementRef);
+    changeItem.targetName = meta.targetName;
+    changeItem.targetHint = meta.targetHint;
+    changeItem.selector = meta.selector;
+    changeItem.selectorPath = meta.selectorPath;
+    changeItem.textHint = meta.textHint;
+    changeItem.rect = meta.rect;
+    changeItem.scroll = meta.scroll;
+    changeItem.elementRef = el || meta.elementRef || null;
+    changeItem.updatedAt = new Date().toISOString();
+    return changeItem;
+  }
+
+  function findChangePatch(changeItem, prop) {
+    if (!changeItem || !Array.isArray(changeItem.patches) || !prop) return null;
+    for (var i = 0; i < changeItem.patches.length; i++) {
+      var patch = changeItem.patches[i];
+      if (patch && patch.prop === prop) return patch;
+    }
+    return null;
+  }
+
+  function pruneEmptyChangeItem(changeItem) {
+    var changeDraft = state.v12.changeDraft;
+    if (!changeDraft || !changeItem || Array.isArray(changeItem.patches) && changeItem.patches.length) return false;
+    changeDraft.changes = (changeDraft.changes || []).filter(function (item) {
+      return item && item !== changeItem;
+    });
+    changeDraft.updatedAt = new Date().toISOString();
+    return true;
+  }
+
+  function sanitizeChangeDraftForDebug(source) {
+    if (!source) return null;
+    return JSON.parse(JSON.stringify(source, function (key, value) {
+      if (key === "elementRef") return undefined;
+      return value;
+    }));
+  }
+
+  function getAiChangeDraftStorageKey(pageKey) {
+    var normalizedPageKey = normalizePromptValue(pageKey, normalizePageKey(location.href));
+    return AI_CHANGE_DRAFT_STORAGE_KEY_PREFIX + normalizedPageKey;
+  }
+
+  function sanitizeChangeDraftForStorage(source) {
+    if (!source || typeof source !== "object") return null;
+    var pageKey = normalizePromptValue(source.pageKey, normalizePageKey(location.href));
+    if (!pageKey) return null;
+    var now = new Date().toISOString();
+    var sanitized = {
+      draftId: normalizePromptValue(source.draftId, "change-draft:" + pageKey),
+      pageKey: pageKey,
+      pageUrl: normalizePromptValue(source.pageUrl, normalizePromptValue(location.href, "")),
+      pageTitle: normalizePromptValue(source.pageTitle, normalizePromptValue(document.title, "")),
+      viewport: buildViewportSnapshot(),
+      createdAt: normalizePromptValue(source.createdAt, now),
+      updatedAt: now,
+      version: DRAFT_SCHEMA_VERSION,
+      changes: []
+    };
+    var viewport = source.viewport && typeof source.viewport === "object" ? source.viewport : null;
+    if (viewport) {
+      sanitized.viewport = {
+        width: Math.max(0, parseInt(viewport.width, 10) || 0),
+        height: Math.max(0, parseInt(viewport.height, 10) || 0)
+      };
+    }
+    var changes = Array.isArray(source.changes) ? source.changes : [];
+    sanitized.changes = changes.map(function (changeItem) {
+      if (!changeItem || typeof changeItem !== "object") return null;
+      var patches = Array.isArray(changeItem.patches) ? changeItem.patches.map(function (patch) {
+        if (!patch || typeof patch !== "object") return null;
+        var prop = normalizePromptValue(patch.prop, "");
+        if (!prop) return null;
+        return {
+          id: normalizePromptValue(patch.id, makeChangeEntityId("change-patch")),
+          prop: prop,
+          from: normalizePromptValue(patch.from, ""),
+          to: normalizePromptValue(patch.to, ""),
+          createdAt: normalizePromptValue(patch.createdAt, now),
+          updatedAt: normalizePromptValue(patch.updatedAt, now)
+        };
+      }).filter(Boolean) : [];
+      if (!patches.length) return null;
+      var targetHint = changeItem.targetHint;
+      var normalizedTargetHint = "无";
+      if (typeof targetHint === "string") {
+        normalizedTargetHint = normalizePromptValue(targetHint, "无");
+      } else if (targetHint && typeof targetHint === "object") {
+        normalizedTargetHint = {
+          label: normalizePromptValue(targetHint.label, ""),
+          className: normalizePromptValue(targetHint.className, ""),
+          tagName: normalizePromptValue(targetHint.tagName, ""),
+          text: normalizePromptValue(targetHint.text, "")
+        };
+      }
+      return {
+        id: normalizePromptValue(changeItem.id, makeChangeEntityId("change-item")),
+        targetName: normalizePromptValue(changeItem.targetName, "页面元素"),
+        targetHint: normalizedTargetHint,
+        selector: normalizePromptValue(changeItem.selector, ""),
+        selectorPath: normalizePromptValue(changeItem.selectorPath, ""),
+        textHint: normalizePromptValue(changeItem.textHint, ""),
+        rect: changeItem.rect && typeof changeItem.rect === "object" ? normalizeRect(changeItem.rect) : null,
+        scroll: changeItem.scroll && typeof changeItem.scroll === "object" ? {
+          x: Math.round(changeItem.scroll.x || 0),
+          y: Math.round(changeItem.scroll.y || 0)
+        } : null,
+        createdAt: normalizePromptValue(changeItem.createdAt, now),
+        updatedAt: normalizePromptValue(changeItem.updatedAt, now),
+        patches: patches
+      };
+    }).filter(Boolean);
+    return sanitized;
+  }
+
+  function restoreChangeDraftFromStorage(rawDraft) {
+    if (!rawDraft || typeof rawDraft !== "object") return null;
+    if (rawDraft.version !== DRAFT_SCHEMA_VERSION) return null;
+    var pageKey = normalizePageKey(location.href);
+    var sanitized = sanitizeChangeDraftForStorage({
+      draftId: rawDraft.draftId,
+      pageKey: rawDraft.pageKey || pageKey,
+      pageUrl: rawDraft.pageUrl || location.href,
+      pageTitle: rawDraft.pageTitle || document.title || "",
+      viewport: rawDraft.viewport,
+      createdAt: rawDraft.createdAt,
+      updatedAt: rawDraft.updatedAt,
+      version: rawDraft.version,
+      changes: rawDraft.changes
+    });
+    if (!sanitized) return null;
+    if (sanitized.pageKey !== pageKey) return null;
+    sanitized.changes = sanitized.changes.map(function (changeItem) {
+      changeItem.elementRef = null;
+      return changeItem;
+    });
+    return sanitized;
+  }
+
+  function saveChangeDraftToStorage() {
+    var draft = sanitizeChangeDraftForStorage(state.v12.changeDraft);
+    if (!draft || !draft.pageKey) return false;
+    try {
+      if (!draft.changes.length) {
+        window.localStorage.removeItem(getAiChangeDraftStorageKey(draft.pageKey));
+        return true;
+      }
+      window.localStorage.setItem(getAiChangeDraftStorageKey(draft.pageKey), JSON.stringify(draft));
+      return true;
+    } catch (err) {
+      console.warn("[visual-qa][ai-change] save storage failed:", err);
+      return false;
+    }
+  }
+
+  function loadChangeDraftFromStorage() {
+    var pageKey = normalizePageKey(location.href);
+    if (!pageKey) return null;
+    try {
+      var raw = window.localStorage.getItem(getAiChangeDraftStorageKey(pageKey));
+      if (!raw) return null;
+      return restoreChangeDraftFromStorage(JSON.parse(raw));
+    } catch (err) {
+      console.warn("[visual-qa][ai-change] load storage failed:", err);
+      return null;
+    }
+  }
+
+  function deleteChangeDraftFromStorage(pageKey) {
+    var key = getAiChangeDraftStorageKey(pageKey || (state.v12.changeDraft && state.v12.changeDraft.pageKey) || normalizePageKey(location.href));
+    try {
+      window.localStorage.removeItem(key);
+      return true;
+    } catch (err) {
+      console.warn("[visual-qa][ai-change] delete storage failed:", err);
+      return false;
+    }
+  }
+
+  function scheduleSaveChangeDraft() {
+    window.clearTimeout(aiChangeDraftPersistTimer);
+    aiChangeDraftPersistTimer = window.setTimeout(function () {
+      aiChangeDraftPersistTimer = 0;
+      saveChangeDraftToStorage();
+    }, AI_CHANGE_DRAFT_PERSIST_DELAY);
+  }
+
+  function cancelScheduledAiChangeDraftSave() {
+    if (!aiChangeDraftPersistTimer) return;
+    window.clearTimeout(aiChangeDraftPersistTimer);
+    aiChangeDraftPersistTimer = 0;
+  }
+
+  function loadChangeDraftState() {
+    var pageKey = normalizePageKey(location.href);
+    if (!pageKey) return;
+    var restoredDraft = loadChangeDraftFromStorage();
+    state.v12.changeDraft = restoredDraft || buildEmptyChangeDraft(pageKey);
+  }
+
+  function cloneChangeDraftForDebug() {
+    return sanitizeChangeDraftForDebug(state.v12.changeDraft);
+  }
+
+  function publishChangeDraftDebugSnapshot() {
+    var sanitizedDraft = cloneChangeDraftForDebug();
+    console.debug("[visual-qa][change-draft]", sanitizedDraft);
+    return sanitizedDraft;
+  }
+
+  function cloneChangeItemSnapshot(changeItem) {
+    if (!changeItem || typeof changeItem !== "object") return null;
+    return {
+      id: changeItem.id || "",
+      targetName: changeItem.targetName || "",
+      targetHint: changeItem.targetHint || null,
+      selector: changeItem.selector || "",
+      selectorPath: changeItem.selectorPath || "",
+      textHint: changeItem.textHint || "",
+      rect: changeItem.rect ? normalizeRect(changeItem.rect) : null,
+      scroll: changeItem.scroll ? {
+        x: Math.round(changeItem.scroll.x || 0),
+        y: Math.round(changeItem.scroll.y || 0)
+      } : null,
+      elementRef: changeItem.elementRef || null,
+      patches: Array.isArray(changeItem.patches) ? changeItem.patches.map(function (patch) {
+        return patch ? {
+          id: patch.id || "",
+          prop: patch.prop || "",
+          from: patch.from,
+          to: patch.to,
+          createdAt: patch.createdAt || "",
+          updatedAt: patch.updatedAt || ""
+        } : null;
+      }).filter(Boolean) : []
+    };
+  }
+
+  function runWithoutChangeRecord(fn) {
+    state.v12.changeRecordSkipDepth = Math.max(0, state.v12.changeRecordSkipDepth || 0) + 1;
+    try {
+      return typeof fn === "function" ? fn() : undefined;
+    } finally {
+      state.v12.changeRecordSkipDepth = Math.max(0, (state.v12.changeRecordSkipDepth || 1) - 1);
+    }
+  }
+
+  function shouldSkipChangeRecord() {
+    return !!(state.v12 && state.v12.changeRecordSkipDepth > 0);
+  }
+
+  function appendChangePatch(el, prop, from, to, options) {
+    options = options || {};
+    if (!el || !prop || shouldSkipChangeRecord()) return null;
+    var normalizedFrom = normalizeChangeComparableValue(from);
+    var normalizedTo = normalizeChangeComparableValue(to);
+    if (normalizedFrom === normalizedTo) return null;
+    var changeDraft = ensureActiveChangeDraft();
+    var targetMeta = buildChangeTargetMeta(el);
+    var changeItem = findChangeItemByElement(changeDraft, el) || findChangeItemBySelectorPath(changeDraft, targetMeta.selectorPath);
+    var now = new Date().toISOString();
+    if (!changeItem) {
+      changeItem = {
+        id: makeChangeEntityId("change-item"),
+        targetName: targetMeta.targetName,
+        targetHint: targetMeta.targetHint,
+        selector: targetMeta.selector,
+        selectorPath: targetMeta.selectorPath,
+        textHint: targetMeta.textHint,
+        rect: targetMeta.rect,
+        scroll: targetMeta.scroll,
+        elementRef: targetMeta.elementRef,
+        createdAt: now,
+        updatedAt: now,
+        patches: []
+      };
+      changeDraft.changes.push(changeItem);
+    } else {
+      refreshChangeItemRuntimeMeta(changeItem, el, targetMeta);
+    }
+    var existingPatch = findChangePatch(changeItem, prop);
+    if (existingPatch) {
+      if (normalizedTo === normalizeChangeComparableValue(existingPatch.from)) {
+        changeItem.patches = changeItem.patches.filter(function (patch) {
+          return patch && patch !== existingPatch;
+        });
+        pruneEmptyChangeItem(changeItem);
+      } else {
+        existingPatch.to = normalizedTo;
+        existingPatch.updatedAt = now;
+      }
+    } else {
+      changeItem.patches.push({
+        id: makeChangeEntityId("change-patch"),
+        prop: prop,
+        from: normalizedFrom,
+        to: normalizedTo,
+        createdAt: now,
+        updatedAt: now
+      });
+    }
+    changeDraft.updatedAt = now;
+    publishChangeDraftDebugSnapshot();
+    scheduleSaveChangeDraft();
+    refreshAiChangePanelNow();
+    return changeItem;
+  }
+
+  function removeChangePatch(el, prop) {
+    if (!el || !prop) return false;
+    var changeDraft = state.v12.changeDraft;
+    if (!changeDraft || !Array.isArray(changeDraft.changes)) return false;
+    var targetMeta = buildChangeTargetMeta(el);
+    var changeItem = findChangeItemByElement(changeDraft, el) || findChangeItemBySelectorPath(changeDraft, targetMeta.selectorPath);
+    if (!changeItem || !Array.isArray(changeItem.patches)) return false;
+    var nextPatches = changeItem.patches.filter(function (patch) {
+      return !(patch && patch.prop === prop);
+    });
+    if (nextPatches.length === changeItem.patches.length) return false;
+    changeItem.patches = nextPatches;
+    refreshChangeItemRuntimeMeta(changeItem, el, targetMeta);
+    pruneEmptyChangeItem(changeItem);
+    changeDraft.updatedAt = new Date().toISOString();
+    publishChangeDraftDebugSnapshot();
+    scheduleSaveChangeDraft();
+    refreshAiChangePanelNow();
+    return true;
+  }
+
   function isCompatibleDraftShape(draft) {
     return !!(draft && typeof draft === "object" && draft.version === DRAFT_SCHEMA_VERSION && Array.isArray(draft.records));
   }
@@ -694,6 +1168,14 @@
         console.warn("[visual-qa][v1.2] draft bridge unavailable:", err);
       }
     }
+  }
+
+  function initializeAiChangeDraftState() {
+    loadChangeDraftState();
+    state.v12.aiChangePanelOpen = false;
+    state.v12.aiChangeRenderSignature = "";
+    state.v12.aiChangePanelScrollTop = 0;
+    replayPersistedAiChanges();
   }
 
   function px(v) {
@@ -1939,20 +2421,20 @@
     if (!targetEl || !targetEl.style) return;
     var snapshot = getBackgroundFillSnapshotForTarget(targetEl);
     if (!snapshot) {
-      applyStyle("background", "", targetEl);
-      applyStyle("backgroundImage", "", targetEl);
+      applyStyle("background", "", targetEl, { skipChangeRecord: true });
+      applyStyle("backgroundImage", "", targetEl, { skipChangeRecord: true });
       applyStyle("backgroundColor", "", targetEl);
       clearBackgroundFillSourceForTarget(targetEl);
       clearBackgroundModifiedProps();
       return;
     }
     if (snapshot.restoreComputed) {
-      applyStyle("background", "", targetEl);
-      applyStyle("backgroundImage", "", targetEl);
+      applyStyle("background", "", targetEl, { skipChangeRecord: true });
+      applyStyle("backgroundImage", "", targetEl, { skipChangeRecord: true });
       applyStyle("backgroundColor", "", targetEl);
     } else {
-      applyStyle("background", snapshot.background || "", targetEl);
-      applyStyle("backgroundImage", snapshot.backgroundImage || "", targetEl);
+      applyStyle("background", snapshot.background || "", targetEl, { skipChangeRecord: true });
+      applyStyle("backgroundImage", snapshot.backgroundImage || "", targetEl, { skipChangeRecord: true });
       applyStyle("backgroundColor", snapshot.backgroundColor || "", targetEl);
     }
     clearBackgroundFillSnapshotForTarget(targetEl);
@@ -3305,6 +3787,15 @@
     return draft ? JSON.parse(JSON.stringify(draft)) : null;
   }
 
+  try {
+    Object.defineProperty(window, "__VQA_CHANGE_DRAFT__", {
+      configurable: true,
+      get: function () {
+        return cloneChangeDraftForDebug();
+      }
+    });
+  } catch (err) {}
+
   async function persistCurrentDraft() {
     var draft = state.v12.draft;
     if (!draft || !draft.pageKey) return;
@@ -3736,6 +4227,1009 @@
     }, 2200);
   }
 
+  function getChangeDraftItems() {
+    var changeDraft = state.v12.changeDraft;
+    return changeDraft && Array.isArray(changeDraft.changes) ? changeDraft.changes.filter(Boolean) : [];
+  }
+
+  function getAiChangeCount() {
+    return getChangeDraftItems().length;
+  }
+
+  function isNodeInsideAiChangePanel(node) {
+    return !!(node && aiChangePopover && aiChangePopover.contains && aiChangePopover.contains(node));
+  }
+
+  function isEventInsideAiChangePanel(event) {
+    if (!event) return false;
+    if (typeof event.composedPath === "function") {
+      var path = event.composedPath();
+      if (path && path.indexOf && path.indexOf(aiChangePopover) !== -1) return true;
+    }
+    return isNodeInsideAiChangePanel(event.target || null);
+  }
+
+  function buildAiChangeRenderSignature(changes) {
+    var items = Array.isArray(changes) ? changes : [];
+    return items.map(function (changeItem) {
+      var patches = Array.isArray(changeItem && changeItem.patches) ? changeItem.patches : [];
+      return [
+        changeItem && changeItem.id ? changeItem.id : "",
+        patches.length,
+        patches.map(function (patch) {
+          return [
+            patch && patch.prop ? patch.prop : "",
+            patch && patch.from != null ? String(patch.from) : "",
+            patch && patch.to != null ? String(patch.to) : ""
+          ].join("::");
+        }).join("|")
+      ].join("##");
+    }).join("@@");
+  }
+
+  function getAiChangeListEl() {
+    return aiChangePopover.querySelector(".v12-ai-change-list");
+  }
+
+  function handleAiChangeListScroll(e) {
+    var listEl = e && e.currentTarget ? e.currentTarget : getAiChangeListEl();
+    if (!listEl) return;
+    state.v12.aiChangePanelScrollTop = listEl.scrollTop || 0;
+  }
+
+  function bindAiChangeListScroll(listEl) {
+    if (!listEl) return;
+    listEl.onscroll = handleAiChangeListScroll;
+  }
+
+  function restoreAiChangeListScroll(listEl) {
+    if (!listEl) return;
+    listEl.scrollTop = state.v12.aiChangePanelScrollTop || 0;
+  }
+
+  function formatAiChangePropLabel(prop) {
+    var map = {
+      width: "宽度",
+      height: "高度",
+      fontSize: "字号",
+      lineHeight: "行高",
+      color: "字色",
+      backgroundColor: "背景色",
+      borderRadius: "圆角",
+      opacity: "透明度",
+      padding: "内边距",
+      paddingTop: "上内边距",
+      paddingRight: "右内边距",
+      paddingBottom: "下内边距",
+      paddingLeft: "左内边距",
+      margin: "外边距",
+      marginTop: "上外边距",
+      marginRight: "右外边距",
+      marginBottom: "下外边距",
+      marginLeft: "左外边距",
+      fontWeight: "字重",
+      fontFamily: "字体"
+    };
+    return map[prop] || String(prop || "");
+  }
+
+  function normalizePromptValue(value, fallbackText) {
+    if (value == null) return fallbackText || "";
+    if (typeof value === "string") {
+      var trimmed = value.trim();
+      return trimmed ? trimmed : fallbackText || "";
+    }
+    if (typeof value === "number" || typeof value === "boolean") {
+      return String(value);
+    }
+    return fallbackText || "";
+  }
+
+  function escapeMarkdownInline(value) {
+    return String(normalizePromptValue(value, "无")).replace(/`/g, "ˋ");
+  }
+
+  function truncatePromptText(text, maxLen) {
+    var normalized = normalizePromptValue(text, "");
+    if (!normalized) return "";
+    var limit = Math.max(0, maxLen || 0);
+    if (!limit || normalized.length <= limit) return normalized;
+    return normalized.slice(0, Math.max(0, limit - 1)).trim() + "…";
+  }
+
+  function toKebabCaseProp(prop) {
+    var normalized = normalizePromptValue(prop, "");
+    if (!normalized) return "无";
+    return normalized.replace(/([a-z0-9])([A-Z])/g, "$1-$2").replace(/_/g, "-").toLowerCase();
+  }
+
+  function extractTagNameFromSelector(selector) {
+    var normalized = normalizePromptValue(selector, "");
+    if (!normalized) return "";
+    var match = normalized.match(/^[a-zA-Z][a-zA-Z0-9-]*/);
+    return match ? match[0].toLowerCase() : "";
+  }
+
+  function getAiPromptItemTagName(changeItem) {
+    var targetHint = changeItem && changeItem.targetHint;
+    var tagName = normalizePromptValue(targetHint && targetHint.tagName, "");
+    if (tagName) return tagName.toLowerCase();
+    tagName = extractTagNameFromSelector(changeItem && changeItem.selector);
+    if (tagName) return tagName;
+    tagName = extractTagNameFromSelector(changeItem && changeItem.selectorPath);
+    return tagName || "";
+  }
+
+  function getAiPromptItemTitle(changeItem, index) {
+    var tagName = getAiPromptItemTagName(changeItem);
+    var textHint = truncatePromptText(changeItem && changeItem.textHint, 30);
+    if (!textHint) {
+      textHint = truncatePromptText(changeItem && changeItem.targetName, 30);
+    }
+    if (tagName && textHint) {
+      return "### " + String((index || 0) + 1) + ". " + tagName + ': "' + textHint.replace(/"/g, '\\"') + '"';
+    }
+    return "### " + String((index || 0) + 1) + ". 未命名元素";
+  }
+
+  function extractSelectorClassNames(selector) {
+    var normalized = normalizePromptValue(selector, "");
+    if (!normalized) return [];
+    var classMatches = normalized.match(/\.([A-Za-z0-9_-]+)/g) || [];
+    return classMatches.map(function (match) {
+      return match.slice(1);
+    }).filter(Boolean);
+  }
+
+  function buildAiPromptTargetSelector(changeItem) {
+    var selector = normalizePromptValue(changeItem && changeItem.selector, "");
+    if (!selector) return "无";
+    var tagName = extractTagNameFromSelector(selector);
+    var classNames = extractSelectorClassNames(selector);
+    if (classNames.length) {
+      return (tagName || "") + "." + classNames[0];
+    }
+    var idMatch = selector.match(/#([A-Za-z0-9_-]+)/);
+    if (idMatch) {
+      return (tagName || "") + "#" + idMatch[1];
+    }
+    return tagName || selector;
+  }
+
+  function collectAiPromptClassNames(changeItem) {
+    var classMap = {};
+    var classNames = [];
+    function addClassName(value) {
+      var normalized = normalizePromptValue(value, "");
+      if (!normalized || classMap[normalized]) return;
+      classMap[normalized] = true;
+      classNames.push(normalized);
+    }
+    extractSelectorClassNames(changeItem && changeItem.selector).forEach(addClassName);
+    var targetHint = changeItem && changeItem.targetHint;
+    var targetHintClass = normalizePromptValue(targetHint && targetHint.className, "");
+    if (targetHintClass) {
+      targetHintClass.split(/\s+/).filter(Boolean).forEach(addClassName);
+    }
+    return classNames;
+  }
+
+  function expandAiPromptClassCandidates(className) {
+    var candidates = [];
+    function push(value) {
+      var normalized = normalizePromptValue(value, "");
+      if (!normalized || candidates.indexOf(normalized) !== -1) return;
+      candidates.push(normalized);
+    }
+    push(className);
+    var cssModuleMatch = String(className || "").match(/^([A-Za-z0-9-]+)_([A-Za-z0-9-]+)__([A-Za-z0-9-]+)$/);
+    if (cssModuleMatch) {
+      push(cssModuleMatch[2]);
+      push(cssModuleMatch[1] + "_" + cssModuleMatch[2]);
+    }
+    return candidates;
+  }
+
+  function formatAiPromptClassCandidates(changeItem) {
+    var sourceClasses = collectAiPromptClassNames(changeItem);
+    if (!sourceClasses.length) return "无";
+    var primaryCandidates = [];
+    var secondaryCandidates = [];
+    function pushCandidate(list, value) {
+      if (list.indexOf(value) === -1) list.push(value);
+    }
+    sourceClasses.forEach(function (className) {
+      expandAiPromptClassCandidates(className).forEach(function (candidate) {
+        if (candidate.indexOf(".") !== -1) {
+          pushCandidate(secondaryCandidates, candidate);
+        } else {
+          pushCandidate(primaryCandidates, candidate);
+        }
+      });
+    });
+    var candidates = primaryCandidates.concat(secondaryCandidates);
+    return candidates.length ? candidates.join(", ") : "无";
+  }
+
+  function formatAiChangePromptTargetHint(targetHint) {
+    if (typeof targetHint === "string") {
+      return normalizePromptValue(targetHint, "无");
+    }
+    if (!targetHint || typeof targetHint !== "object") return "无";
+    var parts = [
+      normalizePromptValue(targetHint.label, ""),
+      normalizePromptValue(targetHint.className, ""),
+      normalizePromptValue(targetHint.tagName, "")
+    ].filter(Boolean);
+    if (parts.length) return parts.join(" / ");
+    return normalizePromptValue(targetHint.text, "无");
+  }
+
+  function formatAiChangePromptPatch(patch) {
+    if (!patch) return "";
+    var rawProp = normalizePromptValue(patch.prop, "无");
+    return (
+      toKebabCaseProp(rawProp) +
+      " `" +
+      escapeMarkdownInline(normalizePromptValue(patch.from, "无")) +
+      "`→`" +
+      escapeMarkdownInline(normalizePromptValue(patch.to, "无")) +
+      "`"
+    );
+  }
+
+  function formatAiChangePromptItem(changeItem, index) {
+    if (!changeItem) return "";
+    var patches = Array.isArray(changeItem.patches) ? changeItem.patches.map(formatAiChangePromptPatch).filter(Boolean) : [];
+    var locationValue = normalizePromptValue(changeItem.selectorPath, normalizePromptValue(changeItem.selector, "无"));
+    var feedbackInline = patches.length ? patches.join("; ") : "无";
+    return [
+      getAiPromptItemTitle(changeItem, index),
+      "",
+      "**Location:** `" + escapeMarkdownInline(locationValue) + "`",
+      "**Targets:** `" + escapeMarkdownInline(buildAiPromptTargetSelector(changeItem)) + "`",
+      "**Classes:** `" + escapeMarkdownInline(formatAiPromptClassCandidates(changeItem)) + "`",
+      "**Feedback:** " + feedbackInline,
+      ""
+    ].join("\n");
+  }
+
+  function buildAiChangePrompt() {
+    var draft = state.v12.changeDraft;
+    var changes = draft && Array.isArray(draft.changes) ? draft.changes.filter(Boolean) : [];
+    if (!changes.length) return "";
+    var pageUrl = normalizePromptValue(draft && draft.pageUrl, normalizePromptValue(location.href, "无"));
+    var pathname = "/";
+    try {
+      pathname = new URL(pageUrl).pathname || "/";
+    } catch (err) {
+      pathname = normalizePromptValue(location.pathname, "/");
+    }
+    var viewport = draft && draft.viewport && typeof draft.viewport === "object" ? draft.viewport : null;
+    var viewportWidth = normalizePromptValue(viewport && viewport.width, String(Math.max(0, Math.round(window.innerWidth || 0))));
+    var viewportHeight = normalizePromptValue(viewport && viewport.height, String(Math.max(0, Math.round(window.innerHeight || 0))));
+    return [
+      "## Page Feedback: " + normalizePromptValue(pathname, "/"),
+      "",
+      "**URL:** " + pageUrl,
+      "**Viewport:** " + viewportWidth + "×" + viewportHeight,
+      "",
+      "请根据以下浏览器临时调试结果，在源码/样式文件中落地视觉修改。保持 DOM 结构、交互和业务逻辑不变；只处理列出的样式。若 class 为共享样式，请结合 Location、文本和页面模块做局部修改，避免影响无关同类元素。不要为了匹配 Location 强行写复杂 nth-of-type 选择器。",
+      "",
+      changes.map(function (changeItem, index) {
+        return formatAiChangePromptItem(changeItem, index);
+      }).join("\n")
+    ].join("\n");
+  }
+
+  function buildSingleAiChangePrompt(changeItem) {
+    if (!changeItem) return "";
+    var draft = state.v12.changeDraft;
+    var pageTitle = normalizePromptValue(draft && draft.pageTitle, normalizePromptValue(document.title, "无"));
+    var pageUrl = normalizePromptValue(draft && draft.pageUrl, normalizePromptValue(location.href, "无"));
+    var viewport = draft && draft.viewport && typeof draft.viewport === "object" ? draft.viewport : null;
+    var viewportWidth = normalizePromptValue(viewport && viewport.width, String(Math.max(0, Math.round(window.innerWidth || 0))));
+    var viewportHeight = normalizePromptValue(viewport && viewport.height, String(Math.max(0, Math.round(window.innerHeight || 0))));
+    var tagName = getAiPromptItemTagName(changeItem) || normalizePromptValue(changeItem.targetName, "未命名元素");
+    var locator = normalizePromptValue(changeItem.selectorPath, normalizePromptValue(changeItem.selector, "无"));
+    var textHint = normalizePromptValue(changeItem.textHint, "无");
+    var targetHint = formatAiChangePromptTargetHint(changeItem.targetHint);
+    var targetName = normalizePromptValue(changeItem.targetName, "无");
+    var patches = Array.isArray(changeItem.patches) ? changeItem.patches.filter(Boolean) : [];
+    return [
+      "## Page Change Request",
+      "**Title:** " + pageTitle,
+      "**URL:** " + pageUrl,
+      "**Viewport:** " + viewportWidth + " × " + viewportHeight,
+      "",
+      "Please apply the following UI change only to the specified target.",
+      "Do not modify unrelated styles or layout.",
+      "",
+      "### 1. " + tagName,
+      "- Target name: " + targetName,
+      "- Target hint: " + targetHint,
+      "- Locator: `" + escapeMarkdownInline(locator) + "`",
+      "- Visible text: " + textHint,
+      "- Changes:",
+      patches.length ? patches.map(function (patch) {
+        var propName = toKebabCaseProp(patch && patch.prop);
+        var fromValue = normalizePromptValue(patch && patch.from, "无");
+        var toValue = normalizePromptValue(patch && patch.to, "无");
+        return "  - " + propName + ": " + fromValue + " -> " + toValue;
+      }).join("\n") : "  - 无"
+    ].join("\n");
+  }
+
+  function fallbackCopyText(text) {
+    var textarea = document.createElement("textarea");
+    textarea.value = String(text || "");
+    textarea.setAttribute("readonly", "readonly");
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    textarea.style.pointerEvents = "none";
+    textarea.style.left = "-9999px";
+    textarea.style.top = "0";
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    var copied = false;
+    try {
+      copied = !!document.execCommand("copy");
+    } catch (err) {
+      copied = false;
+    }
+    document.body.removeChild(textarea);
+    return copied;
+  }
+
+  function showCopySuccessNotice() {
+    showV12Notice("已复制 AI 修改提示词");
+  }
+
+  function showSingleAiChangeCopySuccessNotice() {
+    showV12Notice("已复制该项 Prompt");
+  }
+
+  function showCopyFailNotice() {
+    showV12Notice("复制失败，请重试");
+  }
+
+  function showAiChangeDeleteSuccessNotice() {
+    showV12Notice("已删除并恢复修改");
+  }
+
+  function showAiChangeRestoreFailNotice() {
+    showV12Notice("目标元素暂时无法定位，无法恢复样式");
+  }
+
+  function showAiChangeClearSuccessNotice() {
+    showV12Notice("已清空并恢复 AI 修改");
+  }
+
+  function showAiChangeClearPartialNotice() {
+    showV12Notice("已清空 AI 修改，部分元素未定位");
+  }
+
+  function copyAiChangePrompt() {
+    var text = buildAiChangePrompt();
+    if (!text) return Promise.resolve(false);
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+      return navigator.clipboard.writeText(text).then(function () {
+        showCopySuccessNotice();
+        return true;
+      }).catch(function () {
+        var copied = fallbackCopyText(text);
+        if (copied) {
+          showCopySuccessNotice();
+          return true;
+        }
+        showCopyFailNotice();
+        return false;
+      });
+    }
+    if (fallbackCopyText(text)) {
+      showCopySuccessNotice();
+      return Promise.resolve(true);
+    }
+    showCopyFailNotice();
+    return Promise.resolve(false);
+  }
+
+  function copySingleAiChangePrompt(changeItemId) {
+    var changeItem = findChangeItemById(changeItemId);
+    var text = buildSingleAiChangePrompt(changeItem);
+    if (!text) return Promise.resolve(false);
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+      return navigator.clipboard.writeText(text).then(function () {
+        showSingleAiChangeCopySuccessNotice();
+        return true;
+      }).catch(function () {
+        var copied = fallbackCopyText(text);
+        if (copied) {
+          showSingleAiChangeCopySuccessNotice();
+          return true;
+        }
+        showCopyFailNotice();
+        return false;
+      });
+    }
+    if (fallbackCopyText(text)) {
+      showSingleAiChangeCopySuccessNotice();
+      return Promise.resolve(true);
+    }
+    showCopyFailNotice();
+    return Promise.resolve(false);
+  }
+
+  function getAiChangeItemSecondaryText(changeItem) {
+    if (!changeItem) return "";
+    var targetHint = changeItem.targetHint || {};
+    return (
+      String(targetHint.label || "").trim() ||
+      String(targetHint.className || "").trim() ||
+      String(changeItem.selector || "").trim() ||
+      String(changeItem.selectorPath || "").trim()
+    );
+  }
+
+  function ensureAiChangePanelStyles() {
+    if (document.getElementById("v12-ai-change-panel-styles")) return;
+    var style = document.createElement("style");
+    style.id = "v12-ai-change-panel-styles";
+    style.textContent =
+      ".v12-ai-change-panel{width:320px;max-height:min(520px,calc(100vh - 160px));display:flex;flex-direction:column;overflow:hidden;background:rgba(16,18,22,.98);border:1px solid rgba(255,255,255,.1);border-radius:18px;box-shadow:0 18px 36px rgba(15,23,42,.32);}" +
+      ".v12-ai-change-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 16px 12px;border-bottom:1px solid rgba(255,255,255,.08);}" +
+      ".v12-ai-change-title{margin:0;color:#fff;font:700 16px/1.3 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;}" +
+      ".v12-ai-change-meta{margin:2px 0 0;color:rgba(255,255,255,.6);font:12px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;}" +
+      ".v12-ai-change-head-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex:0 0 auto;}" +
+      ".v12-ai-change-copy{display:inline-flex;align-items:center;justify-content:center;height:30px;padding:0 10px;border:1px solid rgba(255,255,255,.12);border-radius:9px;background:rgba(255,255,255,.04);color:rgba(255,255,255,.8);font:500 12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;transition:background-color 120ms ease,border-color 120ms ease,color 120ms ease,opacity 120ms ease;}" +
+      ".v12-ai-change-copy:hover:not(:disabled){background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.18);color:#fff;}" +
+      ".v12-ai-change-copy:active:not(:disabled){background:rgba(255,255,255,.12);}" +
+      ".v12-ai-change-copy:disabled{opacity:.42;cursor:not-allowed;}" +
+      ".v12-ai-change-clear{display:inline-flex;align-items:center;justify-content:center;height:30px;padding:0 10px;border:1px solid rgba(255,255,255,.1);border-radius:9px;background:transparent;color:rgba(255,255,255,.66);font:500 12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;transition:background-color 120ms ease,border-color 120ms ease,color 120ms ease,opacity 120ms ease;}" +
+      ".v12-ai-change-clear:hover:not(:disabled){background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.16);color:#fff;}" +
+      ".v12-ai-change-clear:active:not(:disabled){background:rgba(255,255,255,.1);}" +
+      ".v12-ai-change-clear:disabled{opacity:.42;cursor:not-allowed;}" +
+      ".v12-ai-change-close{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border:0;border-radius:8px;background:rgba(255,255,255,.06);color:rgba(255,255,255,.78);cursor:pointer;}" +
+      ".v12-ai-change-body{display:flex;flex-direction:column;min-height:0;flex:1 1 auto;overflow:hidden;padding:14px;}" +
+      ".v12-ai-change-list{display:flex;flex-direction:column;gap:10px;min-height:0;flex:1 1 auto;overflow-y:auto;overscroll-behavior:contain;padding:0 0 10px;}" +
+      ".v12-ai-change-empty{padding:14px;border:1px dashed rgba(255,255,255,.12);border-radius:14px;color:rgba(255,255,255,.58);font:13px/1.6 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;}" +
+      ".v12-ai-change-card{display:flex;flex-direction:column;gap:10px;width:100%;padding:14px;border:1px solid rgba(255,255,255,.08);border-radius:14px;background:rgba(255,255,255,.04);color:#fff;text-align:left;cursor:pointer;transition:background-color 120ms ease,border-color 120ms ease,transform 120ms ease;}" +
+      ".v12-ai-change-card:hover{background:rgba(255,255,255,.07);border-color:rgba(255,255,255,.16);}" +
+      ".v12-ai-change-card:active{transform:translateY(1px);}" +
+      ".v12-ai-change-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;}" +
+      ".v12-ai-change-card-side{display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex:0 0 auto;}" +
+      ".v12-ai-change-card-actions{display:flex;align-items:center;gap:6px;opacity:0;pointer-events:none;transition:opacity 120ms ease;}" +
+      ".v12-ai-change-card:hover .v12-ai-change-card-actions,.v12-ai-change-card:focus-visible .v12-ai-change-card-actions,.v12-ai-change-card:focus-within .v12-ai-change-card-actions{opacity:1;pointer-events:auto;}" +
+      ".v12-ai-change-card-action{display:inline-flex;align-items:center;justify-content:center;min-width:24px;height:24px;padding:0 7px;border:1px solid rgba(255,255,255,.12);border-radius:8px;background:rgba(255,255,255,.04);color:rgba(255,255,255,.78);font:12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;transition:background-color 120ms ease,border-color 120ms ease,color 120ms ease;}" +
+      ".v12-ai-change-card-action:hover{background:rgba(255,255,255,.1);border-color:rgba(255,255,255,.2);color:#fff;}" +
+      ".v12-ai-change-card-action:active{background:rgba(255,255,255,.14);}" +
+      ".v12-ai-change-card-title{margin:0;color:#fff;font:600 13px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;word-break:break-word;}" +
+      ".v12-ai-change-card-sub{margin:4px 0 0;color:rgba(255,255,255,.58);font:12px/1.45 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;word-break:break-word;}" +
+      ".v12-ai-change-count{flex:0 0 auto;padding:4px 8px;border-radius:999px;background:rgba(10,118,240,.18);color:#9ED0FF;font:600 11px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;white-space:nowrap;}" +
+      ".v12-ai-change-patches{display:flex;flex-direction:column;gap:8px;}" +
+      ".v12-ai-change-patch{display:flex;flex-direction:column;gap:4px;padding:10px 12px;border-radius:10px;background:rgba(255,255,255,.04);}" +
+      ".v12-ai-change-patch-prop{color:#fff;font:600 12px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;}" +
+      ".v12-ai-change-patch-values{color:rgba(255,255,255,.62);font:12px/1.5 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;word-break:break-word;}" +
+      ".v12-topbar-icon-btn[data-v12-action=\"record-region\"] .v12-topbar-dot{position:absolute;right:7px;top:7px;width:6px;height:6px;border-radius:999px;background:#FF4D4F;box-shadow:0 0 0 2px #343434;display:none;pointer-events:none;}" +
+      ".v12-topbar-icon-btn[data-v12-action=\"record-region\"][data-has-dot=\"true\"] .v12-topbar-dot{display:block;}";
+    document.head.appendChild(style);
+  }
+
+  function buildAiChangePanelHtml(changes) {
+    var items = Array.isArray(changes) ? changes : [];
+    var count = items.length;
+    var hasChanges = count > 0;
+    var bodyHtml = "";
+    if (!count) {
+      bodyHtml =
+        '<div class="v12-ai-change-empty">暂无修改，调整元素属性后会自动收集到这里</div>';
+    } else {
+      bodyHtml = '<div class="v12-ai-change-list">' + items.map(function (changeItem) {
+        var patchCount = changeItem && Array.isArray(changeItem.patches) ? changeItem.patches.length : 0;
+        var patchesHtml = (changeItem.patches || []).map(function (patch) {
+          return (
+            '<div class="v12-ai-change-patch">' +
+            '<div class="v12-ai-change-patch-prop">' + esc(formatAiChangePropLabel(patch && patch.prop)) + "</div>" +
+            '<div class="v12-ai-change-patch-values">' +
+            esc(String(patch && patch.from != null ? patch.from : "")) +
+            " -> " +
+            esc(String(patch && patch.to != null ? patch.to : "")) +
+            "</div>" +
+            "</div>"
+          );
+        }).join("");
+        return (
+          '<div class="v12-ai-change-card" tabindex="0" role="button" data-v12-action="focus-ai-change-item" data-change-item-id="' + esc(changeItem.id || "") + '">' +
+          '<div class="v12-ai-change-card-head">' +
+          '<div style="min-width:0;flex:1 1 auto;">' +
+          '<p class="v12-ai-change-card-title">' + esc(String(changeItem.targetName || "")) + "</p>" +
+          '<p class="v12-ai-change-card-sub">' + esc(getAiChangeItemSecondaryText(changeItem)) + "</p>" +
+          (changeItem && changeItem.textHint ? '<p class="v12-ai-change-card-sub">' + esc(String(changeItem.textHint || "")) + "</p>" : "") +
+          "</div>" +
+          '<div class="v12-ai-change-card-side">' +
+          '<div class="v12-ai-change-card-actions">' +
+          '<button type="button" class="v12-ai-change-card-action" data-v12-action="copy-ai-change-item" data-vqa-action="copy-ai-change-item" data-change-item-id="' + esc(changeItem.id || "") + '" data-change-id="' + esc(changeItem.id || "") + '" aria-label="复制该项 Prompt">复</button>' +
+          '<button type="button" class="v12-ai-change-card-action" data-v12-action="delete-ai-change-item" data-vqa-action="delete-ai-change-item" data-change-item-id="' + esc(changeItem.id || "") + '" data-change-id="' + esc(changeItem.id || "") + '" aria-label="删除并恢复该项修改">删</button>' +
+          "</div>" +
+          '<span class="v12-ai-change-count">' + esc(String(patchCount)) + " 项改动</span>" +
+          "</div>" +
+          "</div>" +
+          '<div class="v12-ai-change-patches">' + patchesHtml + "</div>" +
+          "</div>"
+        );
+      }).join("") + "</div>";
+    }
+    return (
+      '<div class="v12-ai-change-panel" data-v12-ai-change-panel="1">' +
+      '<div class="v12-ai-change-head">' +
+      '<div style="min-width:0;flex:1 1 auto;">' +
+      '<p class="v12-ai-change-title">本次修改</p>' +
+      '<p class="v12-ai-change-meta">已修改元素 ' + esc(String(count)) + " 个</p>" +
+      "</div>" +
+      '<div class="v12-ai-change-head-actions">' +
+      '<button type="button" class="v12-ai-change-copy" data-v12-action="copy-ai-change-prompt" aria-label="复制 AI 修改提示词"' + (hasChanges ? "" : " disabled") + ">复制提示词</button>" +
+      '<button type="button" class="v12-ai-change-clear" data-v12-action="clear-ai-change-draft" data-vqa-action="clear-all-ai-changes" aria-label="清空 AI 修改"' + (hasChanges ? "" : " disabled") + '>清空</button>' +
+      '<button type="button" class="v12-ai-change-close" data-v12-action="close-ai-change-panel" aria-label="关闭 AI 修改面板">×</button>' +
+      "</div>" +
+      "</div>" +
+      '<div class="v12-ai-change-body">' + bodyHtml + "</div>" +
+      "</div>"
+    );
+  }
+
+  function getAiChangeAnchorRect() {
+    var anchor = topbarDom.recordRegionBtn || topbar.querySelector('[data-v12-action="record-region"]');
+    if (!anchor || !anchor.getBoundingClientRect) return null;
+    var rect = anchor.getBoundingClientRect();
+    return {
+      left: rect.left,
+      top: rect.top,
+      right: rect.right,
+      bottom: rect.bottom,
+      width: rect.width,
+      height: rect.height
+    };
+  }
+
+  function syncAiChangePopoverGeometry(anchorRect) {
+    if (!anchorRect) return;
+    var width = aiChangePopover.offsetWidth || 320;
+    var height = aiChangePopover.offsetHeight || 0;
+    var left = clamp(anchorRect.left + anchorRect.width / 2 - width / 2, 8, Math.max(8, window.innerWidth - width - 8));
+    var top = anchorRect.top - height - 12;
+    if (top < 8) {
+      top = Math.min(window.innerHeight - height - 8, anchorRect.bottom + 12);
+    }
+    aiChangePopover.style.left = left + "px";
+    aiChangePopover.style.top = top + "px";
+  }
+
+  function renderAiChangePanel() {
+    ensureAiChangePanelStyles();
+    if (!state.v12.aiChangePanelOpen) {
+      aiChangePopover.style.display = "none";
+      return;
+    }
+    var anchorRect = getAiChangeAnchorRect();
+    if (!anchorRect) {
+      aiChangePopover.style.display = "none";
+      return;
+    }
+    var changes = getChangeDraftItems();
+    var nextSignature = buildAiChangeRenderSignature(changes);
+    var panelEl = aiChangePopover.querySelector("[data-v12-ai-change-panel]");
+    var existingListEl = getAiChangeListEl();
+    if (existingListEl) {
+      state.v12.aiChangePanelScrollTop = existingListEl.scrollTop || 0;
+    }
+    aiChangePopover.style.display = "block";
+    if (!panelEl || state.v12.aiChangeRenderSignature !== nextSignature) {
+      aiChangePopover.innerHTML = buildAiChangePanelHtml(changes);
+      state.v12.aiChangeRenderSignature = nextSignature;
+      var nextListEl = getAiChangeListEl();
+      bindAiChangeListScroll(nextListEl);
+      restoreAiChangeListScroll(nextListEl);
+    }
+    syncAiChangePopoverGeometry(anchorRect);
+  }
+
+  function refreshAiChangePanelNow() {
+    var changes = getChangeDraftItems();
+    var nextSignature = buildAiChangeRenderSignature(changes);
+    if (topbarDom.recordRegionBtn) {
+      topbarDom.recordRegionBtn.setAttribute("data-has-dot", getAiChangeCount() > 0 ? "true" : "false");
+    }
+    if (!state.v12.aiChangePanelOpen) {
+      state.v12.aiChangeRenderSignature = nextSignature;
+      return;
+    }
+    ensureAiChangePanelStyles();
+    var anchorRect = getAiChangeAnchorRect();
+    if (!anchorRect) {
+      aiChangePopover.style.display = "none";
+      state.v12.aiChangeRenderSignature = nextSignature;
+      return;
+    }
+    var existingListEl = getAiChangeListEl();
+    if (existingListEl) {
+      state.v12.aiChangePanelScrollTop = existingListEl.scrollTop || 0;
+    }
+    aiChangePopover.style.display = "block";
+    aiChangePopover.innerHTML = buildAiChangePanelHtml(changes);
+    state.v12.aiChangeRenderSignature = nextSignature;
+    var nextListEl = getAiChangeListEl();
+    bindAiChangeListScroll(nextListEl);
+    restoreAiChangeListScroll(nextListEl);
+    syncAiChangePopoverGeometry(anchorRect);
+  }
+
+  function toggleAiChangePanel(nextOpen) {
+    var willOpen = typeof nextOpen === "boolean" ? nextOpen : !state.v12.aiChangePanelOpen;
+    if (willOpen && !state.v12.aiChangePanelOpen) {
+      state.v12.aiChangePanelScrollTop = 0;
+      state.v12.aiChangeRenderSignature = "";
+    }
+    state.v12.aiChangePanelOpen = willOpen;
+    schedule();
+  }
+
+  function closeAiChangePanel() {
+    if (!state.v12.aiChangePanelOpen) return;
+    state.v12.aiChangePanelOpen = false;
+    state.v12.aiChangeRenderSignature = "";
+    state.v12.aiChangePanelScrollTop = 0;
+    schedule();
+  }
+
+  function findChangeItemById(changeItemId) {
+    var items = getChangeDraftItems();
+    for (var i = 0; i < items.length; i++) {
+      if (items[i] && items[i].id === changeItemId) return items[i];
+    }
+    return null;
+  }
+
+  function removeChangeItem(changeItemId) {
+    var changeDraft = state.v12.changeDraft;
+    if (!changeDraft || !Array.isArray(changeDraft.changes) || !changeItemId) return false;
+    var nextChanges = changeDraft.changes.filter(function (item) {
+      return item && item.id !== changeItemId;
+    });
+    if (nextChanges.length === changeDraft.changes.length) return false;
+    changeDraft.changes = nextChanges;
+    changeDraft.updatedAt = new Date().toISOString();
+    publishChangeDraftDebugSnapshot();
+    if (!changeDraft.changes.length) {
+      deleteChangeDraftFromStorage(changeDraft.pageKey);
+    } else {
+      scheduleSaveChangeDraft();
+    }
+    refreshAiChangePanelNow();
+    return true;
+  }
+
+  function clearAiChangeDraft(options) {
+    options = options || {};
+    var changeDraft = ensureActiveChangeDraft();
+    var changesToRestore = getChangeDraftItems().map(cloneChangeItemSnapshot).filter(Boolean);
+    console.debug("[AI Change] before clear", changesToRestore.length);
+    var clearResult = restoreAllAiChangesBeforeClear(changesToRestore);
+    cancelScheduledAiChangeDraftSave();
+    changeDraft.changes = [];
+    changeDraft.updatedAt = new Date().toISOString();
+    publishChangeDraftDebugSnapshot();
+    console.debug("[AI Change] after clear memory", getChangeDraftItems().length);
+    deleteAiChangeDraftStorage();
+    resetAiChangeDraftInMemory();
+    publishChangeDraftDebugSnapshot();
+    refreshAiChangePanelNow();
+    if (!options.silent) {
+      if (clearResult.allLocated && !clearResult.hadPatchError) {
+        showAiChangeClearSuccessNotice();
+      } else {
+        showAiChangeClearPartialNotice();
+      }
+    }
+    schedule();
+    return true;
+  }
+
+  function findChangeItemForTargetEl(targetEl) {
+    if (!targetEl) return null;
+    var changeDraft = state.v12.changeDraft;
+    if (!changeDraft) return null;
+    var targetMeta = buildChangeTargetMeta(targetEl);
+    return findChangeItemByElement(changeDraft, targetEl) || findChangeItemBySelectorPath(changeDraft, targetMeta.selectorPath);
+  }
+
+  function syncModifiedPropsFromChangeItem(changeItem, targetEl) {
+    var nextModifiedProps = {};
+    if (changeItem && Array.isArray(changeItem.patches)) {
+      changeItem.patches.forEach(function (patch) {
+        if (!patch || !patch.prop) return;
+        nextModifiedProps[patch.prop] = true;
+      });
+    }
+    state.modifiedProps = nextModifiedProps;
+    state.editedProps = state.modifiedProps;
+    if (!changeItem && !targetEl) {
+      state.modifiedProps = {};
+      state.editedProps = state.modifiedProps;
+    }
+  }
+
+  function syncModifiedPropsFromCurrentAiChangeTarget(targetEl) {
+    var effectiveTarget = targetEl || getSelectedPanelTarget();
+    syncModifiedPropsFromChangeItem(findChangeItemForTargetEl(effectiveTarget), effectiveTarget);
+  }
+
+  function resolveLiveChangeTarget(changeItem) {
+    var el = changeItem && changeItem.elementRef;
+    if (!el || el.isConnected === false) return null;
+    return document.contains(el) ? el : null;
+  }
+
+  function queryChangeTargetBySelector(selector) {
+    var normalized = normalizePromptValue(selector, "");
+    if (!normalized) return null;
+    try {
+      return document.querySelector(normalized);
+    } catch (err) {
+      return null;
+    }
+  }
+
+  function resolvePersistedChangeTarget(changeItem, options) {
+    options = options || {};
+    var targetEl = null;
+    if (options.preferLive !== false) {
+      targetEl = resolveLiveChangeTarget(changeItem);
+    }
+    if (!targetEl) {
+      targetEl = queryChangeTargetBySelector(changeItem && changeItem.selectorPath);
+    }
+    if (!targetEl) {
+      targetEl = queryChangeTargetBySelector(changeItem && changeItem.selector);
+    }
+    if (!targetEl && options.preferLive === false) {
+      targetEl = resolveLiveChangeTarget(changeItem);
+    }
+    if (!targetEl) {
+      if (!options.silent) showV12Notice("目标元素暂时无法定位");
+      return null;
+    }
+    refreshChangeItemRuntimeMeta(changeItem, targetEl);
+    if (options.persistRuntimeMeta) {
+      scheduleSaveChangeDraft();
+    }
+    return targetEl;
+  }
+
+  function applyChangePatchWithoutRecord(targetEl, patch) {
+    if (!targetEl || !patch || !patch.prop) return false;
+    try {
+      runWithoutChangeRecord(function () {
+        targetEl.style[patch.prop] = normalizePromptValue(patch.to, "");
+      });
+      return true;
+    } catch (err) {
+      console.debug("[visual-qa][ai-change] replay patch failed:", err);
+      return false;
+    }
+  }
+
+  function restorePatchWithoutRecord(targetEl, patch) {
+    if (!targetEl || !patch || !patch.prop) return false;
+    try {
+      runWithoutChangeRecord(function () {
+        targetEl.style[patch.prop] = normalizePromptValue(patch.from, "");
+      });
+      return true;
+    } catch (err) {
+      console.debug("[visual-qa][ai-change] restore patch failed:", err);
+      return false;
+    }
+  }
+
+  function replayChangeItemPatches(changeItem) {
+    if (!changeItem) return false;
+    var targetEl = resolvePersistedChangeTarget(changeItem, { silent: true, preferLive: false });
+    if (!targetEl) {
+      console.debug("[visual-qa][ai-change] replay target not found:", {
+        changeItemId: changeItem.id || "",
+        selectorPath: changeItem.selectorPath || "",
+        selector: changeItem.selector || ""
+      });
+      return false;
+    }
+    var patches = Array.isArray(changeItem.patches) ? changeItem.patches : [];
+    patches.forEach(function (patch) {
+      applyChangePatchWithoutRecord(targetEl, patch);
+    });
+    return true;
+  }
+
+  function replayPersistedAiChanges() {
+    var draft = state.v12.changeDraft;
+    var pendingItems = draft && Array.isArray(draft.changes) ? draft.changes.filter(Boolean) : [];
+    aiChangeReplayTimerIds.forEach(function (timerId) {
+      window.clearTimeout(timerId);
+    });
+    aiChangeReplayTimerIds = [];
+    if (!pendingItems.length) return;
+    function replayAttempt(attempt) {
+      var unresolved = [];
+      pendingItems.forEach(function (changeItem) {
+        if (!replayChangeItemPatches(changeItem)) {
+          unresolved.push(changeItem);
+        }
+      });
+      if (!unresolved.length || attempt >= 2) return;
+      var timerId = window.setTimeout(function () {
+        aiChangeReplayTimerIds = aiChangeReplayTimerIds.filter(function (id) {
+          return id !== timerId;
+        });
+        pendingItems = unresolved;
+        replayAttempt(attempt + 1);
+      }, 360);
+      aiChangeReplayTimerIds.push(timerId);
+    }
+    replayAttempt(0);
+  }
+
+  function isPatchValueCurrentlyApplied(targetEl, patch) {
+    if (!targetEl || !patch || !patch.prop) return false;
+    return normalizeChangeComparableValue(getComputedStyleValue(targetEl, patch.prop)) === normalizeChangeComparableValue(patch.to);
+  }
+
+  function restoreChangeItemPatches(changeItem, targetEl) {
+    if (!changeItem || !targetEl || !Array.isArray(changeItem.patches)) return false;
+    var restored = false;
+    changeItem.patches.forEach(function (patch) {
+      if (restorePatchWithoutRecord(targetEl, patch)) {
+        restored = true;
+      }
+    });
+    return restored;
+  }
+
+  function restoreChangeItemPatchesBeforeClear(changeItem) {
+    if (!changeItem) {
+      return { located: false, restoredAny: false, hadPatchError: false };
+    }
+    var targetEl = resolvePersistedChangeTarget(changeItem, { silent: true });
+    if (!targetEl) {
+      return { located: false, restoredAny: false, hadPatchError: false };
+    }
+    var restoredAny = false;
+    var hadPatchError = false;
+    var patches = Array.isArray(changeItem.patches) ? changeItem.patches : [];
+    patches.forEach(function (patch) {
+      if (restorePatchWithoutRecord(targetEl, patch)) {
+        restoredAny = true;
+      } else {
+        hadPatchError = true;
+      }
+    });
+    return {
+      located: true,
+      restoredAny: restoredAny,
+      hadPatchError: hadPatchError
+    };
+  }
+
+  function restoreAllAiChangesBeforeClear() {
+    var items = arguments.length && Array.isArray(arguments[0]) ? arguments[0] : getChangeDraftItems();
+    var result = {
+      allLocated: true,
+      hadPatchError: false
+    };
+    items.forEach(function (changeItem) {
+      var itemResult = restoreChangeItemPatchesBeforeClear(changeItem);
+      if (!itemResult.located) result.allLocated = false;
+      if (itemResult.hadPatchError) result.hadPatchError = true;
+    });
+    return result;
+  }
+
+  function deleteAiChangeDraftStorage() {
+    var pageKey = state.v12.changeDraft && state.v12.changeDraft.pageKey ? state.v12.changeDraft.pageKey : normalizePageKey(location.href);
+    cancelScheduledAiChangeDraftSave();
+    deleteChangeDraftFromStorage(pageKey);
+    console.debug("[AI Change] storage deleted");
+    return true;
+  }
+
+  function resetAiChangeDraftInMemory() {
+    var pageKey = state.v12.changeDraft && state.v12.changeDraft.pageKey ? state.v12.changeDraft.pageKey : normalizePageKey(location.href);
+    state.v12.changeDraft = buildEmptyChangeDraft(pageKey);
+    state.v12.aiChangeRenderSignature = "";
+    aiChangeReplayTimerIds.forEach(function (timerId) {
+      window.clearTimeout(timerId);
+    });
+    aiChangeReplayTimerIds = [];
+    syncModifiedPropsFromCurrentAiChangeTarget(getSelectedPanelTarget());
+    syncQuickRecordUiForCurrentPanel();
+    return true;
+  }
+
+  function deleteAiChangeItemAndRestore(changeItemId) {
+    console.debug("[AI Change] delete item", changeItemId);
+    cancelScheduledAiChangeDraftSave();
+    var changeItem = findChangeItemById(changeItemId);
+    if (!changeItem) return false;
+    var changeItemSnapshot = cloneChangeItemSnapshot(changeItem);
+    var targetEl = resolvePersistedChangeTarget(changeItemSnapshot, { silent: true });
+    var restored = false;
+    if (targetEl) {
+      restored = restoreChangeItemPatches(changeItemSnapshot, targetEl);
+    }
+    var changeDraft = ensureActiveChangeDraft();
+    changeDraft.changes = (changeDraft.changes || []).filter(function (item) {
+      return item && item.id !== changeItemId;
+    });
+    changeDraft.updatedAt = new Date().toISOString();
+    publishChangeDraftDebugSnapshot();
+    console.debug("[AI Change] after delete", getChangeDraftItems().length);
+    if (!changeDraft.changes.length) {
+      deleteAiChangeDraftStorage();
+    } else {
+      saveChangeDraftToStorage();
+    }
+    if (targetEl && getSelectedPanelTarget && getSelectedPanelTarget() === targetEl) {
+      syncModifiedPropsFromCurrentAiChangeTarget(targetEl);
+      syncQuickRecordUiForCurrentPanel();
+    }
+    state.v12.aiChangeRenderSignature = "";
+    refreshAiChangePanelNow();
+    schedule();
+    if (restored) {
+      showAiChangeDeleteSuccessNotice();
+    } else {
+      showV12Notice("已删除记录，目标元素未定位");
+    }
+    return true;
+  }
+
+  function selectElementForAiChangeFocus(el, changeItem) {
+    if (!el) return false;
+    if (!isSelectMode()) {
+      setV12Mode("select");
+    }
+    state.measureMode = false;
+    closeAddPropertyMenu();
+    clearBackgroundFillMeta();
+    resetSharedElements({ keepSnapshots: true });
+    state.measureA = el;
+    state.measureB = null;
+    state.primaryMeasure = null;
+    state.selectedA = el;
+    state.frozenEl = el;
+    state.isFrozen = true;
+    state.spacingExpanded = { padding: false, margin: false, radius: false };
+    syncModifiedPropsFromChangeItem(changeItem, el);
+    clearEditingState();
+    state.panelNeedsPlacement = true;
+    schedule();
+    return true;
+  }
+
+  function focusAiChangeItem(changeItemId) {
+    var changeItem = findChangeItemById(changeItemId);
+    if (!changeItem) return false;
+    var targetEl = resolvePersistedChangeTarget(changeItem);
+    if (!targetEl) return false;
+    if (typeof targetEl.scrollIntoView === "function") {
+      try {
+        targetEl.scrollIntoView({ block: "center", inline: "center" });
+      } catch (err) {
+        targetEl.scrollIntoView();
+      }
+    }
+    return selectElementForAiChangeFocus(targetEl, changeItem);
+  }
+
   async function savePendingRecord() {
     if (!state.v12.pendingRecord || !state.v12.draft) return;
     if (!isRecordShotReady(state.v12.pendingRecord)) {
@@ -4118,20 +5612,10 @@
     if (!el) return;
     if (prop === "opacity") {
       var opacityValue = parseOpacityPercent(rawValue);
-      if (isSharedElementsActiveForTarget(el)) {
-        applyStyle(prop, opacityValue || "");
-      } else {
-        if (isSharedSessionSeedTarget(el)) rememberSharedOriginalInlineStyle(el);
-        el.style[prop] = opacityValue || "";
-      }
+      applyStyle(prop, opacityValue || "", el);
       return;
     }
-    if (isSharedElementsActiveForTarget(el) && isSharedSafeStyleProp(prop)) {
-      applyStyle(prop, normalizeValue(prop, rawValue));
-    } else {
-      if (isSharedSessionSeedTarget(el)) rememberSharedOriginalInlineStyle(el);
-      el.style[prop] = normalizeValue(prop, rawValue);
-    }
+    applyStyle(prop, normalizeValue(prop, rawValue), el);
   }
 
   function previewPercentInputValue(input, value) {
@@ -4472,12 +5956,7 @@
     ["Top", "Right", "Bottom", "Left"].forEach(function (suffix, index) {
       var value = [box.t, box.r, box.b, box.l][index];
       var prop = prefix + suffix;
-      if (isSharedElementsActiveForTarget(el) && isSharedSafeStyleProp(prop)) {
-        applyStyle(prop, toCssLength(value));
-      } else {
-        if (isSharedSessionSeedTarget(el)) rememberSharedOriginalInlineStyle(el);
-        el.style[prop] = toCssLength(value);
-      }
+      applyStyle(prop, toCssLength(value), el);
     });
   }
 
@@ -4947,15 +6426,22 @@
     return true;
   }
 
-  function applyStyle(prop, value, targetOverride) {
+  function applyStyle(prop, value, targetOverride, options) {
+    options = options || {};
     var el = targetOverride || getEditableTargetEl();
     if (!el) return;
+    var shouldRecordChange = !options.skipChangeRecord;
+    var beforeValue = shouldRecordChange ? getComputedStyleValue(el, prop) : "";
     if (isSharedSessionSeedTarget(el)) {
       rememberSharedOriginalInlineStyle(el);
     }
     el.style[prop] = value;
     state.modifiedProps[prop] = true;
     state.editedProps = state.modifiedProps;
+    if (shouldRecordChange) {
+      var afterValue = getComputedStyleValue(el, prop);
+      appendChangePatch(el, prop, beforeValue, afterValue, options);
+    }
     applySharedStyle(prop, value, el);
   }
 
@@ -4963,18 +6449,28 @@
     var el = getEditableTargetEl();
     if (!el) return;
     var backgroundTarget = resolveBackgroundHost(getSelectedPanelTarget());
-    if (backgroundTarget && (getBackgroundFillSnapshotForTarget(backgroundTarget) || getBackgroundFillSourceForTarget(backgroundTarget) || getVisibleBackgroundColorValue(backgroundTarget, getComputedStyle(backgroundTarget)))) {
-      restoreBackgroundStyleSnapshot(backgroundTarget);
-    }
-    Object.keys(state.modifiedProps).forEach(function (prop) {
-      if (backgroundTarget && (prop === "background" || prop === "backgroundColor" || prop === "backgroundImage")) return;
-      el.style[prop] = "";
+    var modifiedPropsBeforeReset = Object.keys(state.modifiedProps || {});
+    runWithoutChangeRecord(function () {
+      if (backgroundTarget && (getBackgroundFillSnapshotForTarget(backgroundTarget) || getBackgroundFillSourceForTarget(backgroundTarget) || getVisibleBackgroundColorValue(backgroundTarget, getComputedStyle(backgroundTarget)))) {
+        restoreBackgroundStyleSnapshot(backgroundTarget);
+      }
+      modifiedPropsBeforeReset.forEach(function (prop) {
+        if (backgroundTarget && (prop === "background" || prop === "backgroundColor" || prop === "backgroundImage")) return;
+        el.style[prop] = "";
+      });
+      if (backgroundTarget) {
+        clearBackgroundModifiedProps();
+      }
     });
-    if (backgroundTarget) {
-      clearBackgroundModifiedProps();
-    }
     restoreSharedOriginalInlineStyles();
     resetSharedElements({ keepSnapshots: true });
+    modifiedPropsBeforeReset.forEach(function (prop) {
+      if (prop === "background" || prop === "backgroundImage" || prop === "backgroundColor") {
+        removeChangePatch(backgroundTarget || el, "backgroundColor");
+        return;
+      }
+      removeChangePatch(el, prop);
+    });
     state.modifiedProps = {};
     state.editedProps = state.modifiedProps;
     clearEditingState();
@@ -5193,6 +6689,11 @@
       e.stopPropagation();
       return;
     }
+    if (action === "toggle-ai-change-panel" || action === "close-ai-change-panel" || action === "focus-ai-change-item") {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     var colorPickerInput = e.target && e.target.closest ? e.target.closest('input[data-color-picker-input]') : null;
     if (colorPickerInput) {
       openColorPickerProtection(colorPickerInput.getAttribute("data-color-picker-input"));
@@ -5256,6 +6757,26 @@
     if (action === "toggle-shared-elements") {
       closeAddPropertyMenu();
       setSharedElementsEnabled(!(state.sharedElements && state.sharedElements.enabled && state.sharedElements.seedElement === getSelectedPanelTarget()));
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    if (action === "toggle-ai-change-panel") {
+      closeAddPropertyMenu();
+      toggleAiChangePanel();
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    if (action === "close-ai-change-panel") {
+      closeAiChangePanel();
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    if (action === "focus-ai-change-item") {
+      closeAddPropertyMenu();
+      focusAiChangeItem(actionTarget ? actionTarget.getAttribute("data-change-item-id") || "" : "");
       e.preventDefault();
       e.stopPropagation();
       return;
@@ -7959,6 +9480,7 @@
     if (prevSelected !== state.selectedA) {
       state.spacingExpanded = { padding: false, margin: false, radius: false };
     }
+    syncModifiedPropsFromCurrentAiChangeTarget(state.selectedA);
   }
 
   function getParentGap(el) {
@@ -9884,6 +11406,12 @@
   var topbarTooltipCard = topbarTooltip.querySelector("[data-v12-topbar-tooltip-card]");
   var topbarTooltipLabel = topbarTooltip.querySelector("[data-v12-topbar-tooltip-label]");
   var topbarTooltipShortcut = topbarTooltip.querySelector("[data-v12-topbar-tooltip-shortcut]");
+  var aiChangePopover = make(
+    "div",
+    "position:fixed;left:0;top:0;z-index:" +
+      (CONFIG.zIndexTooltip + 6) +
+      ";display:none;pointer-events:auto;"
+  );
   var sharedElementsTooltip = make(
     "div",
     "position:fixed;left:0;top:0;z-index:" +
@@ -9941,12 +11469,15 @@
       esc(action) +
       '" data-active="' +
       (active ? "true" : "false") +
+      '" data-has-dot="' +
+      (action === "record-region" && getAiChangeCount() > 0 ? "true" : "false") +
       '" data-pressed="' +
       (state.v12.topbarPressedAction === action ? "true" : "false") +
       '" aria-label="' +
       esc(labelText) +
       '">' +
       iconMarkup +
+      (action === "record-region" ? '<span class="v12-topbar-dot" aria-hidden="true"></span>' : "") +
       "</button>"
     );
   }
@@ -9978,7 +11509,7 @@
       topbarButtonHtml("mode-select", "选择", TOPBAR_ICON_URLS && TOPBAR_ICON_URLS.select, isSelectMode()) +
       topbarButtonHtml("mode-measure", "测量", TOPBAR_ICON_URLS && TOPBAR_ICON_URLS.measure, false) +
       topbarButtonHtml("record-element", "记录元素", TOPBAR_ICON_URLS && TOPBAR_ICON_URLS.recordElement, isRecordElementMode()) +
-      topbarButtonHtml("record-region", "反馈", TOPBAR_ICON_URLS && TOPBAR_ICON_URLS.recordRegion, false) +
+      topbarButtonHtml("record-region", "AI 修改", TOPBAR_ICON_URLS && TOPBAR_ICON_URLS.recordRegion, state.v12.aiChangePanelOpen) +
       topbarButtonHtml("topbar-more", "反馈", TOPBAR_ICON_URLS && TOPBAR_ICON_URLS.more, state.v12.feedbackPopoverOpen) +
       "</div>" +
       '<div class="v12-topbar-divider" aria-hidden="true" data-v12-topbar-divider="1"></div>' +
@@ -10680,9 +12211,12 @@
     syncTopbarButton(topbarDom.selectBtn, isPlainSelectMode(), state.v12.topbarPressedAction === "mode-select");
     syncTopbarButton(topbarDom.measureBtn, isMeasureTopbarMode(), state.v12.topbarPressedAction === "mode-measure");
     syncTopbarButton(topbarDom.recordElementBtn, isRecordElementMode(), state.v12.topbarPressedAction === "record-element");
-    syncTopbarButton(topbarDom.recordRegionBtn, false, false);
+    syncTopbarButton(topbarDom.recordRegionBtn, state.v12.aiChangePanelOpen, state.v12.topbarPressedAction === "record-region");
     syncTopbarButton(topbarDom.moreBtn, state.v12.feedbackPopoverOpen, state.v12.topbarPressedAction === "topbar-more");
     syncTopbarButton(topbarDom.drawerBtn, state.v12.drawerOpen, state.v12.topbarPressedAction === "toggle-drawer");
+    if (topbarDom.recordRegionBtn) {
+      topbarDom.recordRegionBtn.setAttribute("data-has-dot", getAiChangeCount() > 0 ? "true" : "false");
+    }
     if (topbarDom.drawerBtn) {
       var drawerLabel = topbarDom.drawerBtn.querySelector(".v12-topbar-count");
       if (drawerLabel) drawerLabel.textContent = String(getV12RecordCount());
@@ -11389,6 +12923,7 @@
       action === "mode-select" ||
       action === "mode-measure" ||
       action === "record-element" ||
+      action === "record-region" ||
       action === "topbar-more" ||
       action === "toggle-drawer"
     );
@@ -11431,6 +12966,9 @@
     } else if (action === "record-element") {
       branch = "record-element";
       handleRecordElementAction();
+    } else if (action === "record-region") {
+      branch = "record-region-ai-change";
+      toggleAiChangePanel();
     } else if (action === "topbar-more") {
       branch = "topbar-more-feedback";
       handleRecordRegionAction(e);
@@ -11527,9 +13065,9 @@
   }
 
   function onV12Click(e) {
-    var target = e.target && e.target.closest ? e.target.closest("[data-v12-action]") : null;
+    var target = e.target && e.target.closest ? e.target.closest("[data-vqa-action],[data-v12-action]") : null;
     if (!target) return;
-    var action = target.getAttribute("data-v12-action");
+    var action = target.getAttribute("data-vqa-action") || target.getAttribute("data-v12-action") || "";
     if (isTopbarAction(action)) {
       if (action === "topbar-more") {
         feedbackDebugLog("button click", {
@@ -11562,6 +13100,59 @@
           action: action,
           openAfter: !!state.v12.feedbackPopoverOpen
         });
+      }
+      return;
+    }
+    if (action === "copy-ai-change-prompt") {
+      e.preventDefault();
+      e.stopPropagation();
+      if (typeof e.stopImmediatePropagation === "function") {
+        e.stopImmediatePropagation();
+      }
+      void copyAiChangePrompt();
+      return;
+    }
+    if (action === "copy-ai-change-item") {
+      e.preventDefault();
+      e.stopPropagation();
+      if (typeof e.stopImmediatePropagation === "function") {
+        e.stopImmediatePropagation();
+      }
+      void copySingleAiChangePrompt(target.getAttribute("data-change-item-id") || target.getAttribute("data-change-id") || "");
+      return;
+    }
+    if (action === "delete-ai-change-item") {
+      e.preventDefault();
+      e.stopPropagation();
+      if (typeof e.stopImmediatePropagation === "function") {
+        e.stopImmediatePropagation();
+      }
+      deleteAiChangeItemAndRestore(target.getAttribute("data-change-item-id") || target.getAttribute("data-change-id") || "");
+      return;
+    }
+    if (action === "clear-all-ai-changes" || action === "clear-ai-change-draft") {
+      e.preventDefault();
+      e.stopPropagation();
+      if (typeof e.stopImmediatePropagation === "function") {
+        e.stopImmediatePropagation();
+      }
+      clearAiChangeDraft();
+      return;
+    }
+    if (action === "close-ai-change-panel") {
+      closeAiChangePanel();
+      e.preventDefault();
+      e.stopPropagation();
+      if (typeof e.stopImmediatePropagation === "function") {
+        e.stopImmediatePropagation();
+      }
+      return;
+    } else if (action === "focus-ai-change-item") {
+      focusAiChangeItem(target.getAttribute("data-change-item-id") || "");
+      e.preventDefault();
+      e.stopPropagation();
+      if (typeof e.stopImmediatePropagation === "function") {
+        e.stopImmediatePropagation();
       }
       return;
     }
@@ -11631,6 +13222,11 @@
     if (typeof e.stopImmediatePropagation === "function") {
       e.stopImmediatePropagation();
     }
+  }
+
+  function onAiChangePopoverWheel(e) {
+    if (!aiChangePopover.contains(e.target)) return;
+    e.stopPropagation();
   }
 
   function onV12Input(e) {
@@ -12926,8 +14522,8 @@
   function applyPureBackgroundCover(targetEl, hexValue, alphaValue) {
     if (!targetEl) return;
     captureBackgroundStyleSnapshot(targetEl);
-    applyStyle("background", "", targetEl);
-    applyStyle("backgroundImage", "none", targetEl);
+    applyStyle("background", "", targetEl, { skipChangeRecord: true });
+    applyStyle("backgroundImage", "none", targetEl, { skipChangeRecord: true });
     applyStyle("backgroundColor", rgbaFromHexAndAlpha(hexValue, alphaValue) || "", targetEl);
   }
 
@@ -12970,6 +14566,7 @@
     }
     var style = getComputedStyle(el);
     var capabilities = buildSelectedCapabilities(el, style);
+    syncModifiedPropsFromCurrentAiChangeTarget(el);
     if (state.sharedElements.enabled && state.sharedElements.seedElement !== el) {
       refreshSharedElements(el);
     }
@@ -13233,6 +14830,7 @@
     } else if (shouldShowHoverCard() || shouldShowRecordElementHoverCard()) {
       positionHoverTooltip();
     }
+    renderAiChangePanel();
     syncRecordComposerFocus();
     var measureHitWithinA = !!(measureSingleState && state.measureA && measureHoverEl && isHitWithinMeasureA(state.measureA, measureHoverEl));
     if (measurementModeActive) {
@@ -13269,13 +14867,14 @@
   function fromPoint(x, y) {
     if (shouldBlockPageSelectionDuringScrub()) return null;
     var el = deepElementFromPoint(document, x, y);
-    if (!el || tooltip.contains(el) || isOverlayElement(el) || isFeedbackUiElement(el)) return null;
+    if (!el || tooltip.contains(el) || isNodeInsideAiChangePanel(el) || isOverlayElement(el) || isFeedbackUiElement(el)) return null;
     return el;
   }
   function onMouseMove(e) {
     if (shouldBlockPageSelectionDuringScrub()) return;
     if (state.floatDragging) return;
     if (state.v12.pendingRecord) return;
+    if (isEventInsideAiChangePanel(e)) return;
 
     if (isEventInsideSelectedPanel(e)) {
       state.isPointerInsideSelectedPanel = true;
@@ -13356,7 +14955,7 @@
     }
     if (isFeedbackUiElement(e && e.target)) return;
     if (isEventInsideSelectedPanel(e)) return;
-    if (e && e.target && (tooltip.contains(e.target) || topbar.contains(e.target) || recordMenu.contains(e.target) || drawerStub.contains(e.target) || recordComposer.contains(e.target) || recordPreview.contains(e.target) || isFeedbackUiElement(e.target))) {
+    if (e && e.target && (tooltip.contains(e.target) || topbar.contains(e.target) || aiChangePopover.contains(e.target) || recordMenu.contains(e.target) || drawerStub.contains(e.target) || recordComposer.contains(e.target) || recordPreview.contains(e.target) || isFeedbackUiElement(e.target))) {
       return;
     }
     var el = fromPoint(e.clientX, e.clientY);
@@ -13465,7 +15064,7 @@
       var popoverAction = e.target && e.target.closest ? e.target.closest("[data-v12-feedback-action]") : null;
       var feedbackTarget = e.target && e.target.closest ? e.target.closest("[data-v12-feedback-popover]") : null;
       var feedbackAnchor = isFeedbackAnchorElement(e.target);
-      var strongUiTarget = topbar.contains(e.target) || recordMenu.contains(e.target) || drawerStub.contains(e.target) || recordComposer.contains(e.target) || recordPreview.contains(e.target) || tooltip.contains(e.target);
+      var strongUiTarget = topbar.contains(e.target) || aiChangePopover.contains(e.target) || recordMenu.contains(e.target) || drawerStub.contains(e.target) || recordComposer.contains(e.target) || recordPreview.contains(e.target) || tooltip.contains(e.target);
       if (popoverAction && feedbackPopover.contains(popoverAction)) {
         onFeedbackPopoverClick(e);
         return;
@@ -13509,7 +15108,7 @@
       e.stopPropagation();
       return;
     }
-    if (topbar.contains(e.target) || recordMenu.contains(e.target) || drawerStub.contains(e.target) || recordComposer.contains(e.target)) return;
+    if (topbar.contains(e.target) || aiChangePopover.contains(e.target) || recordMenu.contains(e.target) || drawerStub.contains(e.target) || recordComposer.contains(e.target)) return;
     if (recordPreview.contains(e.target)) return;
     if (tooltip.contains(e.target)) return;
     if (state.panelHoverFreeze) {
@@ -13844,6 +15443,8 @@
     topbar.removeEventListener("pointerout", onV12TopbarPointerOut, true);
     topbar.removeEventListener("click", onV12Click, true);
     recordMenu.removeEventListener("click", onV12Click, true);
+    aiChangePopover.removeEventListener("click", onV12Click, true);
+    aiChangePopover.removeEventListener("wheel", onAiChangePopoverWheel, true);
     drawerStub.removeEventListener("click", onV12Click, true);
     drawerStub.removeEventListener("input", onV12Input, true);
     recordComposer.removeEventListener("click", onV12Click, true);
@@ -13865,7 +15466,7 @@
     floating.removeEventListener("mouseenter", onFloatEnter, true);
     floating.removeEventListener("mouseleave", onFloatLeave, true);
     btnMeasure.removeEventListener("click", onMeasureClick, true);
-    [highlight, selectA, selectB, sharedHighlightLayer, tooltip, topbarTooltip, sharedElementsTooltip, feedbackPopover, spacingLayer, measureLayer, floating, topbar, recordMenu, regionCaptureOverlay, drawerStub, regionSelectBox, recordComposer, recordPreview, v12Notice].forEach(function (el) {
+    [highlight, selectA, selectB, sharedHighlightLayer, tooltip, topbarTooltip, sharedElementsTooltip, aiChangePopover, feedbackPopover, spacingLayer, measureLayer, floating, topbar, recordMenu, regionCaptureOverlay, drawerStub, regionSelectBox, recordComposer, recordPreview, v12Notice].forEach(function (el) {
       if (el && el.parentNode) el.parentNode.removeChild(el);
     });
     Object.keys(bridgePending).forEach(function (requestId) {
@@ -13873,6 +15474,14 @@
       delete bridgePending[requestId];
     });
     window.clearTimeout(showV12Notice._timerId || 0);
+    if (aiChangeDraftPersistTimer) {
+      window.clearTimeout(aiChangeDraftPersistTimer);
+      aiChangeDraftPersistTimer = 0;
+    }
+    aiChangeReplayTimerIds.forEach(function (timerId) {
+      window.clearTimeout(timerId);
+    });
+    aiChangeReplayTimerIds = [];
     if (captureRestoreTimerId) {
       window.clearTimeout(captureRestoreTimerId);
       captureRestoreTimerId = 0;
@@ -13880,6 +15489,7 @@
     if (state.rafId) cancelAnimationFrame(state.rafId);
     [
       "v12-topbar-styles",
+      "v12-ai-change-panel-styles",
       "v12-floating-control-styles",
       "v12-feedback-popover-styles",
       "v12-record-drawer-styles"
@@ -13972,6 +15582,8 @@
   topbar.addEventListener("pointerout", onV12TopbarPointerOut, true);
   topbar.addEventListener("click", onV12Click, true);
   recordMenu.addEventListener("click", onV12Click, true);
+  aiChangePopover.addEventListener("click", onV12Click, true);
+  aiChangePopover.addEventListener("wheel", onAiChangePopoverWheel, true);
   drawerStub.addEventListener("click", onV12Click, true);
   drawerStub.addEventListener("input", onV12Input, true);
   recordComposer.addEventListener("click", onV12Click, true);
@@ -14019,5 +15631,6 @@
   window.__visualQAInspectorFinal__ = { destroy: destroy };
   notifyPluginActionState(true);
   initializeV12DraftState();
+  initializeAiChangeDraftState();
   refresh();
 })();
