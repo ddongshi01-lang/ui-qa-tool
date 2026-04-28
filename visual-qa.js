@@ -248,6 +248,7 @@
     panelHoverFreeze: false,
     panelHoverFreezeTimerId: 0,
     isPointerInsideSelectedPanel: false,
+    customSelectOpenFieldId: "",
     addPropMenuOpen: false,
     colorPickerOpenProp: "",
     colorPickerOpenAt: 0,
@@ -273,6 +274,10 @@
     strokeRuntimeMetaByTarget: typeof WeakMap !== "undefined" ? new WeakMap() : null,
     strokeSnapshotsByTarget: typeof WeakMap !== "undefined" ? new WeakMap() : null,
     strokeRuntimeMeta: null,
+    boxShadowSnapshotsByTarget: typeof WeakMap !== "undefined" ? new WeakMap() : null,
+    boxShadowSnapshotMeta: null,
+    shadowRuntimeMetaByTarget: typeof WeakMap !== "undefined" ? new WeakMap() : null,
+    shadowRuntimeMeta: null,
     panelCollapsed: false,
     floatX: null,
     floatY: null,
@@ -307,6 +312,7 @@
     },
     v12: {
       mode: "select",
+      selectedPanelScrollTop: 0,
       recordSubMode: "element",
       recordSubModePreference: "",
       drawerOpen: false,
@@ -483,6 +489,10 @@
           !iconUrls["layout-padding-toggle"] ||
           !iconUrls["layout-padding-toggle-active"] ||
           !iconUrls["stroke-border"] ||
+          !iconUrls["shadow-offset-x"] ||
+          !iconUrls["shadow-offset-y"] ||
+          !iconUrls["shadow-blur"] ||
+          !iconUrls["shadow-spread"] ||
           !iconUrls["appearance-opacity"] ||
           !iconUrls["appearance-radius"]
         ) {
@@ -2479,15 +2489,58 @@
     strokeWidth: 6,
     strokeAlign: "inside"
   };
+  var DEFAULT_SHADOW_CONFIG = {
+    type: "outer",
+    color: "#000000",
+    alpha: 18,
+    offsetX: 0,
+    offsetY: 4,
+    blur: 12,
+    spread: 0
+  };
 
   var STROKE_ALIGN_OPTIONS = [
     { value: "inside", label: "内" },
     { value: "center", label: "居中" },
     { value: "outside", label: "外" }
   ];
+  var SHADOW_TYPE_OPTIONS = [
+    { value: "outer", label: "外阴影" },
+    { value: "inner", label: "内阴影" }
+  ];
+  var SHADOW_FIELD_LABELS = {
+    type: "阴影类型",
+    color: "阴影颜色",
+    alpha: "阴影透明度",
+    offsetX: "阴影 X",
+    offsetY: "阴影 Y",
+    blur: "阴影弥散",
+    spread: "阴影扩展"
+  };
 
   function isStrokeLogicalProp(prop) {
     return prop === "strokeColor" || prop === "strokeAlpha" || prop === "strokeWidth" || prop === "strokeAlign";
+  }
+
+  function isShadowLogicalProp(prop) {
+    return /^shadow:[^.:]+\.(type|color|alpha|offsetX|offsetY|blur|spread)$/.test(String(prop || ""));
+  }
+
+  function isPluginBoxShadowLogicalProp(prop) {
+    return isStrokeLogicalProp(prop) || isShadowLogicalProp(prop);
+  }
+
+  function parseShadowLogicalProp(prop) {
+    var match = String(prop || "").match(/^shadow:([^.:]+)\.(type|color|alpha|offsetX|offsetY|blur|spread)$/);
+    if (!match) return null;
+    return {
+      id: match[1],
+      field: match[2]
+    };
+  }
+
+  function makeShadowLogicalProp(shadowId, field) {
+    return "shadow:" + String(shadowId || "") + "." + String(field || "");
   }
 
   function clearStrokeRuntimeMeta() {
@@ -2498,6 +2551,11 @@
     if (!baseTarget) return null;
     if (baseTarget.nodeType === 3) return baseTarget.parentElement || null;
     return baseTarget.nodeType === 1 ? baseTarget : null;
+  }
+
+  function resolveShadowTarget(baseTarget) {
+    var strokeTarget = resolveStrokeTarget(baseTarget);
+    return resolveBackgroundHost(strokeTarget) || strokeTarget;
   }
 
   function cloneStrokeConfig(config) {
@@ -2621,6 +2679,19 @@
     });
   }
 
+  function normalizeShadowValue(value) {
+    var normalized = String(value || "").trim();
+    return !normalized || normalized.toLowerCase() === "none" ? "" : normalized;
+  }
+
+  function clearStrokeRuntimeMeta() {
+    state.strokeRuntimeMeta = null;
+  }
+
+  function clearShadowRuntimeMeta() {
+    state.shadowRuntimeMeta = null;
+  }
+
   function getStrokeRuntimeMetaForTarget(targetEl) {
     if (!targetEl) return null;
     var map = state.strokeRuntimeMetaByTarget;
@@ -2650,66 +2721,145 @@
     }
   }
 
-  function getStrokeSnapshotForTarget(targetEl) {
+  function getBoxShadowSnapshotForTarget(targetEl) {
     if (!targetEl) return null;
-    var map = state.strokeSnapshotsByTarget;
+    var map = state.boxShadowSnapshotsByTarget;
     if (map && typeof map.get === "function") {
       return map.get(targetEl) || null;
     }
-    return null;
+    return state.boxShadowSnapshotMeta && state.boxShadowSnapshotMeta.target === targetEl ? state.boxShadowSnapshotMeta.snapshot || null : null;
   }
 
-  function setStrokeSnapshotForTarget(targetEl, snapshot) {
+  function setBoxShadowSnapshotForTarget(targetEl, snapshot) {
     if (!targetEl || !snapshot) return;
-    var map = state.strokeSnapshotsByTarget;
+    var map = state.boxShadowSnapshotsByTarget;
     if (map && typeof map.set === "function") {
       map.set(targetEl, snapshot);
     }
+    state.boxShadowSnapshotMeta = {
+      target: targetEl,
+      snapshot: snapshot
+    };
   }
 
-  function clearStrokeSnapshotForTarget(targetEl) {
+  function clearBoxShadowSnapshotForTarget(targetEl) {
     if (!targetEl) return;
-    var map = state.strokeSnapshotsByTarget;
+    var map = state.boxShadowSnapshotsByTarget;
     if (map && typeof map.delete === "function") {
       map.delete(targetEl);
     }
+    if (state.boxShadowSnapshotMeta && state.boxShadowSnapshotMeta.target === targetEl) {
+      state.boxShadowSnapshotMeta = null;
+    }
   }
 
-  function clearStrokeModifiedProps() {
-    delete state.modifiedProps.strokeColor;
-    delete state.modifiedProps.strokeAlpha;
-    delete state.modifiedProps.strokeWidth;
-    delete state.modifiedProps.strokeAlign;
-    state.editedProps = state.modifiedProps;
-  }
-
-  function captureStrokeStyleSnapshot(targetEl) {
+  function captureBaseBoxShadowSnapshot(targetEl) {
     if (!targetEl || !targetEl.style) return null;
-    var existing = getStrokeSnapshotForTarget(targetEl);
+    var existing = getBoxShadowSnapshotForTarget(targetEl);
     if (existing) return existing;
     var computed = getComputedStyle(targetEl);
     var snapshot = {
       inlineBoxShadow: String(targetEl.style.boxShadow || ""),
       computedBoxShadow: String((computed && computed.boxShadow) || ""),
-      hadInlineBoxShadow: hasInlineStyleValue(targetEl, "boxShadow"),
-      initialConfig: (function () {
-        var runtimeMeta = getStrokeRuntimeMetaForTarget(targetEl);
-        return runtimeMeta && runtimeMeta.config ? cloneStrokeConfig(runtimeMeta.config) : null;
-      })()
+      hadInlineBoxShadow: hasInlineStyleValue(targetEl, "boxShadow")
     };
-    setStrokeSnapshotForTarget(targetEl, snapshot);
+    snapshot.baseBoxShadow = snapshot.hadInlineBoxShadow
+      ? normalizeShadowValue(snapshot.inlineBoxShadow)
+      : normalizeShadowValue(snapshot.computedBoxShadow);
+    setBoxShadowSnapshotForTarget(targetEl, snapshot);
     return snapshot;
   }
 
-  function normalizeShadowValue(value) {
-    var normalized = String(value || "").trim();
-    return !normalized || normalized.toLowerCase() === "none" ? "" : normalized;
+  function getStrokeSnapshotForTarget(targetEl) {
+    return getBoxShadowSnapshotForTarget(targetEl);
   }
 
-  function getStrokeBaseShadow(snapshot) {
-    if (!snapshot) return "";
-    if (snapshot.hadInlineBoxShadow) return normalizeShadowValue(snapshot.inlineBoxShadow);
-    return normalizeShadowValue(snapshot.computedBoxShadow);
+  function clearStrokeSnapshotForTarget(targetEl) {
+    clearBoxShadowSnapshotForTarget(targetEl);
+  }
+
+  function getShadowRuntimeMetaForTarget(targetEl) {
+    if (!targetEl) return null;
+    var map = state.shadowRuntimeMetaByTarget;
+    if (map && typeof map.get === "function") {
+      return map.get(targetEl) || null;
+    }
+    return state.shadowRuntimeMeta && state.shadowRuntimeMeta.target === targetEl ? state.shadowRuntimeMeta.meta || null : null;
+  }
+
+  function setShadowRuntimeMetaForTarget(targetEl, meta) {
+    if (!targetEl || !meta) return;
+    var map = state.shadowRuntimeMetaByTarget;
+    if (map && typeof map.set === "function") {
+      map.set(targetEl, meta);
+    }
+    state.shadowRuntimeMeta = { target: targetEl, meta: meta };
+  }
+
+  function clearShadowRuntimeMetaForTarget(targetEl) {
+    if (!targetEl) return;
+    var map = state.shadowRuntimeMetaByTarget;
+    if (map && typeof map.delete === "function") {
+      map.delete(targetEl);
+    }
+    if (state.shadowRuntimeMeta && state.shadowRuntimeMeta.target === targetEl) {
+      state.shadowRuntimeMeta = null;
+    }
+  }
+
+  function cloneShadowConfig(config) {
+    if (!config) return null;
+    return {
+      id: String(config.id || ""),
+      type: config.type === "inner" ? "inner" : "outer",
+      color: String(config.color || DEFAULT_SHADOW_CONFIG.color),
+      alpha: parsePercentValue(config.alpha),
+      offsetX: Math.round(parseFloat(config.offsetX) || 0),
+      offsetY: Math.round(parseFloat(config.offsetY) || 0),
+      blur: Math.max(0, Math.round(parseFloat(config.blur) || 0)),
+      spread: Math.round(parseFloat(config.spread) || 0)
+    };
+  }
+
+  function normalizeShadowConfig(config, fallback) {
+    var base = cloneShadowConfig(fallback || DEFAULT_SHADOW_CONFIG) || cloneShadowConfig(DEFAULT_SHADOW_CONFIG);
+    var next = cloneShadowConfig(config || {}) || {};
+    return {
+      id: String(next.id || base.id || makeChangeEntityId("shadow")),
+      type: next.type === "inner" ? "inner" : "outer",
+      color: toHexColor(next.color || base.color || DEFAULT_SHADOW_CONFIG.color) || DEFAULT_SHADOW_CONFIG.color,
+      alpha: next.alpha === "" ? base.alpha : clamp(next.alpha == null ? base.alpha : next.alpha, 0, 100),
+      offsetX: Math.round(next.offsetX == null ? base.offsetX : next.offsetX),
+      offsetY: Math.round(next.offsetY == null ? base.offsetY : next.offsetY),
+      blur: Math.max(0, Math.round(next.blur == null ? base.blur : next.blur)),
+      spread: Math.round(next.spread == null ? base.spread : next.spread)
+    };
+  }
+
+  function cloneShadowList(shadows) {
+    return Array.isArray(shadows) ? shadows.map(function (shadow) {
+      return normalizeShadowConfig(shadow);
+    }).filter(Boolean) : [];
+  }
+
+  function findShadowConfigById(shadows, shadowId) {
+    var list = cloneShadowList(shadows);
+    for (var i = 0; i < list.length; i++) {
+      if (list[i] && list[i].id === shadowId) return list[i];
+    }
+    return null;
+  }
+
+  function getPluginShadowListForTarget(targetEl) {
+    var runtimeMeta = getShadowRuntimeMetaForTarget(targetEl);
+    return runtimeMeta && Array.isArray(runtimeMeta.shadows) ? cloneShadowList(runtimeMeta.shadows) : [];
+  }
+
+  function setPluginShadowListForTarget(targetEl, shadows, source) {
+    setShadowRuntimeMetaForTarget(targetEl, {
+      shadows: cloneShadowList(shadows),
+      source: source || "updated"
+    });
   }
 
   function buildStrokeShadowLayers(config) {
@@ -2730,10 +2880,79 @@
     return layers;
   }
 
-  function composeStrokeShadowValue(snapshot, config) {
-    var pluginLayers = buildStrokeShadowLayers(config);
-    var baseShadow = getStrokeBaseShadow(snapshot);
-    return pluginLayers.concat(baseShadow ? [baseShadow] : []).join(", ");
+  function buildShadowLayer(config) {
+    var safe = normalizeShadowConfig(config);
+    var color = rgbaFromHexAndAlpha(safe.color, safe.alpha);
+    if (!color) return "";
+    var parts = [];
+    if (safe.type === "inner") parts.push("inset");
+    parts.push(String(safe.offsetX) + "px");
+    parts.push(String(safe.offsetY) + "px");
+    parts.push(String(safe.blur) + "px");
+    parts.push(String(safe.spread) + "px");
+    parts.push(color);
+    return parts.join(" ");
+  }
+
+  function buildShadowLayers(shadows) {
+    return cloneShadowList(shadows).map(function (shadow) {
+      return buildShadowLayer(shadow);
+    }).filter(Boolean);
+  }
+
+  function composeBoxShadowEffects(targetEl) {
+    if (!targetEl || !targetEl.style) return "";
+    var snapshot = captureBaseBoxShadowSnapshot(targetEl);
+    var baseShadow = snapshot && snapshot.baseBoxShadow ? snapshot.baseBoxShadow : "";
+    var strokeConfig = getPluginStrokeConfigForTarget(targetEl);
+    var strokeLayers = strokeConfig ? buildStrokeShadowLayers(strokeConfig) : [];
+    var shadowLayers = buildShadowLayers(getPluginShadowListForTarget(targetEl));
+    return [baseShadow].concat(strokeLayers).concat(shadowLayers).filter(Boolean).join(", ");
+  }
+
+  function syncPluginBoxShadowValue(targetEl) {
+    if (!targetEl || !targetEl.style) return false;
+    captureBaseBoxShadowSnapshot(targetEl);
+    var strokeConfig = getPluginStrokeConfigForTarget(targetEl);
+    var shadowList = getPluginShadowListForTarget(targetEl);
+    var nextBoxShadow = composeBoxShadowEffects(targetEl);
+    runWithoutChangeRecord(function () {
+      if (!strokeConfig && !shadowList.length) {
+        var snapshot = getBoxShadowSnapshotForTarget(targetEl);
+        if (!snapshot || !snapshot.baseBoxShadow) {
+          targetEl.style.boxShadow = "";
+        } else if (snapshot.hadInlineBoxShadow) {
+          targetEl.style.boxShadow = snapshot.inlineBoxShadow || "";
+        } else {
+          targetEl.style.boxShadow = "";
+        }
+      } else {
+        targetEl.style.boxShadow = nextBoxShadow;
+      }
+    });
+    return true;
+  }
+
+  function clearStrokeModifiedProps() {
+    delete state.modifiedProps.strokeColor;
+    delete state.modifiedProps.strokeAlpha;
+    delete state.modifiedProps.strokeWidth;
+    delete state.modifiedProps.strokeAlign;
+    state.editedProps = state.modifiedProps;
+  }
+
+  function clearShadowModifiedProps(shadowId) {
+    if (!shadowId) {
+      Object.keys(state.modifiedProps || {}).forEach(function (prop) {
+        if (isShadowLogicalProp(prop)) delete state.modifiedProps[prop];
+      });
+    } else {
+      Object.keys(state.modifiedProps || {}).forEach(function (prop) {
+        var parsed = parseShadowLogicalProp(prop);
+        if (parsed && parsed.id === shadowId) delete state.modifiedProps[prop];
+      });
+    }
+    state.editedProps = state.modifiedProps;
   }
 
   function getPluginStrokeConfigForTarget(targetEl) {
@@ -2749,17 +2968,14 @@
   function applyStrokeConfig(targetEl, config, options) {
     options = options || {};
     if (!targetEl || !targetEl.style) return false;
-    var snapshot = captureStrokeStyleSnapshot(targetEl);
+    captureBaseBoxShadowSnapshot(targetEl);
     var previousConfig = getPluginStrokeConfigForTarget(targetEl);
-    var nextConfig = normalizeStrokeConfig(config, previousConfig || snapshot && snapshot.initialConfig || DEFAULT_STROKE_CONFIG);
-    var nextBoxShadow = composeStrokeShadowValue(snapshot, nextConfig);
-    runWithoutChangeRecord(function () {
-      targetEl.style.boxShadow = nextBoxShadow;
-    });
+    var nextConfig = normalizeStrokeConfig(config, previousConfig || DEFAULT_STROKE_CONFIG);
     setStrokeRuntimeMetaForTarget(targetEl, {
       config: nextConfig,
       source: options.source || (previousConfig ? "updated" : "addedOnNone")
     });
+    syncPluginBoxShadowValue(targetEl);
     if (options.updateModifiedProps !== false) {
       state.modifiedProps.strokeColor = true;
       state.modifiedProps.strokeAlpha = true;
@@ -2778,18 +2994,8 @@
 
   function restoreStrokeStyleSnapshot(targetEl) {
     if (!targetEl || !targetEl.style) return;
-    var snapshot = getStrokeSnapshotForTarget(targetEl);
-    runWithoutChangeRecord(function () {
-      if (!snapshot) {
-        targetEl.style.boxShadow = "";
-      } else if (snapshot.hadInlineBoxShadow) {
-        targetEl.style.boxShadow = snapshot.inlineBoxShadow || "";
-      } else {
-        targetEl.style.boxShadow = "";
-      }
-    });
-    clearStrokeSnapshotForTarget(targetEl);
     clearStrokeRuntimeMetaForTarget(targetEl);
+    syncPluginBoxShadowValue(targetEl);
     clearStrokeModifiedProps();
   }
 
@@ -2808,6 +3014,88 @@
     return true;
   }
 
+  function recordShadowLogicalChange(targetEl, shadowId, field, fromValue, toValue, options) {
+    if (!targetEl || !shadowId || !field) return;
+    appendChangePatch(targetEl, makeShadowLogicalProp(shadowId, field), fromValue, toValue, options);
+  }
+
+  function markShadowModifiedProps(shadows) {
+    cloneShadowList(shadows).forEach(function (shadow) {
+      ["type", "color", "alpha", "offsetX", "offsetY", "blur", "spread"].forEach(function (field) {
+        state.modifiedProps[makeShadowLogicalProp(shadow.id, field)] = true;
+      });
+    });
+    state.editedProps = state.modifiedProps;
+  }
+
+  function applyShadowList(targetEl, shadows, options) {
+    options = options || {};
+    if (!targetEl || !targetEl.style) return false;
+    captureBaseBoxShadowSnapshot(targetEl);
+    var previousList = getPluginShadowListForTarget(targetEl);
+    var nextList = cloneShadowList(shadows);
+    setPluginShadowListForTarget(targetEl, nextList, options.source || (previousList.length ? "updated" : "addedOnNone"));
+    syncPluginBoxShadowValue(targetEl);
+    if (options.updateModifiedProps !== false) {
+      markShadowModifiedProps(nextList);
+    }
+    if (!options.skipLogicalChangeRecord) {
+      var previousById = {};
+      previousList.forEach(function (shadow) {
+        previousById[shadow.id] = shadow;
+      });
+      nextList.forEach(function (shadow) {
+        var prev = previousById[shadow.id] || null;
+        recordShadowLogicalChange(targetEl, shadow.id, "type", prev ? prev.type : "", shadow.type, options);
+        recordShadowLogicalChange(targetEl, shadow.id, "color", prev ? prev.color : "", shadow.color, options);
+        recordShadowLogicalChange(targetEl, shadow.id, "alpha", prev ? String(prev.alpha) : "", String(shadow.alpha), options);
+        recordShadowLogicalChange(targetEl, shadow.id, "offsetX", prev ? String(prev.offsetX) : "", String(shadow.offsetX), options);
+        recordShadowLogicalChange(targetEl, shadow.id, "offsetY", prev ? String(prev.offsetY) : "", String(shadow.offsetY), options);
+        recordShadowLogicalChange(targetEl, shadow.id, "blur", prev ? String(prev.blur) : "", String(shadow.blur), options);
+        recordShadowLogicalChange(targetEl, shadow.id, "spread", prev ? String(prev.spread) : "", String(shadow.spread), options);
+      });
+    }
+    return true;
+  }
+
+  function upsertShadowConfig(targetEl, shadowConfig, options) {
+    if (!targetEl) return false;
+    var currentList = getPluginShadowListForTarget(targetEl);
+    var nextShadow = normalizeShadowConfig(shadowConfig);
+    var found = false;
+    var nextList = currentList.map(function (shadow) {
+      if (shadow.id !== nextShadow.id) return shadow;
+      found = true;
+      return normalizeShadowConfig(nextShadow, shadow);
+    });
+    if (!found) nextList.push(nextShadow);
+    return applyShadowList(targetEl, nextList, options);
+  }
+
+  function removeShadowById(targetEl, shadowId, options) {
+    if (!targetEl || !shadowId) return false;
+    var currentList = getPluginShadowListForTarget(targetEl);
+    var nextList = currentList.filter(function (shadow) {
+      return shadow && shadow.id !== shadowId;
+    });
+    clearShadowModifiedProps(shadowId);
+    if (!(options && options.skipLogicalChangeRecord)) {
+      ["type", "color", "alpha", "offsetX", "offsetY", "blur", "spread"].forEach(function (field) {
+        removeChangePatch(targetEl, makeShadowLogicalProp(shadowId, field));
+      });
+    }
+    if (!nextList.length) {
+      clearShadowRuntimeMetaForTarget(targetEl);
+      syncPluginBoxShadowValue(targetEl);
+      return true;
+    }
+    return applyShadowList(targetEl, nextList, {
+      skipLogicalChangeRecord: true,
+      updateModifiedProps: false,
+      source: options && options.source ? options.source : "removed-item"
+    });
+  }
+
   function buildStrokeConfigFromChangeItem(changeItem, valueKey) {
     var config = null;
     var patches = Array.isArray(changeItem && changeItem.patches) ? changeItem.patches : [];
@@ -2824,6 +3112,29 @@
     return config ? normalizeStrokeConfig(config) : null;
   }
 
+  function buildShadowListFromChangeItem(changeItem, valueKey) {
+    var byId = {};
+    var patches = Array.isArray(changeItem && changeItem.patches) ? changeItem.patches : [];
+    patches.forEach(function (patch) {
+      if (!patch || !isShadowLogicalProp(patch.prop)) return;
+      var patchValue = patch[valueKey];
+      if (patchValue == null || patchValue === "") return;
+      var parsed = parseShadowLogicalProp(patch.prop);
+      if (!parsed) return;
+      if (!byId[parsed.id]) byId[parsed.id] = normalizeShadowConfig({ id: parsed.id });
+      if (parsed.field === "type") byId[parsed.id].type = patchValue === "inner" ? "inner" : "outer";
+      if (parsed.field === "color") byId[parsed.id].color = String(patchValue);
+      if (parsed.field === "alpha") byId[parsed.id].alpha = parsePercentValue(patchValue);
+      if (parsed.field === "offsetX") byId[parsed.id].offsetX = Math.round(parseFloat(patchValue) || 0);
+      if (parsed.field === "offsetY") byId[parsed.id].offsetY = Math.round(parseFloat(patchValue) || 0);
+      if (parsed.field === "blur") byId[parsed.id].blur = Math.max(0, Math.round(parseFloat(patchValue) || 0));
+      if (parsed.field === "spread") byId[parsed.id].spread = Math.round(parseFloat(patchValue) || 0);
+    });
+    return Object.keys(byId).map(function (id) {
+      return normalizeShadowConfig(byId[id]);
+    });
+  }
+
   function applyStrokeChangeItemState(targetEl, changeItem, valueKey) {
     if (!targetEl || !changeItem) return false;
     var nextConfig = buildStrokeConfigFromChangeItem(changeItem, valueKey);
@@ -2831,8 +3142,22 @@
       restoreStrokeStyleSnapshot(targetEl);
       return true;
     }
-    captureStrokeStyleSnapshot(targetEl);
     return applyStrokeConfig(targetEl, nextConfig, {
+      skipLogicalChangeRecord: true,
+      updateModifiedProps: false,
+      source: "change-draft"
+    });
+  }
+
+  function applyShadowChangeItemState(targetEl, changeItem, valueKey) {
+    if (!targetEl || !changeItem) return false;
+    var nextList = buildShadowListFromChangeItem(changeItem, valueKey);
+    if (!nextList.length) {
+      clearShadowRuntimeMetaForTarget(targetEl);
+      syncPluginBoxShadowValue(targetEl);
+      return true;
+    }
+    return applyShadowList(targetEl, nextList, {
       skipLogicalChangeRecord: true,
       updateModifiedProps: false,
       source: "change-draft"
@@ -2845,6 +3170,7 @@
     closeAddPropertyMenu();
     clearBackgroundFillMeta();
     clearStrokeRuntimeMeta();
+    clearShadowRuntimeMeta();
     if (mode !== "select") {
       resetSharedElements({ keepSnapshots: true });
       clearMeasureSelection({ keepTopbarMode: false });
@@ -2871,6 +3197,7 @@
     closeAddPropertyMenu();
     clearBackgroundFillMeta();
     clearStrokeRuntimeMeta();
+    clearShadowRuntimeMeta();
     clearSelectedPanelHoverFreeze();
     state.measureA = null;
     state.measureB = null;
@@ -4291,6 +4618,7 @@
   }
 
   function toChangeSummaryKey(prop) {
+    if (isShadowLogicalProp(prop)) return prop;
     return String(prop || "")
       .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
       .replace(/\s+/g, "-")
@@ -4381,6 +4709,18 @@
       setQuickRecordComparableValue(map, "strokeAlign", strokeAlignLabel(strokeConfig.strokeAlign));
     }
 
+    getPluginShadowListForTarget(resolveShadowTarget(targetEl)).forEach(function (shadow, index) {
+      var prefix = "shadow:" + shadow.id + ".";
+      setQuickRecordComparableValue(map, prefix + "type", shadow.type === "inner" ? "内阴影" : "外阴影");
+      setQuickRecordComparableValue(map, prefix + "color", shadow.color);
+      setQuickRecordComparableValue(map, prefix + "alpha", String(shadow.alpha));
+      setQuickRecordComparableValue(map, prefix + "offsetX", String(shadow.offsetX));
+      setQuickRecordComparableValue(map, prefix + "offsetY", String(shadow.offsetY));
+      setQuickRecordComparableValue(map, prefix + "blur", String(shadow.blur));
+      setQuickRecordComparableValue(map, prefix + "spread", String(shadow.spread));
+      setQuickRecordComparableValue(map, prefix + "title", "投影 " + String(index + 1));
+    });
+
     return map;
   }
 
@@ -4404,6 +4744,17 @@
     }
     if (/^(color|backgroundColor|strokeColor)(-color-text|-alpha)?$/.test(fieldId)) {
       return fieldId.replace(/(-color-text|-alpha)$/, "");
+    }
+    var shadowAlphaFieldMatch = String(fieldId || "").match(/^(shadow:[^.:]+\.(?:color))(-alpha)$/);
+    if (shadowAlphaFieldMatch) {
+      return shadowAlphaFieldMatch[1].replace(/\.color$/, ".alpha");
+    }
+    var shadowColorFieldMatch = String(fieldId || "").match(/^(shadow:[^.:]+\.(?:color))(-color-text)$/);
+    if (shadowColorFieldMatch) {
+      return shadowColorFieldMatch[1];
+    }
+    if (isShadowLogicalProp(fieldId)) {
+      return fieldId;
     }
     if (/^(width|height|paddingLeft|paddingTop|paddingRight|paddingBottom|marginLeft|marginRight|marginTop|marginBottom|fontFamily|fontWeight|fontSize|lineHeight|opacity|borderRadius|borderTopLeftRadius|borderTopRightRadius|borderBottomRightRadius|borderBottomLeftRadius|strokeAlpha|strokeWidth|strokeAlign)$/.test(fieldId)) {
       return fieldId;
@@ -4442,10 +4793,32 @@
       if (draftStrokeAlpha == null) return null;
       return normalizeQuickRecordComparableValue(draftStrokeAlpha);
     }
+    if (isShadowLogicalProp(propKey)) {
+      var parsedShadowKey = parseShadowLogicalProp(propKey);
+      if (!parsedShadowKey) return null;
+      if (parsedShadowKey.field === "color") {
+        var draftShadowColorText = state.draftInputs[propKey + "-color-text"];
+        if (draftShadowColorText != null) {
+          return "#" + normalizeQuickRecordComparableValue(draftShadowColorText);
+        }
+      }
+      if (parsedShadowKey.field === "alpha") {
+        var draftShadowAlpha = state.draftInputs[String(propKey).replace(/\.alpha$/, ".color-alpha")];
+        if (draftShadowAlpha != null) return normalizeQuickRecordComparableValue(draftShadowAlpha);
+      }
+    }
     if (propKey === "strokeAlign") {
       var draftAlign = state.draftInputs[propKey];
       if (draftAlign == null) return null;
       return strokeAlignLabel(draftAlign);
+    }
+    if (isShadowLogicalProp(propKey)) {
+      if (state.draftInputs[propKey] == null) return null;
+      var shadowMeta = parseShadowLogicalProp(propKey);
+      if (shadowMeta && shadowMeta.field === "type") {
+        return state.draftInputs[propKey] === "inner" ? "内阴影" : "外阴影";
+      }
+      return normalizeQuickRecordComparableValue(state.draftInputs[propKey]);
     }
     if (state.draftInputs[propKey] == null) return null;
     return normalizeQuickRecordComparableValue(state.draftInputs[propKey]);
@@ -4539,16 +4912,22 @@
   function renderSelectedPanelAddPropertyAction(targetEl, style, capabilities) {
     var applyTarget = resolveBackgroundHost(targetEl);
     var strokeTarget = resolveStrokeTarget(targetEl);
+    var shadowTarget = resolveShadowTarget(targetEl);
     var canAddBackground = !!applyTarget;
     var canAddStroke = !!strokeTarget;
+    var canAddShadow = !!shadowTarget;
     var addBgLabel = "添加填充";
     var addBgHint = "";
     var addStrokeHint = "";
+    var addShadowHint = "";
     if (!applyTarget) {
       addBgHint = "无可写入宿主";
     }
     if (!strokeTarget) {
       addStrokeHint = "无可写入目标";
+    }
+    if (!shadowTarget) {
+      addShadowHint = "无可写入目标";
     }
     var menuOpen = !!state.addPropMenuOpen;
     return (
@@ -4557,33 +4936,44 @@
       (menuOpen ? "true" : "false") +
       '" data-vqa-footer-secondary="1" style="height:36px;padding:0 14px;border-radius:12px;box-sizing:border-box;">添加属性</button>' +
       (menuOpen
-        ? '<div data-vqa-add-prop-menu="1" style="position:absolute;left:0;bottom:calc(100% + 8px);display:flex;flex-direction:column;min-width:172px;padding:6px;border-radius:10px;border:1px solid rgba(255,255,255,.12);background:rgba(22,24,30,.98);box-shadow:0 12px 28px rgba(0,0,0,.38);z-index:8;overflow:visible;">' +
+        ? '<div data-vqa-add-prop-menu="1" style="position:absolute;left:0;bottom:calc(100% + 8px);display:flex;flex-direction:column;min-width:188px;padding:8px;border-radius:18px;border:1px solid rgba(255,255,255,.08);background:rgba(24,26,31,.96);box-shadow:0 18px 38px rgba(0,0,0,.34),0 1px 0 rgba(255,255,255,.04) inset;backdrop-filter:blur(18px);z-index:60;overflow:visible;gap:4px;">' +
           '<button type="button" data-action="add-prop-background" ' +
           (canAddBackground ? "" : 'disabled aria-disabled="true" ') +
-          'style="height:30px;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 10px;border:0;border-radius:7px;background:' +
+          'style="min-height:40px;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;border:0;border-radius:12px;background:' +
           (canAddBackground ? "transparent" : "rgba(255,255,255,.02)") +
           ';color:' +
           (canAddBackground ? "rgba(235,240,245,.92)" : "rgba(255,255,255,.36)") +
-          ';font:12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:' +
+          ';font:500 12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:' +
           (canAddBackground ? "pointer" : "not-allowed") +
+          ';transition:background-color 120ms ease,color 120ms ease,transform 120ms ease;' +
           ';">' +
           '<span style="white-space:nowrap;">' + addBgLabel + "</span>" +
           (addBgHint ? '<span style="color:rgba(255,255,255,.42);font-size:11px;white-space:nowrap;">' + esc(addBgHint) + "</span>" : "") +
           "</button>" +
           '<button type="button" data-action="add-prop-stroke" ' +
           (canAddStroke ? "" : 'disabled aria-disabled="true" ') +
-          'style="height:30px;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 10px;border:0;border-radius:7px;background:' +
+          'style="min-height:40px;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;border:0;border-radius:12px;background:' +
           (canAddStroke ? "transparent" : "rgba(255,255,255,.02)") +
           ';color:' +
           (canAddStroke ? "rgba(235,240,245,.92)" : "rgba(255,255,255,.36)") +
-          ';font:12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:' +
+          ';font:500 12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:' +
           (canAddStroke ? "pointer" : "not-allowed") +
+          ';transition:background-color 120ms ease,color 120ms ease,transform 120ms ease;' +
           ';">' +
           '<span style="white-space:nowrap;">添加描边</span>' +
           (addStrokeHint ? '<span style="color:rgba(255,255,255,.42);font-size:11px;white-space:nowrap;">' + esc(addStrokeHint) + "</span>" : "") +
           "</button>" +
-          '<button type="button" disabled aria-disabled="true" style="height:30px;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 10px;border:0;border-radius:7px;background:rgba(255,255,255,.02);color:rgba(255,255,255,.36);font:12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:not-allowed;">' +
-          '<span style="white-space:nowrap;">添加投影</span><span style="color:rgba(255,255,255,.42);font-size:11px;white-space:nowrap;">暂未支持</span>' +
+          '<button type="button" data-action="add-prop-shadow" ' +
+          (canAddShadow ? "" : 'disabled aria-disabled="true" ') +
+          'style="min-height:40px;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;border:0;border-radius:12px;background:' +
+          (canAddShadow ? "transparent" : "rgba(255,255,255,.02)") +
+          ';color:' +
+          (canAddShadow ? "rgba(235,240,245,.92)" : "rgba(255,255,255,.36)") +
+          ';font:500 12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:' +
+          (canAddShadow ? "pointer" : "not-allowed") +
+          ';transition:background-color 120ms ease,color 120ms ease,transform 120ms ease;">' +
+          '<span style="white-space:nowrap;">添加投影</span>' +
+          (addShadowHint ? '<span style="color:rgba(255,255,255,.42);font-size:11px;white-space:nowrap;">' + esc(addShadowHint) + "</span>" : "") +
           "</button>" +
           "</div>"
         : "") +
@@ -4756,6 +5146,11 @@
       strokeWidth: "描边大小",
       strokeAlign: "描边位置"
     };
+    var parsedShadowProp = parseShadowLogicalProp(prop);
+    if (parsedShadowProp) {
+      var fieldLabel = SHADOW_FIELD_LABELS[parsedShadowProp.field] || parsedShadowProp.field;
+      return "投影 " + fieldLabel;
+    }
     return map[prop] || String(prop || "");
   }
 
@@ -5501,8 +5896,30 @@
       if (patch.prop === "strokeAlpha") nextConfig.strokeAlpha = parsePercentValue(patch.to);
       if (patch.prop === "strokeWidth") nextConfig.strokeWidth = Math.max(0, Math.round(parseFloat(patch.to) || 0));
       if (patch.prop === "strokeAlign") nextConfig.strokeAlign = patch.to === "center" || patch.to === "outside" ? patch.to : "inside";
-      captureStrokeStyleSnapshot(targetEl);
+      captureBaseBoxShadowSnapshot(targetEl);
       return applyStrokeConfig(targetEl, nextConfig, {
+        skipLogicalChangeRecord: true,
+        updateModifiedProps: false,
+        source: "change-patch"
+      });
+    }
+    if (isShadowLogicalProp(patch.prop)) {
+      var parsedShadowApply = parseShadowLogicalProp(patch.prop);
+      if (!parsedShadowApply) return false;
+      var currentShadows = getPluginShadowListForTarget(targetEl);
+      var currentShadow = null;
+      currentShadows.forEach(function (shadow) {
+        if (shadow.id === parsedShadowApply.id) currentShadow = shadow;
+      });
+      var nextShadow = normalizeShadowConfig({ id: parsedShadowApply.id }, currentShadow || DEFAULT_SHADOW_CONFIG);
+      if (parsedShadowApply.field === "type") nextShadow.type = patch.to === "inner" ? "inner" : "outer";
+      if (parsedShadowApply.field === "color") nextShadow.color = normalizePromptValue(patch.to, DEFAULT_SHADOW_CONFIG.color);
+      if (parsedShadowApply.field === "alpha") nextShadow.alpha = parsePercentValue(patch.to);
+      if (parsedShadowApply.field === "offsetX") nextShadow.offsetX = Math.round(parseFloat(patch.to) || 0);
+      if (parsedShadowApply.field === "offsetY") nextShadow.offsetY = Math.round(parseFloat(patch.to) || 0);
+      if (parsedShadowApply.field === "blur") nextShadow.blur = Math.max(0, Math.round(parseFloat(patch.to) || 0));
+      if (parsedShadowApply.field === "spread") nextShadow.spread = Math.round(parseFloat(patch.to) || 0);
+      return upsertShadowConfig(targetEl, nextShadow, {
         skipLogicalChangeRecord: true,
         updateModifiedProps: false,
         source: "change-patch"
@@ -5534,8 +5951,36 @@
         restoreStrokeStyleSnapshot(targetEl);
         return true;
       }
-      captureStrokeStyleSnapshot(targetEl);
+      captureBaseBoxShadowSnapshot(targetEl);
       return applyStrokeConfig(targetEl, nextConfig, {
+        skipLogicalChangeRecord: true,
+        updateModifiedProps: false,
+        source: "change-patch"
+      });
+    }
+    if (isShadowLogicalProp(patch.prop)) {
+      var parsedShadowRestore = parseShadowLogicalProp(patch.prop);
+      if (!parsedShadowRestore) return false;
+      if (patch.from == null || patch.from === "") {
+        return removeShadowById(targetEl, parsedShadowRestore.id, {
+          skipLogicalChangeRecord: true,
+          source: "change-patch"
+        });
+      }
+      var restoreShadows = getPluginShadowListForTarget(targetEl);
+      var restoreShadow = null;
+      restoreShadows.forEach(function (shadow) {
+        if (shadow.id === parsedShadowRestore.id) restoreShadow = shadow;
+      });
+      var nextRestoreShadow = normalizeShadowConfig({ id: parsedShadowRestore.id }, restoreShadow || DEFAULT_SHADOW_CONFIG);
+      if (parsedShadowRestore.field === "type") nextRestoreShadow.type = patch.from === "inner" ? "inner" : "outer";
+      if (parsedShadowRestore.field === "color") nextRestoreShadow.color = normalizePromptValue(patch.from, DEFAULT_SHADOW_CONFIG.color);
+      if (parsedShadowRestore.field === "alpha") nextRestoreShadow.alpha = parsePercentValue(patch.from);
+      if (parsedShadowRestore.field === "offsetX") nextRestoreShadow.offsetX = Math.round(parseFloat(patch.from) || 0);
+      if (parsedShadowRestore.field === "offsetY") nextRestoreShadow.offsetY = Math.round(parseFloat(patch.from) || 0);
+      if (parsedShadowRestore.field === "blur") nextRestoreShadow.blur = Math.max(0, Math.round(parseFloat(patch.from) || 0));
+      if (parsedShadowRestore.field === "spread") nextRestoreShadow.spread = Math.round(parseFloat(patch.from) || 0);
+      return upsertShadowConfig(targetEl, nextRestoreShadow, {
         skipLogicalChangeRecord: true,
         updateModifiedProps: false,
         source: "change-patch"
@@ -5567,8 +6012,11 @@
     if (patches.some(function (patch) { return patch && isStrokeLogicalProp(patch.prop); })) {
       applyStrokeChangeItemState(targetEl, changeItem, "to");
     }
+    if (patches.some(function (patch) { return patch && isShadowLogicalProp(patch.prop); })) {
+      applyShadowChangeItemState(targetEl, changeItem, "to");
+    }
     patches.forEach(function (patch) {
-      if (patch && isStrokeLogicalProp(patch.prop)) return;
+      if (patch && isPluginBoxShadowLogicalProp(patch.prop)) return;
       applyChangePatchWithoutRecord(targetEl, patch);
     });
     return true;
@@ -5604,6 +6052,7 @@
 
   function isPatchValueCurrentlyApplied(targetEl, patch) {
     if (!targetEl || !patch || !patch.prop) return false;
+    if (isPluginBoxShadowLogicalProp(patch.prop)) return true;
     return normalizeChangeComparableValue(getComputedStyleValue(targetEl, patch.prop)) === normalizeChangeComparableValue(patch.to);
   }
 
@@ -5613,8 +6062,11 @@
     if (changeItem.patches.some(function (patch) { return patch && isStrokeLogicalProp(patch.prop); })) {
       restored = applyStrokeChangeItemState(targetEl, changeItem, "from") || restored;
     }
+    if (changeItem.patches.some(function (patch) { return patch && isShadowLogicalProp(patch.prop); })) {
+      restored = applyShadowChangeItemState(targetEl, changeItem, "from") || restored;
+    }
     changeItem.patches.forEach(function (patch) {
-      if (patch && isStrokeLogicalProp(patch.prop)) return;
+      if (patch && isPluginBoxShadowLogicalProp(patch.prop)) return;
       if (restorePatchWithoutRecord(targetEl, patch)) {
         restored = true;
       }
@@ -5636,8 +6088,11 @@
     if (patches.some(function (patch) { return patch && isStrokeLogicalProp(patch.prop); })) {
       restoredAny = applyStrokeChangeItemState(targetEl, changeItem, "from") || restoredAny;
     }
+    if (patches.some(function (patch) { return patch && isShadowLogicalProp(patch.prop); })) {
+      restoredAny = applyShadowChangeItemState(targetEl, changeItem, "from") || restoredAny;
+    }
     patches.forEach(function (patch) {
-      if (patch && isStrokeLogicalProp(patch.prop)) return;
+      if (patch && isPluginBoxShadowLogicalProp(patch.prop)) return;
       if (restorePatchWithoutRecord(targetEl, patch)) {
         restoredAny = true;
       } else {
@@ -5836,6 +6291,7 @@
     var active = document.activeElement;
     if (!active) return false;
     if (!tooltip.contains(active)) return false;
+    if (active.matches && active.matches('[data-vqa-custom-select-trigger="1"]')) return false;
     if (active.getAttribute("data-color-picker-input") || active.getAttribute("data-color-prop")) return true;
     return !!active.getAttribute("data-field-id");
   }
@@ -6069,6 +6525,11 @@
       var strokeConfig = getPluginStrokeConfigForTarget(resolveStrokeTarget(el));
       return strokeConfig ? strokeConfig.strokeAlpha : DEFAULT_STROKE_CONFIG.strokeAlpha;
     }
+    if (isShadowLogicalProp(prop)) {
+      var parsedShadowProp = parseShadowLogicalProp(prop);
+      var shadowConfig = parsedShadowProp ? findShadowConfigById(getPluginShadowListForTarget(resolveShadowTarget(el)), parsedShadowProp.id) : null;
+      return shadowConfig ? shadowConfig.alpha : DEFAULT_SHADOW_CONFIG.alpha;
+    }
     var style = getComputedStyle(el);
     if (prop === "opacity") return parsePercentValue(formatOpacityPercent(style.opacity));
     return getColorComponents(style[prop]).alpha;
@@ -6102,10 +6563,22 @@
   }
 
   function isNumericField(prop) {
+    if (isShadowLogicalProp(prop)) {
+      var shadowMeta = parseShadowLogicalProp(prop);
+      return !!(shadowMeta && /^(offsetX|offsetY|blur|spread)$/.test(shadowMeta.field));
+    }
     return isLengthProp(prop) || prop === "fontWeight";
   }
 
   function getScrubConfig(prop) {
+    if (isShadowLogicalProp(prop)) {
+      var shadowMeta = parseShadowLogicalProp(prop);
+      if (!shadowMeta) return null;
+      if (shadowMeta.field === "alpha") return { min: 0, max: 100 };
+      if (/^(offsetX|offsetY|spread)$/.test(shadowMeta.field)) return { min: null, max: null };
+      if (shadowMeta.field === "blur") return { min: 0, max: null };
+      return null;
+    }
     return scrubProps[prop] || null;
   }
 
@@ -6166,6 +6639,24 @@
     if (prop === "opacity") {
       var opacityValue = parseOpacityPercent(rawValue);
       applyStyle(prop, opacityValue || "", el);
+      return;
+    }
+    if (isShadowLogicalProp(prop)) {
+      var parsedShadowProp = parseShadowLogicalProp(prop);
+      if (!parsedShadowProp) return;
+      var shadowTarget = resolveShadowTarget(el);
+      var shadowConfig = findShadowConfigById(getPluginShadowListForTarget(shadowTarget), parsedShadowProp.id) || normalizeShadowConfig({ id: parsedShadowProp.id });
+      var nextShadow = normalizeShadowConfig(shadowConfig, shadowConfig);
+      if (parsedShadowProp.field === "type") nextShadow.type = rawValue === "inner" ? "inner" : "outer";
+      if (parsedShadowProp.field === "color") nextShadow.color = String(rawValue || DEFAULT_SHADOW_CONFIG.color);
+      if (parsedShadowProp.field === "alpha") nextShadow.alpha = parsePercentValue(rawValue);
+      if (parsedShadowProp.field === "offsetX") nextShadow.offsetX = Math.round(parseFloat(rawValue) || 0);
+      if (parsedShadowProp.field === "offsetY") nextShadow.offsetY = Math.round(parseFloat(rawValue) || 0);
+      if (parsedShadowProp.field === "blur") nextShadow.blur = Math.max(0, Math.round(parseFloat(rawValue) || 0));
+      if (parsedShadowProp.field === "spread") nextShadow.spread = Math.round(parseFloat(rawValue) || 0);
+      upsertShadowConfig(shadowTarget, nextShadow, {
+        source: "panel-preview"
+      });
       return;
     }
     applyStyle(prop, normalizeValue(prop, rawValue), el);
@@ -6282,6 +6773,13 @@
         hex: strokeConfig ? strokeConfig.strokeColor : DEFAULT_STROKE_CONFIG.strokeColor,
         alpha: strokeConfig ? strokeConfig.strokeAlpha : DEFAULT_STROKE_CONFIG.strokeAlpha
       };
+    } else if (isShadowLogicalProp(prop)) {
+      var parsedShadowProp = parseShadowLogicalProp(prop);
+      var shadowConfig = parsedShadowProp ? findShadowConfigById(getPluginShadowListForTarget(resolveShadowTarget(el)), parsedShadowProp.id) : null;
+      computed = {
+        hex: shadowConfig ? shadowConfig.color : DEFAULT_SHADOW_CONFIG.color,
+        alpha: shadowConfig ? shadowConfig.alpha : DEFAULT_SHADOW_CONFIG.alpha
+      };
     }
     var hexField = queryPanelSelector('input[data-prop="' + prop + '"]');
     var alphaField = queryPanelSelector('input[data-color-alpha-prop="' + prop + '"]');
@@ -6309,6 +6807,25 @@
       });
       return;
     }
+    if (isShadowLogicalProp(prop)) {
+      var parsedShadowPreview = parseShadowLogicalProp(prop);
+      if (!parsedShadowPreview) return;
+      var shadowTarget = resolveShadowTarget(el);
+      var shadowConfig = findShadowConfigById(getPluginShadowListForTarget(shadowTarget), parsedShadowPreview.id) || normalizeShadowConfig({ id: parsedShadowPreview.id });
+      upsertShadowConfig(shadowTarget, {
+        id: parsedShadowPreview.id,
+        type: shadowConfig.type,
+        color: hexValue,
+        alpha: alphaValue,
+        offsetX: shadowConfig.offsetX,
+        offsetY: shadowConfig.offsetY,
+        blur: shadowConfig.blur,
+        spread: shadowConfig.spread
+      }, {
+        source: "panel-preview"
+      });
+      return;
+    }
     var next = rgbaFromHexAndAlpha(hexValue, alphaValue);
     el.style[prop] = next || "";
   }
@@ -6326,6 +6843,25 @@
         strokeAlpha: alphaValue,
         strokeWidth: strokeConfig.strokeWidth,
         strokeAlign: strokeConfig.strokeAlign
+      }, {
+        source: "panel-apply"
+      });
+      return;
+    }
+    if (isShadowLogicalProp(prop)) {
+      var parsedShadowApply = parseShadowLogicalProp(prop);
+      if (!parsedShadowApply) return;
+      var shadowTarget = resolveShadowTarget(targetOverride || getEditableTargetEl());
+      var shadowConfig = findShadowConfigById(getPluginShadowListForTarget(shadowTarget), parsedShadowApply.id) || normalizeShadowConfig({ id: parsedShadowApply.id });
+      upsertShadowConfig(shadowTarget, {
+        id: parsedShadowApply.id,
+        type: shadowConfig.type,
+        color: hexValue,
+        alpha: alphaValue,
+        offsetX: shadowConfig.offsetX,
+        offsetY: shadowConfig.offsetY,
+        blur: shadowConfig.blur,
+        spread: shadowConfig.spread
       }, {
         source: "panel-apply"
       });
@@ -6975,6 +7511,20 @@
         if (!options.silent) schedule();
         return true;
       }
+      if (isShadowLogicalProp(prop)) {
+        var parsedEmptyShadow = parseShadowLogicalProp(prop);
+        if (!parsedEmptyShadow) return false;
+        var defaultShadow = normalizeShadowConfig({ id: parsedEmptyShadow.id });
+        var fallbackValue = defaultShadow[parsedEmptyShadow.field];
+        var nextEmptyValue = parsedEmptyShadow.field === "color"
+          ? String(fallbackValue || DEFAULT_SHADOW_CONFIG.color)
+          : String(fallbackValue);
+        target.value = nextEmptyValue;
+        previewFieldValue(prop, nextEmptyValue);
+        clearEditingState();
+        if (!options.silent) schedule();
+        return true;
+      }
       if (prop === "opacity") {
         target.value = formatOpacityDisplay("", getPercentInputFallback(target));
         applyStyle(prop, "1");
@@ -7010,6 +7560,25 @@
       var normalizedStrokeAlign = rawValue === "center" || rawValue === "outside" ? rawValue : "inside";
       target.value = normalizedStrokeAlign;
       previewFieldValue(prop, normalizedStrokeAlign);
+      clearEditingState();
+      if (!options.silent) schedule();
+      return true;
+    }
+
+    if (isShadowLogicalProp(prop)) {
+      var parsedShadowCommit = parseShadowLogicalProp(prop);
+      if (!parsedShadowCommit) return false;
+      var nextShadowValue = rawValue;
+      if (parsedShadowCommit.field === "type") {
+        nextShadowValue = rawValue === "inner" ? "inner" : "outer";
+      } else if (parsedShadowCommit.field === "color") {
+        nextShadowValue = "#" + (expandBareHexText(rawValue) || expandBareHexText(getColorDraftMeta(prop).hex) || "000000");
+        syncColorUi(prop, nextShadowValue);
+      } else {
+        nextShadowValue = String(Math.round(parseFloat(rawValue) || 0));
+      }
+      target.value = parsedShadowCommit.field === "color" ? nextShadowValue.replace(/^#/, "") : nextShadowValue;
+      previewFieldValue(prop, nextShadowValue);
       clearEditingState();
       if (!options.silent) schedule();
       return true;
@@ -7061,6 +7630,7 @@
     if (!el) return;
     var backgroundTarget = resolveBackgroundHost(getSelectedPanelTarget());
     var strokeTarget = resolveStrokeTarget(getSelectedPanelTarget());
+    var shadowTarget = resolveShadowTarget(getSelectedPanelTarget());
     var modifiedPropsBeforeReset = Object.keys(state.modifiedProps || {});
     runWithoutChangeRecord(function () {
       if (backgroundTarget && (getBackgroundFillSnapshotForTarget(backgroundTarget) || getBackgroundFillSourceForTarget(backgroundTarget) || getVisibleBackgroundColorValue(backgroundTarget, getComputedStyle(backgroundTarget)))) {
@@ -7069,9 +7639,13 @@
       if (strokeTarget && (getStrokeSnapshotForTarget(strokeTarget) || getPluginStrokeConfigForTarget(strokeTarget))) {
         restoreStrokeStyleSnapshot(strokeTarget);
       }
+      if (shadowTarget && getPluginShadowListForTarget(shadowTarget).length) {
+        clearShadowRuntimeMetaForTarget(shadowTarget);
+        syncPluginBoxShadowValue(shadowTarget);
+      }
       modifiedPropsBeforeReset.forEach(function (prop) {
         if (backgroundTarget && (prop === "background" || prop === "backgroundColor" || prop === "backgroundImage")) return;
-        if (isStrokeLogicalProp(prop)) return;
+        if (isPluginBoxShadowLogicalProp(prop)) return;
         el.style[prop] = "";
       });
       if (backgroundTarget) {
@@ -7079,6 +7653,9 @@
       }
       if (strokeTarget) {
         clearStrokeModifiedProps();
+      }
+      if (shadowTarget) {
+        clearShadowModifiedProps();
       }
     });
     restoreSharedOriginalInlineStyles();
@@ -7090,6 +7667,10 @@
       }
       if (isStrokeLogicalProp(prop)) {
         removeChangePatch(strokeTarget || el, prop);
+        return;
+      }
+      if (isShadowLogicalProp(prop)) {
+        removeChangePatch(shadowTarget || el, prop);
         return;
       }
       removeChangePatch(el, prop);
@@ -7143,7 +7724,7 @@
     var fieldId = getFieldId(input) || prop;
     state.editingFieldId = fieldId;
     state.draftInputs[fieldId] = nextValue;
-    if (prop === "strokeWidth") {
+    if (prop === "strokeWidth" || isShadowLogicalProp(prop)) {
       previewFieldValue(prop, nextValue);
     } else {
       applyStyle(prop, toCssLength(nextValue));
@@ -7250,6 +7831,102 @@
     scheduleSelectedPanelHoverUnfreeze(0);
     syncQuickRecordUiForCurrentPanel();
     if (!state.panelCollapsed) schedule();
+  }
+
+  function closeCustomSelectPopover() {
+    var closingFieldId = state.customSelectOpenFieldId || "";
+    state.customSelectOpenFieldId = "";
+    customSelectPopover.style.display = "none";
+    customSelectPopover.innerHTML = "";
+    var expandedTrigger = tooltip.querySelector('[data-vqa-custom-select-trigger="1"][aria-expanded="true"]');
+    if (expandedTrigger) expandedTrigger.setAttribute("aria-expanded", "false");
+    if (closingFieldId && state.editingFieldId === closingFieldId) {
+      clearEditingState();
+    }
+  }
+
+  function positionCustomSelectPopover(anchorRect) {
+    if (!anchorRect || customSelectPopover.style.display === "none") return;
+    var panel = customSelectPopover.firstElementChild;
+    if (!panel) return;
+    var panelRect = panel.getBoundingClientRect();
+    var left = clamp(anchorRect.left, 12, Math.max(12, window.innerWidth - panelRect.width - 12));
+    var top = anchorRect.bottom + 8;
+    if (top + panelRect.height > window.innerHeight - 12) {
+      top = Math.max(12, anchorRect.top - panelRect.height - 8);
+    }
+    top = clamp(top, 12, Math.max(12, window.innerHeight - panelRect.height - 12));
+    customSelectPopover.style.left = left + "px";
+    customSelectPopover.style.top = top + "px";
+  }
+
+  function openCustomSelectPopover(trigger, nativeSelect) {
+    if (!trigger || !nativeSelect || nativeSelect.disabled) return;
+    var fieldId = getFieldId(nativeSelect);
+    var selectKind = nativeSelect.getAttribute("data-select-kind") || "";
+    var options = Array.prototype.map.call(nativeSelect.options || [], function (option) {
+      return {
+        value: option.value,
+        label: option.textContent || option.value
+      };
+    });
+    customSelectPopover.innerHTML =
+      '<div class="v12-custom-select-popover-panel" data-select-kind="' + esc(selectKind) + '" role="listbox" aria-label="' + esc(fieldId || "select") + '">' +
+      options.map(function (option) {
+        var selected = String(option.value || "") === String(nativeSelect.value || "");
+        var optionStyle = selectKind === "font-family"
+          ? ' style="font-family:' + esc(String(option.value || "").replace(/"/g, "&quot;")) + ',-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;"'
+          : "";
+        return (
+          '<button type="button" class="v12-custom-select-option" data-action="select-custom-select-option" data-field-id="' + esc(fieldId) + '" data-value="' + esc(option.value || "") + '" data-selected="' + (selected ? "true" : "false") + '"' + optionStyle + ">" +
+          '<span class="v12-custom-select-check" aria-hidden="true">✓</span>' +
+          '<span class="v12-custom-select-text">' + esc(option.label || option.value || "") + "</span>" +
+          "</button>"
+        );
+      }).join("") +
+      "</div>";
+    state.customSelectOpenFieldId = fieldId;
+    trigger.setAttribute("aria-expanded", "true");
+    customSelectPopover.style.display = "block";
+    positionCustomSelectPopover(trigger.getBoundingClientRect());
+  }
+
+  function toggleCustomSelectFromTrigger(trigger) {
+    if (!trigger || trigger.disabled) return;
+    var wrapper = trigger.closest ? trigger.closest("[data-vqa-custom-select]") : null;
+    var nativeSelect = wrapper ? wrapper.querySelector('select[data-vqa-custom-select-native="1"]') : null;
+    if (!nativeSelect) return;
+    var fieldId = getFieldId(nativeSelect);
+    if (state.customSelectOpenFieldId === fieldId && customSelectPopover.style.display !== "none") {
+      closeCustomSelectPopover();
+      return;
+    }
+    closeCustomSelectPopover();
+    openCustomSelectPopover(trigger, nativeSelect);
+  }
+
+  function onCustomSelectPopoverClick(e) {
+    var optionBtn = e.target && e.target.closest ? e.target.closest('[data-action="select-custom-select-option"]') : null;
+    if (!optionBtn || !customSelectPopover.contains(optionBtn)) return;
+    var fieldId = optionBtn.getAttribute("data-field-id") || "";
+    var value = optionBtn.getAttribute("data-value") || "";
+    var nativeSelect = Array.prototype.find.call(
+      tooltip.querySelectorAll('select[data-vqa-custom-select-native="1"]'),
+      function (el) {
+        return getFieldId(el) === fieldId;
+      }
+    );
+    if (!nativeSelect) {
+      closeCustomSelectPopover();
+      return;
+    }
+    nativeSelect.value = value;
+    state.editingFieldId = fieldId;
+    state.draftInputs[fieldId] = value;
+    closeCustomSelectPopover();
+    nativeSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    e.preventDefault();
+    e.stopPropagation();
   }
 
   function onPanelMouseMove(e) {
@@ -7395,6 +8072,16 @@
     }
     var target = e.target;
     if (!target || !tooltip.contains(target)) return;
+    var customSelectTrigger = target.closest ? target.closest('[data-action="toggle-custom-select"]') : null;
+    if (customSelectTrigger) {
+      toggleCustomSelectFromTrigger(customSelectTrigger);
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    if (state.customSelectOpenFieldId) {
+      closeCustomSelectPopover();
+    }
     if (isPanelControlTarget(target)) return;
     var actionTarget = target.closest ? target.closest("[data-action]") : null;
     var action = actionTarget ? actionTarget.getAttribute("data-action") : "";
@@ -7470,8 +8157,23 @@
       var addStrokeBaseTarget = getSelectedPanelTarget();
       var addStrokeTarget = resolveStrokeTarget(addStrokeBaseTarget);
       if (addStrokeTarget) {
-        captureStrokeStyleSnapshot(addStrokeTarget);
         applyStrokeConfig(addStrokeTarget, DEFAULT_STROKE_CONFIG, {
+          source: "addedOnNone"
+        });
+      }
+      closeAddPropertyMenu();
+      schedule();
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    if (action === "add-prop-shadow") {
+      var addShadowBaseTarget = getSelectedPanelTarget();
+      var addShadowTarget = resolveShadowTarget(addShadowBaseTarget);
+      if (addShadowTarget) {
+        upsertShadowConfig(addShadowTarget, normalizeShadowConfig({
+          id: makeChangeEntityId("shadow")
+        }), {
           source: "addedOnNone"
         });
       }
@@ -7503,6 +8205,18 @@
       var removeStrokeTarget = resolveStrokeTarget(getSelectedPanelTarget());
       if (removeStrokeTarget) {
         removeStrokeConfig(removeStrokeTarget);
+      }
+      closeAddPropertyMenu();
+      schedule();
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    if (action === "remove-shadow") {
+      var removeShadowTarget = resolveShadowTarget(getSelectedPanelTarget());
+      var removeShadowId = target.getAttribute("data-shadow-id") || "";
+      if (removeShadowTarget && removeShadowId) {
+        removeShadowById(removeShadowTarget, removeShadowId);
       }
       closeAddPropertyMenu();
       schedule();
@@ -7838,11 +8552,23 @@
         var label = typeof option === "string" ? option : option && option.label;
         return '<option style="font:' + selectOptionFont + ';background:#2f2f2f;color:#fff;" value="' + esc(value || "") + '"' + (String(displayValue) === String(value) ? " selected" : "") + ">" + esc(label || value || "") + "</option>";
       }).join("");
+      var selectedOption = (opts.options || []).find(function (option) {
+        var optionValue = typeof option === "string" ? option : option && option.value;
+        return String(optionValue || "") === String(displayValue);
+      });
+      var selectedLabel = typeof selectedOption === "string"
+        ? selectedOption
+        : selectedOption && (selectedOption.label || selectedOption.value);
+      if (!selectedLabel) selectedLabel = displayValue;
+      var triggerLabelStyle = "";
+      if (selectKind === "font-family" && displayValue) {
+        triggerLabelStyle = 'font-family:' + esc(String(displayValue).replace(/"/g, "&quot;")) + ",-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;";
+      }
       return (
-        '<div style="position:relative;min-width:0;width:100%;' +
+        '<div data-vqa-custom-select="1" style="position:relative;min-width:0;width:100%;' +
         compactWidth +
         '">' +
-        '<select data-field-id="' +
+        '<select data-vqa-custom-select-native="1" tabindex="-1" aria-hidden="true" data-field-id="' +
         esc(fieldId) +
         '" data-prop="' +
         esc(prop) +
@@ -7867,15 +8593,30 @@
         ';">' +
         selectOptions +
         "</select>" +
-        '<div style="position:absolute;right:' +
+        '<button type="button" data-action="toggle-custom-select" data-vqa-custom-select-trigger="1" data-field-id="' +
+        esc(fieldId) +
+        '" data-select-kind="' +
+        esc(selectKind) +
+        '" aria-haspopup="listbox" aria-expanded="' +
+        (state.customSelectOpenFieldId === fieldId ? "true" : "false") +
+        '" style="' +
+        inputStyle +
+        'padding:' +
+        selectPadding +
+        ';font:' +
+        selectFont +
+        ';letter-spacing:.01em;cursor:' +
+        (disabled ? "not-allowed" : "pointer") +
+        ';text-align:left;">' +
+        '<span data-vqa-custom-select-label="1" style="' + triggerLabelStyle + '">' + esc(selectedLabel || "") + "</span>" +
+        '<span data-vqa-custom-select-arrow="1" style="position:absolute;right:' +
         selectArrowRight +
-        ';top:50%;transform:translateY(-50%);color:' +
-        PANEL_UI.labelColor +
-        ';font-size:' +
+        ";top:50%;transform:translateY(-50%);font-size:" +
         selectArrowFontSize +
         ';pointer-events:none;display:flex;align-items:center;justify-content:center;">' +
         selectArrowHtml +
-        "</div>" +
+        "</span>" +
+        "</button>" +
         "</div>"
       );
     }
@@ -8239,9 +8980,14 @@
     var colorMeta = getColorComponents(colorValue);
     var alphaFieldId = prop + "-alpha";
     var allowDelete = !!opts.allowDelete;
+    var columns = opts.columns || (allowDelete ? "minmax(0,2fr) minmax(0,1fr) 36px" : "minmax(0,2fr) minmax(0,1fr)");
+    var textFont = opts.textFont || "400 14px/1.2 'PingFang SC',-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif";
+    var textTransform = opts.textTransform || "uppercase";
+    var alphaGap = opts.alphaGap || "14px";
+    var alphaMinWidth = opts.alphaMinWidth || "32px";
     return (
       '<div data-vqa-field="color-value" style="display:grid;grid-template-columns:' +
-      (allowDelete ? "minmax(0,2fr) minmax(0,1fr) 36px" : "minmax(0,2fr) minmax(0,1fr)") +
+      columns +
       ';gap:0;align-items:stretch;min-width:0;overflow:hidden;border-radius:' +
       PANEL_UI.atomRadius +
       ';background:rgba(255,255,255,.07);border:1px solid transparent;transition:background-color 120ms ease,border-color 120ms ease,box-shadow 120ms ease;">' +
@@ -8283,24 +9029,36 @@
       PANEL_UI.atomHeight +
       ';box-sizing:border-box;padding:0;border:0;background:transparent;color:' +
       PANEL_UI.atomText +
-      ';font:400 14px/1.2 \'PingFang SC\',-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;outline:none;box-shadow:none;text-transform:uppercase;">' +
+      ';font:' +
+      textFont +
+      ';outline:none;box-shadow:none;text-transform:' +
+      textTransform +
+      ';">' +
       "</div>" +
       "</div>" +
       '<div style="display:flex;align-items:baseline;justify-content:flex-end;min-width:0;height:' +
       PANEL_UI.atomHeight +
-      ';padding:0 12px 0 10px;box-sizing:border-box;background:transparent;border:0;min-width:0;gap:14px;">' +
+      ';padding:0 12px 0 10px;box-sizing:border-box;background:transparent;border:0;min-width:0;gap:' +
+      alphaGap +
+      ';">' +
       '<input type="text" inputmode="decimal" autocomplete="off" spellcheck="false" data-field-id="' +
       esc(alphaFieldId) +
       '" data-color-alpha-prop="' +
       esc(prop) +
       '" data-editable="1" data-scrub-enabled="true" data-scrub-locked="false" data-prop="opacity" value="' +
       esc(String(colorMeta.alpha)) +
-      '" style="width:auto;min-width:0;height:' +
+      '" style="width:auto;min-width:' +
+      alphaMinWidth +
+      ';height:' +
       PANEL_UI.atomHeight +
       ';box-sizing:border-box;padding:0;border-radius:0;border:0;background:transparent;color:' +
       PANEL_UI.atomText +
-      ';font:400 14px/1.2 \'PingFang SC\',-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;outline:none;box-shadow:none;text-align:right;">' +
-      '<span aria-hidden="true" style="flex:0 0 auto;color:#B6B6B6;font:400 14px/1.2 \'PingFang SC\',-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;line-height:1;">%</span>' +
+      ';font:' +
+      textFont +
+      ';outline:none;box-shadow:none;text-align:right;">' +
+      '<span aria-hidden="true" style="flex:0 0 auto;color:#B6B6B6;font:' +
+      textFont +
+      ';line-height:1;">%</span>' +
       "</div>" +
       (allowDelete
         ? '<div style="display:flex;align-items:center;justify-content:center;height:' +
@@ -10138,6 +10896,7 @@
       state.modifiedProps = {};
       state.editedProps = state.modifiedProps;
       state.spacingExpanded = { padding: false, margin: false, radius: false };
+      state.v12.selectedPanelScrollTop = 0;
       clearEditingState();
       state.panelNeedsPlacement = false;
       state.panelManualPosition = false;
@@ -10148,6 +10907,7 @@
       state.modifiedProps = {};
       state.editedProps = state.modifiedProps;
       state.spacingExpanded = { padding: false, margin: false, radius: false };
+      state.v12.selectedPanelScrollTop = 0;
       clearEditingState();
     }
     if (!state.panelPinned && !state.panelManualPosition && prevSelected !== state.selectedA) {
@@ -12088,6 +12848,13 @@
       (CONFIG.zIndexTooltip + 6) +
       ";display:none;pointer-events:auto;"
   );
+  var customSelectPopover = make(
+    "div",
+    "position:fixed;left:0;top:0;z-index:" +
+      (CONFIG.zIndexTooltip + 8) +
+      ";display:none;pointer-events:auto;"
+  );
+  customSelectPopover.className = "v12-custom-select-popover";
   var sharedElementsTooltip = make(
     "div",
     "position:fixed;left:0;top:0;z-index:" +
@@ -12342,6 +13109,29 @@
       ".v12-selected-panel [data-vqa-field-grid] select[data-editable=\"1\"]," +
       ".v12-selected-panel [data-vqa-field-grid] textarea[data-editable=\"1\"]{padding-top:0;padding-bottom:0;}" +
       ".v12-selected-panel [data-vqa-atom-cell] select{appearance:none;-webkit-appearance:none;-moz-appearance:none;}" +
+      ".v12-selected-panel [data-vqa-custom-select]{position:relative;min-width:0;width:100%;}" +
+      ".v12-selected-panel [data-vqa-custom-select-native]{display:none!important;}" +
+      ".v12-selected-panel [data-vqa-custom-select-trigger]{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;height:100%;min-width:0;padding:0;border:0;background:transparent;color:#fff;cursor:pointer;box-sizing:border-box;}" +
+      ".v12-selected-panel [data-vqa-custom-select-trigger]:focus{outline:none;}" +
+      ".v12-selected-panel [data-vqa-custom-select-trigger][aria-expanded=\"true\"] [data-vqa-custom-select-arrow]{transform:rotate(180deg);color:#9ED0FF;}" +
+      ".v12-selected-panel [data-vqa-custom-select-label]{display:block;min-width:0;flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left;}" +
+      ".v12-selected-panel [data-vqa-custom-select-arrow]{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;color:rgba(255,255,255,.48);transition:transform 140ms ease,color 120ms ease;}" +
+      ".v12-custom-select-popover-panel{min-width:220px;max-width:min(320px,calc(100vw - 24px));max-height:min(320px,calc(100vh - 40px));padding:8px;border-radius:6px;background:rgba(24,26,31,.96);border:1px solid rgba(255,255,255,.08);box-shadow:0 18px 38px rgba(0,0,0,.34),0 1px 0 rgba(255,255,255,.04) inset;backdrop-filter:blur(18px);overflow:auto;}" +
+      ".v12-custom-select-popover-panel[data-select-kind=\"font-weight\"]{min-width:110px;max-width:140px;}" +
+      ".v12-custom-select-popover-panel[data-select-kind=\"stroke-align\"],.v12-custom-select-popover-panel[data-select-kind=\"shadow-type\"]{min-width:110px;max-width:120px;}" +
+      ".v12-custom-select-option{display:flex;align-items:center;gap:10px;width:100%;min-height:40px;padding:10px 12px;border:0;border-radius:6px;background:transparent;color:rgba(255,255,255,.88);font:400 14px/1.25 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;text-align:left;cursor:pointer;transition:background-color 120ms ease,color 120ms ease,transform 120ms ease;}" +
+      ".v12-custom-select-popover-panel[data-select-kind=\"font-weight\"] .v12-custom-select-option{position:relative;justify-content:center;text-align:center;}" +
+      ".v12-custom-select-popover-panel[data-select-kind=\"stroke-align\"] .v12-custom-select-option,.v12-custom-select-popover-panel[data-select-kind=\"shadow-type\"] .v12-custom-select-option{position:relative;justify-content:center;text-align:center;padding:10px 8px;}" +
+      ".v12-custom-select-popover-panel[data-select-kind=\"font-weight\"] .v12-custom-select-check{position:absolute;left:12px;top:50%;transform:translateY(-50%);}" +
+      ".v12-custom-select-popover-panel[data-select-kind=\"stroke-align\"] .v12-custom-select-check,.v12-custom-select-popover-panel[data-select-kind=\"shadow-type\"] .v12-custom-select-check{position:absolute;left:10px;top:50%;transform:translateY(-50%);}" +
+      ".v12-custom-select-popover-panel[data-select-kind=\"font-weight\"] .v12-custom-select-text{flex:0 1 auto;text-align:center;}" +
+      ".v12-custom-select-popover-panel[data-select-kind=\"stroke-align\"] .v12-custom-select-text,.v12-custom-select-popover-panel[data-select-kind=\"shadow-type\"] .v12-custom-select-text{flex:0 1 auto;text-align:center;}" +
+      ".v12-custom-select-option:hover{background:rgba(255,255,255,.08);color:#fff;}" +
+      ".v12-custom-select-option:active{transform:translateY(1px);}" +
+      ".v12-custom-select-option[data-selected=\"true\"]{background:linear-gradient(180deg,#2F8FFF 0%,#0A76F0 100%);color:#fff;box-shadow:0 8px 18px rgba(10,118,240,.24);}" +
+      ".v12-custom-select-check{display:inline-flex;align-items:center;justify-content:center;flex:0 0 16px;width:16px;color:rgba(255,255,255,.92);font:700 14px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;opacity:0;}" +
+      ".v12-custom-select-option[data-selected=\"true\"] .v12-custom-select-check{opacity:1;}" +
+      ".v12-custom-select-text{display:block;min-width:0;flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}" +
       ".v12-selected-panel [data-vqa-atom-cell] input::placeholder," +
       ".v12-selected-panel [data-vqa-atom-cell] textarea::placeholder," +
       ".v12-selected-panel [data-vqa-field=\"color-value\"] input:not([type=\"color\"])::placeholder," +
@@ -12355,6 +13145,10 @@
       ".v12-selected-panel [data-vqa-selected-add-property] > button[data-vqa-footer-secondary=\"1\"]{display:inline-flex;align-items:center;justify-content:center;width:100%;height:36px;padding:0 14px;border:1px solid rgba(255,255,255,.14);border-radius:12px;background:rgba(255,255,255,.05);color:rgba(255,255,255,.80);font:500 12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;box-sizing:border-box;transition:background-color 120ms ease,border-color 120ms ease,color 120ms ease,box-shadow 120ms ease,transform 120ms ease;}" +
       ".v12-selected-panel [data-vqa-selected-add-property] > button[data-vqa-footer-secondary=\"1\"]:hover{background:rgba(255,255,255,.09)!important;border-color:rgba(255,255,255,.22)!important;color:rgba(255,255,255,.92)!important;}" +
       ".v12-selected-panel [data-vqa-selected-add-property] > button[data-vqa-footer-secondary=\"1\"]:active{transform:translateY(1px);}" +
+      ".v12-selected-panel [data-vqa-add-prop-menu=\"1\"] > button{transition:background-color 120ms ease,color 120ms ease,transform 120ms ease,opacity 120ms ease;}" +
+      ".v12-selected-panel [data-vqa-add-prop-menu=\"1\"] > button:hover:not(:disabled){background:rgba(255,255,255,.08)!important;color:#fff!important;}" +
+      ".v12-selected-panel [data-vqa-add-prop-menu=\"1\"] > button:active:not(:disabled){background:rgba(255,255,255,.12)!important;transform:translateY(1px);}" +
+      ".v12-selected-panel [data-vqa-add-prop-menu=\"1\"] > button:disabled{opacity:1;}" +
       ".v12-selected-panel [data-vqa-selected-quick-record]{display:flex;justify-content:stretch;align-items:center;width:100%;min-width:0;}" +
       ".v12-selected-panel [data-vqa-selected-quick-record] > button[data-vqa-footer-primary=\"1\"]{display:inline-flex;align-items:center;justify-content:center;width:100%;min-width:0;height:36px;padding:0 14px;border:1px solid rgba(10,118,240,.88);border-radius:12px;background:linear-gradient(180deg,#2F8FFF 0%,#0A76F0 100%);box-shadow:0 8px 18px rgba(10,118,240,.28);color:#fff;font:600 12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;box-sizing:border-box;transition:background-color 120ms ease,border-color 120ms ease,box-shadow 120ms ease,transform 120ms ease,opacity 120ms ease;}" +
       ".v12-selected-panel [data-vqa-selected-quick-record] > button[data-vqa-footer-primary=\"1\"]:hover:not(:disabled){background:linear-gradient(180deg,#43A0FF 0%,#1282FF 100%)!important;border-color:rgba(65,160,255,.96)!important;box-shadow:0 10px 20px rgba(10,118,240,.34)!important;}" +
@@ -13924,6 +14718,24 @@
     e.stopPropagation();
   }
 
+  function onWindowScroll(e) {
+    var target = e && e.target ? e.target : null;
+    if (
+      target &&
+      (
+        tooltip.contains(target) ||
+        aiChangePopover.contains(target) ||
+        customSelectPopover.contains(target) ||
+        drawerStub.contains(target) ||
+        recordComposer.contains(target) ||
+        recordPreview.contains(target)
+      )
+    ) {
+      return;
+    }
+    schedule();
+  }
+
   function onV12Input(e) {
     var target = e.target;
     if (!target) return;
@@ -14984,7 +15796,7 @@
     return section("字体", [
       panelAtomGrid([
         panelIconSelectCell("", "fontFamily", capabilities.fontFamilyPrimary, capabilities.fontFamilyOptions, { kind: "font-family", selectKind: "font-family", flex: "1 1 auto", iconWidth: "0px", iconSize: "0px", gap: "0px", iconBg: "transparent", iconColor: "transparent", iconRadius: "0px", padding: "0 6px", selectPadding: "0 14px 0 0", selectArrowRight: "2px", selectArrowFontSize: "8px", selectFont: "400 14px/1.25 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif", selectTextAlignLast: "left" }),
-        panelIconSelectCell("", "fontWeight", style.fontWeight, capabilities.fontWeightOptions, { kind: "font-weight", selectKind: "font-weight", flex: "1 1 auto", iconWidth: "0px", iconSize: "0px", gap: "0px", iconBg: "transparent", iconColor: "transparent", iconRadius: "0px", padding: "0 6px", selectPadding: "0 14px 0 0", selectArrowRight: "2px", selectArrowFontSize: "8px", selectFont: "400 14px/1.25 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif", selectTextAlignLast: "left" })
+        panelIconSelectCell("", "fontWeight", style.fontWeight, capabilities.fontWeightOptions, { kind: "font-weight", selectKind: "font-weight", flex: "0 0 84px", iconWidth: "0px", iconSize: "0px", gap: "0px", iconBg: "transparent", iconColor: "transparent", iconRadius: "0px", padding: "0 6px", selectPadding: "0 14px 0 0", selectArrowRight: "2px", selectArrowFontSize: "8px", selectFont: "400 14px/1.25 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif", selectTextAlignLast: "left" })
       ], { gap: "6px" }),
       panelAtomGrid([
         panelIconValueCell("", "fontSize", style.fontSize, { kind: "font-size", flex: "1 1 auto", iconWidth: "0px", iconSize: "0px", gap: "0px", iconBg: "transparent", iconColor: "transparent", iconRadius: "0px", padding: "0 6px", inputFont: "400 14px/1.25 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif", inputTextAlign: "left" }),
@@ -15228,46 +16040,27 @@
     var strokeConfig = getPluginStrokeConfigForTarget(targetEl);
     if (!strokeConfig) return "";
     var normalizedStrokeConfig = normalizeStrokeConfig(strokeConfig);
-    var strokeAlignArrowHtml = renderFloatingSlotIcon("jiantou", "8px");
-    var strokeAlignOptionsHtml = STROKE_ALIGN_OPTIONS.map(function (option) {
-      return (
-        '<option style="font:400 14px/1.25 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;background:#2f2f2f;color:#fff;" value="' +
-        esc(option.value) +
-        '"' +
-        (String(normalizeStrokeAlignValue(normalizedStrokeConfig.strokeAlign)) === String(option.value) ? " selected" : "") +
-        ">" +
-        esc(option.label) +
-        "</option>"
-      );
-    }).join("");
     return (
       '<div style="display:flex;flex-direction:column;gap:6px;min-width:0;">' +
       panelColorValueCell("strokeColor", rgbaFromHexAndAlpha(normalizedStrokeConfig.strokeColor, normalizedStrokeConfig.strokeAlpha) || normalizedStrokeConfig.strokeColor, { kind: "stroke-color" }) +
       panelAtomGrid([
-        '<div data-vqa-atom-cell="stroke-align" data-vqa-panel-control="true" style="display:flex;align-items:center;min-width:56px;height:' +
-          PANEL_UI.atomHeight +
-          ';padding:0 12px;box-sizing:border-box;border-radius:' +
-          PANEL_UI.atomRadius +
-          ';border:1px solid ' +
-          PANEL_UI.atomBorder +
-          ';background:' +
-          PANEL_UI.atomBg +
-          ';position:relative;z-index:20;flex:0 0 auto;overflow:visible;pointer-events:auto;">' +
-          '<div data-vqa-panel-control="true" style="position:relative;min-width:56px;width:100%;z-index:20;pointer-events:auto;flex:0 0 auto;">' +
-          '<select data-field-id="strokeAlign" data-prop="strokeAlign" data-select-kind="stroke-align" data-editable="1" data-type="text" data-vqa-role="stroke-align" data-vqa-panel-control="true" style="width:100%;height:32px;box-sizing:border-box;padding:0 16px 0 0;border-radius:' +
-          PANEL_UI.atomRadius +
-          ';border:0;background:transparent;color:' +
-          PANEL_UI.atomText +
-          ';font:400 14px/1.25 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;text-align-last:left;letter-spacing:.01em;appearance:none;-webkit-appearance:none;-moz-appearance:none;cursor:pointer;outline:none;box-shadow:none;min-width:56px;pointer-events:auto;position:relative;z-index:20;display:block;visibility:visible;opacity:1;flex:0 0 auto;">' +
-          strokeAlignOptionsHtml +
-          "</select>" +
-          '<div data-vqa-panel-control="true" style="position:absolute;right:2px;top:50%;transform:translateY(-50%);color:' +
-          PANEL_UI.labelColor +
-          ';font-size:8px;pointer-events:none;display:flex;align-items:center;justify-content:center;z-index:1;">' +
-          strokeAlignArrowHtml +
-          "</div>" +
-          "</div>" +
-        "</div>",
+        panelIconSelectCell("", "strokeAlign", normalizeStrokeAlignValue(normalizedStrokeConfig.strokeAlign), STROKE_ALIGN_OPTIONS, {
+          kind: "stroke-align",
+          selectKind: "stroke-align",
+          flex: "1 1 auto",
+          iconWidth: "0px",
+          iconSize: "0px",
+          gap: "0px",
+          iconBg: "transparent",
+          iconColor: "transparent",
+          iconRadius: "0px",
+          padding: "0 6px",
+          selectPadding: "0 14px 0 0",
+          selectArrowRight: "2px",
+          selectArrowFontSize: "8px",
+          selectFont: "400 14px/1.25 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif",
+          selectTextAlignLast: "left"
+        }),
         panelIconValueCell("", "strokeWidth", String(normalizedStrokeConfig.strokeWidth), {
           kind: "stroke-width",
           flex: "1 1 auto",
@@ -15297,10 +16090,88 @@
     );
   }
 
+  function renderSingleShadowEditor(targetEl, shadow, index) {
+    var shadowId = shadow.id;
+    var title = "投影 " + String(index + 1);
+    return (
+      '<div data-vqa-shadow-item="' + esc(shadowId) + '" style="display:flex;flex-direction:column;gap:10px;min-width:0;padding:0 0 4px;">' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;color:' + PANEL_UI.sectionTitleColor + ';font:600 14px/1.2 \'PingFang SC\',-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;">' +
+      '<div>' + esc(title) + '</div>' +
+      '<button type="button" data-action="remove-shadow" data-shadow-id="' + esc(shadowId) + '" aria-label="删除投影" style="border:0;background:transparent;color:rgba(255,255,255,.66);font:500 12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;padding:0;">删除</button>' +
+      '</div>' +
+      panelAtomGrid([
+        panelColorValueCell(makeShadowLogicalProp(shadowId, "color"), rgbaFromHexAndAlpha(shadow.color, shadow.alpha) || shadow.color, {
+          kind: "shadow-color",
+          columns: "minmax(0,4fr) minmax(76px,.85fr)",
+          textFont: "400 12px/1.2 'PingFang SC',-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif",
+          alphaGap: "6px",
+          alphaMinWidth: "24px"
+        }),
+        panelIconSelectCell("", makeShadowLogicalProp(shadowId, "type"), shadow.type, SHADOW_TYPE_OPTIONS, {
+          kind: "shadow-type",
+          selectKind: "shadow-type",
+          flex: "1 1 auto",
+          iconWidth: "0px",
+          iconSize: "0px",
+          gap: "0px",
+          iconBg: "transparent",
+          iconColor: "transparent",
+          iconRadius: "0px",
+          padding: "0 10px",
+          selectPadding: "0 14px 0 0",
+          selectArrowRight: "2px",
+          selectArrowFontSize: "8px",
+          selectFont: "400 12px/1.25 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif",
+          selectOptionFont: "400 12px/1.25 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif",
+          selectTextAlignLast: "left"
+        })
+      ], { gap: "10px", columns: "minmax(0,1.42fr) minmax(0,0.68fr)" }) +
+      panelAtomGrid([
+        panelIconValueCell("", makeShadowLogicalProp(shadowId, "offsetX"), String(shadow.offsetX), {
+          kind: "shadow-offset-x",
+          slotName: "shadow-offset-x",
+          iconSize: "30px",
+          iconWidth: "30px"
+        }),
+        panelIconValueCell("", makeShadowLogicalProp(shadowId, "offsetY"), String(shadow.offsetY), {
+          kind: "shadow-offset-y",
+          slotName: "shadow-offset-y",
+          iconSize: "30px",
+          iconWidth: "30px"
+        })
+      ], { gap: "10px" }) +
+      panelAtomGrid([
+        panelIconValueCell("", makeShadowLogicalProp(shadowId, "blur"), String(shadow.blur), {
+          kind: "shadow-blur",
+          slotName: "shadow-blur",
+          iconSize: "30px",
+          iconWidth: "30px"
+        }),
+        panelIconValueCell("", makeShadowLogicalProp(shadowId, "spread"), String(shadow.spread), {
+          kind: "shadow-spread",
+          slotName: "shadow-spread",
+          iconSize: "30px",
+          iconWidth: "30px"
+        })
+      ], { gap: "10px" }) +
+      '</div>'
+    );
+  }
+
+  function renderSelectedShadowSection(el) {
+    var shadowTarget = resolveShadowTarget(el);
+    if (!shadowTarget) return "";
+    var shadowList = getPluginShadowListForTarget(shadowTarget);
+    if (!shadowList.length) return "";
+    return section("投影", shadowList.map(function (shadow, index) {
+      return renderSingleShadowEditor(shadowTarget, shadow, index);
+    }));
+  }
+
   function renderBackgroundSolidControls(applyTarget, presence) {
     var displayValue = presence.hasBackgroundColor ? getVisibleBackgroundColorValue(applyTarget, getComputedStyle(applyTarget)) : presence.backgroundColor || "#FFFFFF";
     if (!displayValue) displayValue = "#FFFFFF";
-    return panelColorValueCell("backgroundColor", displayValue, { kind: "background-color", allowDelete: true });
+    return panelColorValueCell("backgroundColor", displayValue, { kind: "background-color" });
   }
 
   function renderSelectedBackgroundSection(el, style, capabilities) {
@@ -15309,7 +16180,12 @@
     var applyTargetStyle = getComputedStyle(applyTarget);
     var presence = resolveBackgroundPresence(applyTarget, applyTargetStyle);
     if (presence.mode === "none") return "";
-    return section("背景", [renderBackgroundSolidControls(applyTarget, presence)]);
+    return section(
+      "背景",
+      [renderBackgroundSolidControls(applyTarget, presence)],
+      "",
+      '<button type="button" data-action="remove-background-color" aria-label="删除背景色" title="删除背景色" style="border:0;background:transparent;color:rgba(255,255,255,.66);font:500 12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;padding:0;">删除</button>'
+    );
   }
 
   function buildSelectedPanelSections(el, style, capabilities, textValue) {
@@ -15319,6 +16195,7 @@
     sections.push(renderSelectedFontSection(style, capabilities));
     sections.push(renderSelectedAppearanceSection(style, capabilities));
     sections.push(renderSelectedStrokeSection(el, style, capabilities));
+    sections.push(renderSelectedShadowSection(el, style, capabilities));
     sections.push(renderSelectedBackgroundSection(el, style, capabilities));
     return sections.filter(Boolean);
   }
@@ -15333,8 +16210,14 @@
 
   function renderSelectedPanel(el) {
     if (!el) {
+      closeCustomSelectPopover();
       body.innerHTML = '<div style="color:#8FA1B3;">点击页面元素后锁定为 A，查看并直接编辑完整属性。</div>';
       return;
+    }
+    if (state.customSelectOpenFieldId) closeCustomSelectPopover();
+    var existingScrollContainer = tooltip.querySelector('[data-vqa-panel-scroll="1"]');
+    if (existingScrollContainer) {
+      state.v12.selectedPanelScrollTop = existingScrollContainer.scrollTop || 0;
     }
     if (!FLOATING_ICON_URLS_READY || !FLOATING_ICON_URLS) {
       getFloatingIconUrlsFromBridge()
@@ -15388,20 +16271,24 @@
     body.innerHTML =
       '<div class="v12-selected-panel" data-vqa-panel-stack data-vqa-panel-kind="' +
       esc(capabilities.canEditTextContent ? "text" : "element") +
-      '" style="display:flex;flex-direction:column;min-height:0;max-height:' +
+      '" style="display:flex;flex-direction:column;position:relative;isolation:isolate;min-height:0;max-height:' +
       panelMaxHeight +
       'px;overflow:visible;">' +
-      '<div data-vqa-panel-scroll="1" style="display:flex;flex:1 1 auto;flex-direction:column;gap:' +
+      '<div data-vqa-panel-scroll="1" style="display:flex;position:relative;z-index:1;flex:1 1 auto;flex-direction:column;gap:' +
       PANEL_UI.sectionGap +
       ';min-height:0;overflow-y:auto;overflow-x:visible;padding-bottom:8px;box-sizing:border-box;overscroll-behavior:contain;">' +
       sections.join("") +
       "</div>" +
-      '<div data-vqa-panel-footer="1" style="display:flex;flex-direction:column;align-items:stretch;gap:10px;position:relative;z-index:4;flex:0 0 auto;padding:12px 0 0;overflow:visible;">' +
+      '<div data-vqa-panel-footer="1" style="display:flex;flex-direction:column;align-items:stretch;gap:10px;position:relative;z-index:20;flex:0 0 auto;padding:12px 0 0;overflow:visible;">' +
       '<div data-vqa-selected-footer-actions="1" style="display:flex;flex-direction:column;align-items:stretch;gap:10px;min-width:0;flex:1 1 auto;">' +
       addPropertyAction +
       quickRecordAction +
       "</div>" +
       "</div>";
+    var nextScrollContainer = tooltip.querySelector('[data-vqa-panel-scroll="1"]');
+    if (nextScrollContainer) {
+      nextScrollContainer.scrollTop = state.v12.selectedPanelScrollTop || 0;
+    }
     var textEditor = tooltip.querySelector('textarea[data-field-id="text-content"]');
     if (textEditor) syncTextareaAutoHeight(textEditor);
   }
@@ -15737,7 +16624,7 @@
     }
     if (isFeedbackUiElement(e && e.target)) return;
     if (isEventInsideSelectedPanel(e)) return;
-    if (e && e.target && (tooltip.contains(e.target) || topbar.contains(e.target) || aiChangePopover.contains(e.target) || recordMenu.contains(e.target) || drawerStub.contains(e.target) || recordComposer.contains(e.target) || recordPreview.contains(e.target) || isFeedbackUiElement(e.target))) {
+    if (e && e.target && (tooltip.contains(e.target) || topbar.contains(e.target) || aiChangePopover.contains(e.target) || customSelectPopover.contains(e.target) || recordMenu.contains(e.target) || drawerStub.contains(e.target) || recordComposer.contains(e.target) || recordPreview.contains(e.target) || isFeedbackUiElement(e.target))) {
       return;
     }
     var el = fromPoint(e.clientX, e.clientY);
@@ -15846,7 +16733,7 @@
       var popoverAction = e.target && e.target.closest ? e.target.closest("[data-v12-feedback-action]") : null;
       var feedbackTarget = e.target && e.target.closest ? e.target.closest("[data-v12-feedback-popover]") : null;
       var feedbackAnchor = isFeedbackAnchorElement(e.target);
-      var strongUiTarget = topbar.contains(e.target) || aiChangePopover.contains(e.target) || recordMenu.contains(e.target) || drawerStub.contains(e.target) || recordComposer.contains(e.target) || recordPreview.contains(e.target) || tooltip.contains(e.target);
+      var strongUiTarget = topbar.contains(e.target) || aiChangePopover.contains(e.target) || customSelectPopover.contains(e.target) || recordMenu.contains(e.target) || drawerStub.contains(e.target) || recordComposer.contains(e.target) || recordPreview.contains(e.target) || tooltip.contains(e.target);
       if (popoverAction && feedbackPopover.contains(popoverAction)) {
         onFeedbackPopoverClick(e);
         return;
@@ -15891,7 +16778,7 @@
       e.stopPropagation();
       return;
     }
-    if (topbar.contains(e.target) || aiChangePopover.contains(e.target) || recordMenu.contains(e.target) || drawerStub.contains(e.target) || recordComposer.contains(e.target)) return;
+    if (topbar.contains(e.target) || aiChangePopover.contains(e.target) || customSelectPopover.contains(e.target) || recordMenu.contains(e.target) || drawerStub.contains(e.target) || recordComposer.contains(e.target)) return;
     if (recordPreview.contains(e.target)) return;
     if (tooltip.contains(e.target)) return;
     if (state.panelHoverFreeze) {
@@ -16048,6 +16935,8 @@
       state.v12.categoryMenuOpen = false;
       clearSelectedPanelHoverFreeze();
       schedule();
+    } else if (state.customSelectOpenFieldId) {
+      closeCustomSelectPopover();
     } else if (state.v12.drawerMenuRecordId) {
       state.v12.drawerMenuRecordId = "";
       clearSelectedPanelHoverFreeze();
@@ -16223,6 +17112,7 @@
     tooltip.removeEventListener("mousemove", onPanelMouseMove, true);
     tooltip.removeEventListener("mouseleave", onPanelMouseLeave, true);
     tooltip.removeEventListener("mousedown", onPanelMouseDown, true);
+    customSelectPopover.removeEventListener("click", onCustomSelectPopoverClick, true);
     topbar.removeEventListener("pointerdown", onV12TopbarPointerDown, true);
     topbar.removeEventListener("pointerup", onV12TopbarPointerUp, true);
     topbar.removeEventListener("pointercancel", onV12TopbarPointerCancel, true);
@@ -16246,14 +17136,14 @@
     regionCaptureOverlay.removeEventListener("click", onRegionOverlayClick, true);
     regionCaptureOverlay.removeEventListener("selectstart", onRegionOverlaySelectStart, true);
     window.removeEventListener("resize", schedule, true);
-    window.removeEventListener("scroll", schedule, true);
+    window.removeEventListener("scroll", onWindowScroll, true);
     window.removeEventListener("message", onBridgeMessage, false);
     head.removeEventListener("mousedown", startDrag, true);
     floating.removeEventListener("mousedown", startFloatDrag, true);
     floating.removeEventListener("mouseenter", onFloatEnter, true);
     floating.removeEventListener("mouseleave", onFloatLeave, true);
     btnMeasure.removeEventListener("click", onMeasureClick, true);
-    [highlight, selectA, selectB, sharedHighlightLayer, tooltip, topbarTooltip, sharedElementsTooltip, aiChangePopover, feedbackPopover, spacingLayer, measureLayer, floating, topbar, recordMenu, regionCaptureOverlay, drawerStub, regionSelectBox, recordComposer, recordPreview, v12Notice].forEach(function (el) {
+    [highlight, selectA, selectB, sharedHighlightLayer, tooltip, topbarTooltip, sharedElementsTooltip, aiChangePopover, customSelectPopover, feedbackPopover, spacingLayer, measureLayer, floating, topbar, recordMenu, regionCaptureOverlay, drawerStub, regionSelectBox, recordComposer, recordPreview, v12Notice].forEach(function (el) {
       if (el && el.parentNode) el.parentNode.removeChild(el);
     });
     Object.keys(bridgePending).forEach(function (requestId) {
@@ -16400,6 +17290,7 @@
   tooltip.addEventListener("mousemove", onPanelMouseMove, true);
   tooltip.addEventListener("mouseleave", onPanelMouseLeave, true);
   tooltip.addEventListener("mousedown", onPanelMouseDown, true);
+  customSelectPopover.addEventListener("click", onCustomSelectPopoverClick, true);
   document.addEventListener("mousemove", onMouseMove, true);
   document.addEventListener("pointerdown", startRegionCapture, true);
   document.addEventListener("pointermove", updateRegionCapture, true);
@@ -16415,7 +17306,7 @@
   document.addEventListener("mouseup", onScrubMouseUp, true);
   document.addEventListener("mouseup", stopFloatDrag, true);
   window.addEventListener("resize", schedule, true);
-  window.addEventListener("scroll", schedule, true);
+  window.addEventListener("scroll", onWindowScroll, true);
   window.addEventListener("message", onBridgeMessage, false);
 
   setCollapsed(false);
