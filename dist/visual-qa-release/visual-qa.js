@@ -1,5 +1,7 @@
 ﻿// Visual QA Inspector
 (function () {
+  console.warn("[VQA ACTIVE BUILD] shadow-debug-2026-04-29-01", location.href);
+
   function notifyPluginActionState(active) {
     try {
       window.postMessage(
@@ -2534,13 +2536,28 @@
     var match = String(prop || "").match(/^shadow:([^.:]+)\.(type|color|alpha|offsetX|offsetY|blur|spread)$/);
     if (!match) return null;
     return {
-      id: match[1],
+      id: normalizeShadowId(match[1]),
       field: match[2]
     };
   }
 
+  function normalizeShadowId(id) {
+    var raw = String(id || "").trim();
+    if (!raw) return "";
+    raw = raw.replace(/^shadow:/, "").replace(/[^a-zA-Z0-9_-]/g, "_");
+    if (!raw) return "";
+    if (/^sh_/.test(raw)) return raw;
+    return "sh_" + raw;
+  }
+
+  function createShadowRuntimeId() {
+    return "sh_" + Date.now() + "_" + Math.random().toString(36).slice(2, 7);
+  }
+
   function makeShadowLogicalProp(shadowId, field) {
-    return "shadow:" + String(shadowId || "") + "." + String(field || "");
+    var safeShadowId = normalizeShadowId(shadowId);
+    if (!safeShadowId || !field) return "";
+    return "shadow:" + safeShadowId + "." + String(field || "");
   }
 
   function clearStrokeRuntimeMeta() {
@@ -2556,6 +2573,33 @@
   function resolveShadowTarget(baseTarget) {
     var strokeTarget = resolveStrokeTarget(baseTarget);
     return resolveBackgroundHost(strokeTarget) || strokeTarget;
+  }
+
+  function isValidShadowTarget(targetEl) {
+    return !!(targetEl && targetEl.nodeType === 1 && targetEl.style);
+  }
+
+  function ensureShadowMeta(targetEl) {
+    if (!isValidShadowTarget(targetEl)) {
+      console.warn("[shadow-debug] invalid target for ensureShadowMeta", targetEl);
+      return null;
+    }
+    captureBaseBoxShadowSnapshot(targetEl);
+    var runtimeMeta = getShadowRuntimeMetaForTarget(targetEl);
+    if (!runtimeMeta) {
+      runtimeMeta = { shadows: [], source: "initialized" };
+      setShadowRuntimeMetaForTarget(targetEl, runtimeMeta);
+    } else if (!Array.isArray(runtimeMeta.shadows)) {
+      runtimeMeta.shadows = [];
+      setShadowRuntimeMetaForTarget(targetEl, runtimeMeta);
+    }
+    return runtimeMeta;
+  }
+
+  function logShadowDebug(stage, payload) {
+    try {
+      console.debug("[shadow-debug] " + stage, payload || {});
+    } catch (err) {}
   }
 
   function cloneStrokeConfig(config) {
@@ -2810,7 +2854,7 @@
   function cloneShadowConfig(config) {
     if (!config) return null;
     return {
-      id: String(config.id || ""),
+      id: normalizeShadowId(config.id || ""),
       type: config.type === "inner" ? "inner" : "outer",
       color: String(config.color || DEFAULT_SHADOW_CONFIG.color),
       alpha: parsePercentValue(config.alpha),
@@ -2825,7 +2869,7 @@
     var base = cloneShadowConfig(fallback || DEFAULT_SHADOW_CONFIG) || cloneShadowConfig(DEFAULT_SHADOW_CONFIG);
     var next = cloneShadowConfig(config || {}) || {};
     return {
-      id: String(next.id || base.id || makeChangeEntityId("shadow")),
+      id: normalizeShadowId(next.id || base.id || createShadowRuntimeId()),
       type: next.type === "inner" ? "inner" : "outer",
       color: toHexColor(next.color || base.color || DEFAULT_SHADOW_CONFIG.color) || DEFAULT_SHADOW_CONFIG.color,
       alpha: next.alpha === "" ? base.alpha : clamp(next.alpha == null ? base.alpha : next.alpha, 0, 100),
@@ -2844,8 +2888,9 @@
 
   function findShadowConfigById(shadows, shadowId) {
     var list = cloneShadowList(shadows);
+    var safeShadowId = normalizeShadowId(shadowId);
     for (var i = 0; i < list.length; i++) {
-      if (list[i] && list[i].id === shadowId) return list[i];
+      if (list[i] && normalizeShadowId(list[i].id) === safeShadowId) return list[i];
     }
     return null;
   }
@@ -2901,17 +2946,33 @@
   }
 
   function composeBoxShadowEffects(targetEl) {
-    if (!targetEl || !targetEl.style) return "";
+    if (!isValidShadowTarget(targetEl)) {
+      console.warn("[shadow-debug] composeBoxShadowEffects invalid target", targetEl);
+      return "";
+    }
     var snapshot = captureBaseBoxShadowSnapshot(targetEl);
     var baseShadow = snapshot && snapshot.baseBoxShadow ? snapshot.baseBoxShadow : "";
     var strokeConfig = getPluginStrokeConfigForTarget(targetEl);
     var strokeLayers = strokeConfig ? buildStrokeShadowLayers(strokeConfig) : [];
-    var shadowLayers = buildShadowLayers(getPluginShadowListForTarget(targetEl));
-    return [baseShadow].concat(strokeLayers).concat(shadowLayers).filter(Boolean).join(", ");
+    var shadowMeta = getShadowRuntimeMetaForTarget(targetEl);
+    var shadowList = getPluginShadowListForTarget(targetEl);
+    var shadowLayers = buildShadowLayers(shadowList);
+    var composed = [baseShadow].concat(strokeLayers).concat(shadowLayers).filter(Boolean).join(", ");
+    console.warn("[shadow-debug] compose-layers", {
+      baseBoxShadow: baseShadow || "none",
+      strokeLayer: strokeLayers,
+      shadows: shadowMeta && Array.isArray(shadowMeta.shadows) ? shadowMeta.shadows : shadowList,
+      pluginShadowCssList: shadowLayers,
+      composed: composed || "none"
+    });
+    return composed;
   }
 
   function syncPluginBoxShadowValue(targetEl) {
-    if (!targetEl || !targetEl.style) return false;
+    if (!isValidShadowTarget(targetEl)) {
+      console.warn("[shadow-debug] syncPluginBoxShadowValue invalid target", targetEl);
+      return false;
+    }
     captureBaseBoxShadowSnapshot(targetEl);
     var strokeConfig = getPluginStrokeConfigForTarget(targetEl);
     var shadowList = getPluginShadowListForTarget(targetEl);
@@ -2930,6 +2991,14 @@
         targetEl.style.boxShadow = nextBoxShadow;
       }
     });
+    if (shadowList.length) {
+      logShadowDebug("sync-box-shadow", {
+        targetEl: targetEl,
+        shadowMeta: getShadowRuntimeMetaForTarget(targetEl),
+        composedBoxShadow: nextBoxShadow,
+        inlineBoxShadow: targetEl.style.boxShadow || ""
+      });
+    }
     return true;
   }
 
@@ -3016,7 +3085,16 @@
 
   function recordShadowLogicalChange(targetEl, shadowId, field, fromValue, toValue, options) {
     if (!targetEl || !shadowId || !field) return;
-    appendChangePatch(targetEl, makeShadowLogicalProp(shadowId, field), fromValue, toValue, options);
+    var logicalProp = makeShadowLogicalProp(shadowId, field);
+    if (!logicalProp) {
+      console.warn("[shadow-debug] skip logical change record", {
+        reason: "invalid-logical-prop",
+        shadowId: shadowId,
+        field: field
+      });
+      return;
+    }
+    appendChangePatch(targetEl, logicalProp, fromValue, toValue, options);
   }
 
   function markShadowModifiedProps(shadows) {
@@ -3030,8 +3108,11 @@
 
   function applyShadowList(targetEl, shadows, options) {
     options = options || {};
-    if (!targetEl || !targetEl.style) return false;
-    captureBaseBoxShadowSnapshot(targetEl);
+    if (!isValidShadowTarget(targetEl)) {
+      console.warn("[shadow-debug] applyShadowList invalid target", targetEl);
+      return false;
+    }
+    ensureShadowMeta(targetEl);
     var previousList = getPluginShadowListForTarget(targetEl);
     var nextList = cloneShadowList(shadows);
     setPluginShadowListForTarget(targetEl, nextList, options.source || (previousList.length ? "updated" : "addedOnNone"));
@@ -3042,10 +3123,10 @@
     if (!options.skipLogicalChangeRecord) {
       var previousById = {};
       previousList.forEach(function (shadow) {
-        previousById[shadow.id] = shadow;
+        previousById[normalizeShadowId(shadow.id)] = shadow;
       });
       nextList.forEach(function (shadow) {
-        var prev = previousById[shadow.id] || null;
+        var prev = previousById[normalizeShadowId(shadow.id)] || null;
         recordShadowLogicalChange(targetEl, shadow.id, "type", prev ? prev.type : "", shadow.type, options);
         recordShadowLogicalChange(targetEl, shadow.id, "color", prev ? prev.color : "", shadow.color, options);
         recordShadowLogicalChange(targetEl, shadow.id, "alpha", prev ? String(prev.alpha) : "", String(shadow.alpha), options);
@@ -3059,12 +3140,16 @@
   }
 
   function upsertShadowConfig(targetEl, shadowConfig, options) {
-    if (!targetEl) return false;
+    if (!isValidShadowTarget(targetEl)) {
+      console.warn("[shadow-debug] upsertShadowConfig invalid target", targetEl);
+      return false;
+    }
+    ensureShadowMeta(targetEl);
     var currentList = getPluginShadowListForTarget(targetEl);
     var nextShadow = normalizeShadowConfig(shadowConfig);
     var found = false;
     var nextList = currentList.map(function (shadow) {
-      if (shadow.id !== nextShadow.id) return shadow;
+      if (normalizeShadowId(shadow.id) !== normalizeShadowId(nextShadow.id)) return shadow;
       found = true;
       return normalizeShadowConfig(nextShadow, shadow);
     });
@@ -3073,15 +3158,19 @@
   }
 
   function removeShadowById(targetEl, shadowId, options) {
-    if (!targetEl || !shadowId) return false;
+    if (!isValidShadowTarget(targetEl) || !shadowId) {
+      if (!isValidShadowTarget(targetEl)) console.warn("[shadow-debug] removeShadowById invalid target", targetEl);
+      return false;
+    }
+    var safeShadowId = normalizeShadowId(shadowId);
     var currentList = getPluginShadowListForTarget(targetEl);
     var nextList = currentList.filter(function (shadow) {
-      return shadow && shadow.id !== shadowId;
+      return shadow && normalizeShadowId(shadow.id) !== safeShadowId;
     });
-    clearShadowModifiedProps(shadowId);
+    clearShadowModifiedProps(safeShadowId);
     if (!(options && options.skipLogicalChangeRecord)) {
       ["type", "color", "alpha", "offsetX", "offsetY", "blur", "spread"].forEach(function (field) {
-        removeChangePatch(targetEl, makeShadowLogicalProp(shadowId, field));
+        removeChangePatch(targetEl, makeShadowLogicalProp(safeShadowId, field));
       });
     }
     if (!nextList.length) {
@@ -4930,6 +5019,11 @@
       addShadowHint = "无可写入目标";
     }
     var menuOpen = !!state.addPropMenuOpen;
+    console.warn("[add-prop-debug] render", {
+      addPropMenuOpen: menuOpen,
+      hasShadow: !!(shadowTarget && getPluginShadowListForTarget(shadowTarget).length),
+      targetEl: targetEl
+    });
     return (
       '<div data-vqa-selected-add-property="1" style="display:flex;justify-content:flex-start;align-items:center;position:relative;overflow:visible;flex:0 0 auto;min-width:0;">' +
       '<button type="button" data-action="toggle-add-property-menu" aria-expanded="' +
@@ -6645,6 +6739,15 @@
       var parsedShadowProp = parseShadowLogicalProp(prop);
       if (!parsedShadowProp) return;
       var shadowTarget = resolveShadowTarget(el);
+      if (!isValidShadowTarget(shadowTarget)) {
+        console.warn("[shadow-debug] previewFieldValue invalid shadow target", {
+          prop: prop,
+          value: rawValue,
+          targetEl: shadowTarget
+        });
+        return;
+      }
+      ensureShadowMeta(shadowTarget);
       var shadowConfig = findShadowConfigById(getPluginShadowListForTarget(shadowTarget), parsedShadowProp.id) || normalizeShadowConfig({ id: parsedShadowProp.id });
       var nextShadow = normalizeShadowConfig(shadowConfig, shadowConfig);
       if (parsedShadowProp.field === "type") nextShadow.type = rawValue === "inner" ? "inner" : "outer";
@@ -6656,6 +6759,14 @@
       if (parsedShadowProp.field === "spread") nextShadow.spread = Math.round(parseFloat(rawValue) || 0);
       upsertShadowConfig(shadowTarget, nextShadow, {
         source: "panel-preview"
+      });
+      logShadowDebug("preview-field", {
+        shadowId: parsedShadowProp.id,
+        prop: parsedShadowProp.field,
+        value: rawValue,
+        targetEl: shadowTarget,
+        shadowMeta: getShadowRuntimeMetaForTarget(shadowTarget),
+        boxShadow: shadowTarget.style ? shadowTarget.style.boxShadow || "" : ""
       });
       return;
     }
@@ -6762,6 +6873,16 @@
     return "rgba(" + r + ", " + g + ", " + b + ", " + clamp(alpha / 100, 0, 1) + ")";
   }
 
+  function toCssHexColor(value) {
+    var normalized = toHexColor(value);
+    return normalized || null;
+  }
+
+  function toDisplayHex(value) {
+    var cssHex = toCssHexColor(value);
+    return cssHex ? cssHex.replace(/^#/, "") : "";
+  }
+
   function getColorDraftMeta(prop) {
     var el = getEditableTargetEl();
     if (!el) return { hex: "", alpha: 100 };
@@ -6808,22 +6929,7 @@
       return;
     }
     if (isShadowLogicalProp(prop)) {
-      var parsedShadowPreview = parseShadowLogicalProp(prop);
-      if (!parsedShadowPreview) return;
-      var shadowTarget = resolveShadowTarget(el);
-      var shadowConfig = findShadowConfigById(getPluginShadowListForTarget(shadowTarget), parsedShadowPreview.id) || normalizeShadowConfig({ id: parsedShadowPreview.id });
-      upsertShadowConfig(shadowTarget, {
-        id: parsedShadowPreview.id,
-        type: shadowConfig.type,
-        color: hexValue,
-        alpha: alphaValue,
-        offsetX: shadowConfig.offsetX,
-        offsetY: shadowConfig.offsetY,
-        blur: shadowConfig.blur,
-        spread: shadowConfig.spread
-      }, {
-        source: "panel-preview"
-      });
+      applyShadowColorAlphaValue(prop, hexValue, alphaValue, el, "panel-preview");
       return;
     }
     var next = rgbaFromHexAndAlpha(hexValue, alphaValue);
@@ -6849,36 +6955,168 @@
       return;
     }
     if (isShadowLogicalProp(prop)) {
-      var parsedShadowApply = parseShadowLogicalProp(prop);
-      if (!parsedShadowApply) return;
-      var shadowTarget = resolveShadowTarget(targetOverride || getEditableTargetEl());
-      var shadowConfig = findShadowConfigById(getPluginShadowListForTarget(shadowTarget), parsedShadowApply.id) || normalizeShadowConfig({ id: parsedShadowApply.id });
-      upsertShadowConfig(shadowTarget, {
-        id: parsedShadowApply.id,
-        type: shadowConfig.type,
-        color: hexValue,
-        alpha: alphaValue,
-        offsetX: shadowConfig.offsetX,
-        offsetY: shadowConfig.offsetY,
-        blur: shadowConfig.blur,
-        spread: shadowConfig.spread
-      }, {
-        source: "panel-apply"
-      });
+      applyShadowColorAlphaValue(prop, hexValue, alphaValue, targetOverride || getEditableTargetEl(), "panel-apply");
       return;
     }
     var next = rgbaFromHexAndAlpha(hexValue, alphaValue);
     applyStyle(prop, next || "", targetOverride);
   }
 
-  function syncColorUi(prop, hexValue) {
-    var normalized = toHexColor(hexValue);
-    if (!normalized) return;
-    if (normalized[0] !== "#") {
-      normalized = "#" + expandBareHexText(normalized);
-      if (normalized === "#") normalized = "#000000";
+  function applyShadowColorAlphaValue(prop, hexValue, alphaValue, targetOverride, source) {
+    var parsedShadowApply = parseShadowLogicalProp(prop);
+    if (!parsedShadowApply) {
+      console.warn("[shadow-debug] shadow-color:return", {
+        reason: "invalid-logical-prop",
+        prop: prop,
+        color: hexValue,
+        alpha: alphaValue
+      });
+      return false;
     }
-    var bare = normalized.replace(/^#/, "");
+    var shadowTarget = resolveShadowTarget(targetOverride || getEditableTargetEl());
+    if (!isValidShadowTarget(shadowTarget)) {
+      console.warn("[shadow-debug] shadow-color:return", {
+        reason: "invalid-target",
+        prop: prop,
+        color: hexValue,
+        alpha: alphaValue,
+        targetEl: shadowTarget
+      });
+      return false;
+    }
+    var currentList = getPluginShadowListForTarget(shadowTarget);
+    var shadowIndex = -1;
+    for (var i = 0; i < currentList.length; i += 1) {
+      if (currentList[i] && normalizeShadowId(currentList[i].id) === normalizeShadowId(parsedShadowApply.id)) {
+        shadowIndex = i;
+        break;
+      }
+    }
+    if (shadowIndex < 0) {
+      console.warn("[shadow-debug] shadow-color:return", {
+        reason: "shadow-not-found",
+        prop: prop,
+        shadowId: parsedShadowApply.id,
+        targetEl: shadowTarget,
+        shadows: currentList
+      });
+      return false;
+    }
+    var nextList = cloneShadowList(currentList);
+    var nextShadow = normalizeShadowConfig(nextList[shadowIndex], nextList[shadowIndex]);
+    console.warn("[shadow-debug] shadow-color:start", {
+      shadowId: parsedShadowApply.id,
+      prop: parsedShadowApply.field,
+      color: hexValue,
+      alpha: alphaValue,
+      targetEl: shadowTarget
+    });
+    console.warn("[shadow-debug] shadow-color:update-before", {
+      shadow: cloneShadowConfig(nextShadow)
+    });
+    var normalizedColor = toHexColor(hexValue) || nextShadow.color || DEFAULT_SHADOW_CONFIG.color;
+    var normalizedAlpha = parsePercentValue(alphaValue);
+    if (normalizedAlpha === "") normalizedAlpha = nextShadow.alpha;
+    nextShadow.color = normalizedColor;
+    nextShadow.alpha = clamp(normalizedAlpha, 0, 100);
+    nextList[shadowIndex] = nextShadow;
+    console.warn("[shadow-debug] shadow-color:update-after", {
+      shadow: cloneShadowConfig(nextShadow)
+    });
+    applyShadowList(shadowTarget, nextList, {
+      source: source || "shadow-color"
+    });
+    var composed = composeBoxShadowEffects(shadowTarget);
+    console.warn("[shadow-debug] shadow-color:compose", {
+      composed: composed,
+      inlineBoxShadow: shadowTarget.style ? shadowTarget.style.boxShadow || "" : ""
+    });
+    console.warn("[shadow-debug] shadow-color:done", {
+      shadowId: parsedShadowApply.id,
+      shadow: cloneShadowConfig(nextShadow),
+      boxShadow: shadowTarget.style ? shadowTarget.style.boxShadow || "" : ""
+    });
+    return true;
+  }
+
+  function applyShadowColorValue(targetEl, shadowId, nextColor, options) {
+    options = options || {};
+    var safeShadowId = normalizeShadowId(shadowId);
+    var shadowTarget = resolveShadowTarget(targetEl || getEditableTargetEl());
+    if (!isValidShadowTarget(shadowTarget)) {
+      console.warn("[shadow-debug] shadow-color:return", {
+        reason: "invalid-target",
+        shadowId: safeShadowId,
+        nextColor: nextColor,
+        targetEl: shadowTarget
+      });
+      return false;
+    }
+    var currentList = getPluginShadowListForTarget(shadowTarget);
+    var shadowIndex = -1;
+    for (var i = 0; i < currentList.length; i += 1) {
+      if (currentList[i] && normalizeShadowId(currentList[i].id) === safeShadowId) {
+        shadowIndex = i;
+        break;
+      }
+    }
+    console.warn("[shadow-debug] shadow-color:context", {
+      activeColorContext: {
+        type: "shadow",
+        targetEl: shadowTarget,
+        shadowId: safeShadowId,
+        prop: "color"
+      },
+      currentTargetEl: shadowTarget,
+      metaShadows: currentList.map(function (shadow) {
+        return { id: shadow.id, color: shadow.color, alpha: shadow.alpha };
+      })
+    });
+    if (shadowIndex < 0) {
+      console.warn("[shadow-debug] shadow-color:return", {
+        reason: "shadow-not-found",
+        shadowId: safeShadowId,
+        nextColor: nextColor,
+        targetEl: shadowTarget
+      });
+      return false;
+    }
+    var nextList = cloneShadowList(currentList);
+    var nextShadow = normalizeShadowConfig(nextList[shadowIndex], nextList[shadowIndex]);
+    console.warn("[shadow-debug] shadow-color:apply-start", {
+      targetEl: shadowTarget,
+      shadowId: safeShadowId,
+      nextColor: nextColor,
+      before: cloneShadowConfig(nextShadow)
+    });
+    var normalized = toCssHexColor(nextColor);
+    if (!normalized) {
+      console.warn("[shadow-debug] shadow-color:invalid", { nextColor: nextColor });
+      return false;
+    }
+    nextShadow.color = normalized;
+    nextList[shadowIndex] = nextShadow;
+    applyShadowList(shadowTarget, nextList, {
+      source: "shadow-color-direct"
+    });
+    var composed = composeBoxShadowEffects(shadowTarget);
+    shadowTarget.style.boxShadow = composed;
+    console.warn("[shadow-debug] shadow-color:apply-done", {
+      shadowId: safeShadowId,
+      color: nextShadow.color,
+      displayHex: toDisplayHex(nextShadow.color),
+      after: cloneShadowConfig(nextShadow),
+      composed: composed,
+      inlineBoxShadow: shadowTarget.style.boxShadow
+    });
+    if (options.schedule !== false) schedule();
+    return true;
+  }
+
+  function syncColorUi(prop, hexValue) {
+    var normalized = toCssHexColor(hexValue);
+    if (!normalized) return;
+    var bare = toDisplayHex(normalized);
     var pickerInput = queryPanelSelector('input[data-color-picker-input="' + prop + '"]') || queryPanelSelector('input[data-color-prop="' + prop + '"]');
     if (pickerInput) pickerInput.value = normalized;
     var swatchBox = queryPanelSelector('[data-color-swatch="' + prop + '"]');
@@ -6924,10 +7162,20 @@
       return false;
     }
     var expanded = expandBareHexText(draft);
-    var hex = "#" + expanded;
+    var hex = toCssHexColor("#" + expanded);
+    if (!hex) return false;
     input.value = commit ? expanded : draft;
     syncColorUi(prop, hex);
     if (!commit) input.value = draft;
+    if (isShadowLogicalProp(prop)) {
+      var parsedShadowColor = parseShadowLogicalProp(prop);
+      if (parsedShadowColor) {
+        var shadowTarget = resolveShadowTarget(getEditableTargetEl() || getSelectedPanelTarget());
+        applyShadowColorValue(shadowTarget, parsedShadowColor.id, hex, { schedule: !!commit });
+        syncQuickRecordUiForCurrentPanel();
+        return true;
+      }
+    }
     applyColorWithAlpha(prop, hex, getColorDraftMeta(prop).alpha);
     syncQuickRecordUiForCurrentPanel();
     if (commit) schedule();
@@ -6950,9 +7198,20 @@
   }
 
   function handleColorPickerInput(input, prop) {
-    var hex = toHexColor(input && input.value);
+    var hex = toCssHexColor(input && input.value);
     if (!hex) return;
     syncColorUi(prop, hex);
+    if (isShadowLogicalProp(prop)) {
+      var parsedShadowColor = parseShadowLogicalProp(prop);
+      if (parsedShadowColor) {
+        state.editingFieldId = prop + "-color-text";
+        state.draftInputs[state.editingFieldId] = toDisplayHex(hex);
+        if (input && input.value !== hex) input.value = hex;
+        applyShadowColorValue(resolveShadowTarget(getEditableTargetEl() || getSelectedPanelTarget()), parsedShadowColor.id, hex, { schedule: false });
+        syncQuickRecordUiForCurrentPanel();
+        return;
+      }
+    }
     applyColorWithAlpha(prop, hex, getColorDraftMeta(prop).alpha);
     syncQuickRecordUiForCurrentPanel();
     if (!isColorPickerProtectionActive(prop)) schedule();
@@ -7685,6 +7944,19 @@
   function onPanelInput(e) {
     var target = e.target;
     if (!target || !tooltip.contains(target)) return;
+    var shadowInput = target.closest && target.closest("[data-vqa-shadow-input]");
+    if (shadowInput) {
+      if (isShadowColorUiTarget(target, shadowInput)) return;
+      console.warn("[shadow-debug] shadow-input:caught", {
+        target: e.target,
+        shadowInput: shadowInput,
+        shadowId: shadowInput.dataset ? shadowInput.dataset.shadowId : "",
+        shadowProp: shadowInput.dataset ? shadowInput.dataset.shadowProp : "",
+        value: shadowInput.value != null ? shadowInput.value : (shadowInput.dataset && shadowInput.dataset.value) || (shadowInput.textContent || "").trim()
+      });
+      handleShadowInput(shadowInput);
+      return;
+    }
     var fieldId = getFieldId(target);
     if (fieldId) {
       syncFieldDraft(target);
@@ -7697,6 +7969,11 @@
       }
       if (isPercentInput(target)) {
         previewPercentInputValue(target, target.value);
+        return;
+      }
+      var prop = target.getAttribute("data-prop") || "";
+      if (prop === "strokeWidth" || isShadowLogicalProp(prop)) {
+        previewFieldValue(prop, target.value);
         return;
       }
     }
@@ -7732,6 +8009,177 @@
     syncQuickRecordUiForCurrentPanel();
     schedule();
     if (input.focus) input.focus();
+  }
+
+  function getShadowInputControl(shadowInput) {
+    if (!shadowInput) return null;
+    var tagName = getNodeTagName(shadowInput);
+    if (tagName === "input" || tagName === "select" || tagName === "textarea") return shadowInput;
+    if (!shadowInput.querySelector) return shadowInput;
+    return shadowInput.querySelector("input, select, textarea") || shadowInput;
+  }
+
+  function getShadowInputLogicalProp(shadowInput) {
+    if (!shadowInput) return "";
+    var shadowId = shadowInput.dataset ? normalizeShadowId(shadowInput.dataset.shadowId || "") : "";
+    var shadowProp = shadowInput.dataset ? shadowInput.dataset.shadowProp || "" : "";
+    if (!shadowId || !shadowProp) return "";
+    return makeShadowLogicalProp(shadowId, shadowProp);
+  }
+
+  function normalizeShadowInputRawValue(shadowProp, rawValue) {
+    var text = String(rawValue == null ? "" : rawValue).trim();
+    if (shadowProp === "type") {
+      if (text === "inner" || text === "内阴影") return "inner";
+      return "outer";
+    }
+    if (shadowProp === "color") {
+      var expandedColor = expandBareHexText(text) || expandBareHexText(DEFAULT_SHADOW_CONFIG.color);
+      return "#" + (expandedColor || "000000");
+    }
+    if (shadowProp === "alpha") {
+      var alphaValue = parsePercentValue(text);
+      if (alphaValue === "") alphaValue = DEFAULT_SHADOW_CONFIG.alpha;
+      return String(clamp(alphaValue, 0, 100));
+    }
+    if (/^(offsetX|offsetY|blur|spread)$/.test(shadowProp)) {
+      var numValue = Math.round(parseFloat(text) || 0);
+      if (shadowProp === "blur") numValue = Math.max(0, numValue);
+      return String(numValue);
+    }
+    return text;
+  }
+
+  function readShadowInputRawValue(shadowInput) {
+    if (!shadowInput) return "";
+    var control = getShadowInputControl(shadowInput);
+    var rawValue =
+      (control && control.value != null ? control.value : undefined) ??
+      (shadowInput.dataset ? shadowInput.dataset.value : undefined) ??
+      (shadowInput.querySelector ? (shadowInput.querySelector("input") && shadowInput.querySelector("input").value) : undefined) ??
+      (shadowInput.querySelector ? (shadowInput.querySelector('[contenteditable="true"]') && shadowInput.querySelector('[contenteditable="true"]').textContent) : undefined) ??
+      (shadowInput.textContent || "").trim();
+    return String(rawValue == null ? "" : rawValue).trim();
+  }
+
+  function isShadowColorUiTarget(target, shadowInput) {
+    if (!target || !shadowInput || !shadowInput.dataset) return false;
+    if (shadowInput.dataset.shadowProp !== "color") return false;
+    return !!(
+      (target.getAttribute && target.getAttribute("data-color-picker-input")) ||
+      (target.getAttribute && target.getAttribute("data-color-prop")) ||
+      (target.getAttribute && target.getAttribute("data-color-text-prop"))
+    );
+  }
+
+  function handleShadowInput(shadowInput) {
+    if (!shadowInput) {
+      console.warn("[shadow-debug] shadow-input:return", { reason: "missing-shadow-input" });
+      return false;
+    }
+    var logicalProp = getShadowInputLogicalProp(shadowInput);
+    var parsed = parseShadowLogicalProp(logicalProp);
+    if (!parsed) {
+      console.warn("[shadow-debug] shadow-input:return", {
+        reason: "invalid-logical-prop",
+        logicalProp: logicalProp,
+        shadowInput: shadowInput
+      });
+      return false;
+    }
+    var control = getShadowInputControl(shadowInput);
+    var baseTargetEl = getEditableTargetEl() || getSelectedPanelTarget();
+    var targetEl = resolveShadowTarget(baseTargetEl);
+    if (!isValidShadowTarget(targetEl)) {
+      console.warn("[shadow-debug] shadow-input:return", {
+        reason: "invalid-target",
+        shadowId: parsed.id,
+        prop: parsed.field,
+        baseTargetEl: baseTargetEl,
+        targetEl: targetEl
+      });
+      return false;
+    }
+    var meta = getShadowRuntimeMetaForTarget(targetEl);
+    if (!meta || !Array.isArray(meta.shadows)) {
+      console.warn("[shadow-debug] shadow-input:return", {
+        reason: "missing-shadow-meta",
+        shadowId: parsed.id,
+        prop: parsed.field,
+        targetEl: targetEl,
+        meta: meta
+      });
+      return false;
+    }
+    var rawValue = readShadowInputRawValue(shadowInput);
+    console.warn("[shadow-debug] shadow-input:start", {
+      shadowId: parsed.id,
+      prop: parsed.field,
+      rawValue: rawValue,
+      targetEl: targetEl,
+      meta: meta,
+      shadows: meta.shadows
+    });
+    var currentList = getPluginShadowListForTarget(targetEl);
+    var shadowIndex = -1;
+    for (var i = 0; i < currentList.length; i += 1) {
+      if (currentList[i] && normalizeShadowId(currentList[i].id) === normalizeShadowId(parsed.id)) {
+        shadowIndex = i;
+        break;
+      }
+    }
+    if (shadowIndex < 0) {
+      console.warn("[shadow-debug] shadow-input:return", {
+        reason: "shadow-not-found",
+        shadowId: parsed.id,
+        prop: parsed.field,
+        targetEl: targetEl,
+        shadows: currentList
+      });
+      return false;
+    }
+    var nextList = cloneShadowList(currentList);
+    var nextShadow = normalizeShadowConfig(nextList[shadowIndex], nextList[shadowIndex]);
+    console.warn("[shadow-debug] shadow-input:update-before", {
+      shadow: cloneShadowConfig(nextShadow)
+    });
+    var nextValue = normalizeShadowInputRawValue(parsed.field, rawValue);
+    if (control && control.value != null) {
+      if (parsed.field === "color") {
+        control.value = String(nextValue || "").replace(/^#/, "");
+      } else {
+        control.value = nextValue;
+      }
+      syncFieldDraft(control);
+    }
+    if (parsed.field === "type") nextShadow.type = nextValue === "inner" ? "inner" : "outer";
+    if (parsed.field === "color") nextShadow.color = toHexColor(nextValue) || DEFAULT_SHADOW_CONFIG.color;
+    if (parsed.field === "alpha") nextShadow.alpha = clamp(parsePercentValue(nextValue), 0, 100);
+    if (parsed.field === "offsetX") nextShadow.offsetX = Math.round(parseFloat(nextValue) || 0);
+    if (parsed.field === "offsetY") nextShadow.offsetY = Math.round(parseFloat(nextValue) || 0);
+    if (parsed.field === "blur") nextShadow.blur = Math.max(0, Math.round(parseFloat(nextValue) || 0));
+    if (parsed.field === "spread") nextShadow.spread = Math.round(parseFloat(nextValue) || 0);
+    nextList[shadowIndex] = nextShadow;
+    console.warn("[shadow-debug] shadow-input:update-after", {
+      shadow: cloneShadowConfig(nextShadow)
+    });
+    applyShadowList(targetEl, nextList, {
+      source: "shadow-input"
+    });
+    var composed = composeBoxShadowEffects(targetEl);
+    console.warn("[shadow-debug] shadow-input:compose", {
+      composed: composed,
+      inlineBoxShadow: targetEl.style ? targetEl.style.boxShadow || "" : ""
+    });
+    console.warn("[shadow-debug] shadow-input:done", {
+      shadowId: parsed.id,
+      prop: parsed.field,
+      value: nextValue,
+      targetEl: targetEl,
+      boxShadow: targetEl && targetEl.style ? targetEl.style.boxShadow || "" : ""
+    });
+    schedule();
+    return true;
   }
 
   function onPanelKeyDown(e) {
@@ -7774,6 +8222,14 @@
     if (state.scrub.active) return;
     var target = e.target;
     if (!target || !tooltip.contains(target)) return;
+    var shadowInput = target.closest && target.closest("[data-vqa-shadow-input]");
+    if (shadowInput) {
+      if (isShadowColorUiTarget(target, shadowInput)) return;
+      handleShadowInput(shadowInput);
+      syncQuickRecordUiForCurrentPanel();
+      scheduleSelectedPanelHoverUnfreeze(0);
+      return;
+    }
     var fieldId = getFieldId(target);
     if (!fieldId) return;
     if (state.panelFocusSelectFieldId === fieldId && state.panelFocusSelectTimerId) {
@@ -7803,7 +8259,26 @@
   function onPanelChange(e) {
     var target = e.target;
     if (!target || !tooltip.contains(target)) return;
+    var shadowInput = target.closest && target.closest("[data-vqa-shadow-input]");
+    if (shadowInput) {
+      if (isShadowColorUiTarget(target, shadowInput)) {
+        syncQuickRecordUiForCurrentPanel();
+        scheduleSelectedPanelHoverUnfreeze(0);
+        if (!state.panelCollapsed) schedule();
+        return;
+      }
+      console.warn("[shadow-debug] shadow-input:caught", {
+        target: e.target,
+        shadowInput: shadowInput,
+        shadowId: shadowInput.dataset ? shadowInput.dataset.shadowId : "",
+        shadowProp: shadowInput.dataset ? shadowInput.dataset.shadowProp : "",
+        value: shadowInput.value != null ? shadowInput.value : (shadowInput.dataset && shadowInput.dataset.value) || (shadowInput.textContent || "").trim()
+      });
+      handleShadowInput(shadowInput);
+      return;
+    }
     if (getNodeTagName(target) !== "select") return;
+    syncCustomSelectTriggerLabel(target);
     if (target.matches && target.matches('[data-vqa-role="stroke-align"]')) {
       var strokeTarget = resolveStrokeTarget(getSelectedPanelTarget());
       if (!strokeTarget) return;
@@ -7905,6 +8380,22 @@
     openCustomSelectPopover(trigger, nativeSelect);
   }
 
+  function syncCustomSelectTriggerLabel(nativeSelect) {
+    if (!nativeSelect) return;
+    var wrapper = nativeSelect.closest ? nativeSelect.closest("[data-vqa-custom-select]") : null;
+    if (!wrapper) return;
+    var labelEl = wrapper.querySelector("[data-vqa-custom-select-label]");
+    if (!labelEl) return;
+    var selectedOption = nativeSelect.options && nativeSelect.selectedIndex >= 0
+      ? nativeSelect.options[nativeSelect.selectedIndex]
+      : null;
+    var nextLabel = selectedOption
+      ? String(selectedOption.textContent || selectedOption.label || selectedOption.value || "")
+      : String(nativeSelect.value || "");
+    if (!nextLabel) return;
+    labelEl.textContent = nextLabel;
+  }
+
   function onCustomSelectPopoverClick(e) {
     var optionBtn = e.target && e.target.closest ? e.target.closest('[data-action="select-custom-select-option"]') : null;
     if (!optionBtn || !customSelectPopover.contains(optionBtn)) return;
@@ -7921,6 +8412,7 @@
       return;
     }
     nativeSelect.value = value;
+    syncCustomSelectTriggerLabel(nativeSelect);
     state.editingFieldId = fieldId;
     state.draftInputs[fieldId] = value;
     closeCustomSelectPopover();
@@ -8002,9 +8494,12 @@
   }
 
   function onPanelMouseDown(e) {
-    if (isPanelControlTarget(e.target)) return;
     var actionTarget = e.target && e.target.closest ? e.target.closest("[data-action]") : null;
     var action = actionTarget ? actionTarget.getAttribute("data-action") : "";
+    if (action === "toggle-add-property-menu") {
+      return;
+    }
+    if (isPanelControlTarget(e.target)) return;
     if (isAddPropertyUiTarget(e.target)) {
       e.stopPropagation();
       return;
@@ -8072,6 +8567,11 @@
     }
     var target = e.target;
     if (!target || !tooltip.contains(target)) return;
+    console.warn("[add-prop-debug] panel-click", {
+      target: e.target,
+      action: e.target && e.target.closest ? ((e.target.closest("[data-action]") || {}).dataset || {}).action : "",
+      addPropMenuOpen: state.addPropMenuOpen
+    });
     var customSelectTrigger = target.closest ? target.closest('[data-action="toggle-custom-select"]') : null;
     if (customSelectTrigger) {
       toggleCustomSelectFromTrigger(customSelectTrigger);
@@ -8082,9 +8582,19 @@
     if (state.customSelectOpenFieldId) {
       closeCustomSelectPopover();
     }
-    if (isPanelControlTarget(target)) return;
     var actionTarget = target.closest ? target.closest("[data-action]") : null;
     var action = actionTarget ? actionTarget.getAttribute("data-action") : "";
+    if (action === "toggle-add-property-menu") {
+      e.preventDefault();
+      e.stopPropagation();
+      state.addPropMenuOpen = !state.addPropMenuOpen;
+      console.warn("[add-prop-debug] toggle", {
+        next: state.addPropMenuOpen
+      });
+      schedule();
+      return;
+    }
+    if (isPanelControlTarget(target)) return;
     if (action === "reset-styles") {
       closeAddPropertyMenu();
       clearEditedStyles();
@@ -8132,13 +8642,6 @@
       e.stopPropagation();
       return;
     }
-    if (action === "toggle-add-property-menu") {
-      state.addPropMenuOpen = !state.addPropMenuOpen;
-      schedule();
-      e.preventDefault();
-      e.stopPropagation();
-      return;
-    }
     if (action === "add-prop-background") {
       var addBaseTarget = getSelectedPanelTarget();
       var addTarget = resolveBackgroundHost(addBaseTarget);
@@ -8168,13 +8671,38 @@
       return;
     }
     if (action === "add-prop-shadow") {
-      var addShadowBaseTarget = getSelectedPanelTarget();
+      console.warn("[shadow-debug] click add-prop-shadow");
+      var addShadowBaseTarget = getEditableTargetEl() || getSelectedPanelTarget();
       var addShadowTarget = resolveShadowTarget(addShadowBaseTarget);
-      if (addShadowTarget) {
-        upsertShadowConfig(addShadowTarget, normalizeShadowConfig({
-          id: makeChangeEntityId("shadow")
-        }), {
+      console.warn("[shadow-debug] add-prop-shadow context", {
+        eventTarget: target,
+        action: action,
+        editableTargetEl: getEditableTargetEl(),
+        selectedPanelTarget: getSelectedPanelTarget(),
+        measureA: state.measureA,
+        resolvedTargetEl: addShadowTarget,
+        isHTMLElement: !!(addShadowTarget && addShadowTarget instanceof HTMLElement),
+        isInDocument: !!(addShadowTarget && document.contains(addShadowTarget))
+      });
+      if (!isValidShadowTarget(addShadowTarget)) {
+        console.warn("[shadow-debug] add-prop-shadow invalid target", {
+          baseTarget: addShadowBaseTarget,
+          targetEl: addShadowTarget
+        });
+      } else {
+        ensureShadowMeta(addShadowTarget);
+        var nextShadowConfig = normalizeShadowConfig({
+          id: createShadowRuntimeId()
+        });
+        upsertShadowConfig(addShadowTarget, nextShadowConfig, {
           source: "addedOnNone"
+        });
+        logShadowDebug("add-shadow", {
+          targetEl: addShadowTarget,
+          shadowMeta: getShadowRuntimeMetaForTarget(addShadowTarget),
+          composedBoxShadow: composeBoxShadowEffects(addShadowTarget),
+          inlineBoxShadow: addShadowTarget.style ? addShadowTarget.style.boxShadow || "" : "",
+          addedShadow: nextShadowConfig
         });
       }
       closeAddPropertyMenu();
@@ -8511,6 +9039,7 @@
     var disabled = !!opts.disabled;
     var scrubEnabled = controlType === "text" && isScrubbableField(prop, disabled);
     var atomTextareaPadding = fieldId === "text-content" ? "9px 0 3px" : "6px 0";
+    var inputAttrs = opts.inputAttrs || "";
     var baseInputFont = atomMode
       ? "400 14px/1.2 'PingFang SC',-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif"
       : "12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif";
@@ -8577,6 +9106,7 @@
         '" data-editable="1" data-type="' +
         esc(type || "text") +
         '"' +
+        (inputAttrs ? " " + inputAttrs : "") +
         (disabled ? ' disabled aria-disabled="true"' : "") +
         ' style="' +
         inputStyle +
@@ -8630,6 +9160,7 @@
         '" data-editable="1" data-note-input="1" data-type="' +
         esc(type || "text") +
         '"' +
+        (inputAttrs ? " " + inputAttrs : "") +
         (disabled ? ' readonly disabled aria-disabled="true"' : "") +
         ' rows="1" style="' +
         (atomMode ? "width:100%;min-height:0;max-height:72px;box-sizing:border-box;padding:" + atomTextareaPadding + ";border-radius:" + PANEL_UI.atomRadius + ";border:0;background:transparent;color:" + PANEL_UI.atomText + ";font:400 14px/1.4 'PingFang SC',-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;line-height:1.4;outline:none;box-shadow:none;resize:none;overflow-y:hidden;" : "width:100%;min-height:" +
@@ -8672,6 +9203,7 @@
       '" data-scrub-enabled="' +
       (scrubEnabled ? "true" : "false") +
       '"' +
+      (inputAttrs ? " " + inputAttrs : "") +
       (disabled ? ' readonly disabled aria-disabled="true"' : "") +
       ' value="' +
       safe +
@@ -8805,10 +9337,13 @@
   function panelAtomCell(atomIcon, contentHtml, opts) {
     opts = opts || {};
     var isAutoHeight = opts.height === "auto";
+    var cellAttrs = opts.attrs || "";
     return (
       '<div data-vqa-atom-cell="' +
       esc(opts.kind || "") +
-      '" style="display:grid;grid-template-columns:' +
+      '"' +
+      (cellAttrs ? " " + cellAttrs : "") +
+      ' style="display:grid;grid-template-columns:' +
       (opts.iconWidth || "16px") +
       ' minmax(0,1fr);gap:' +
       (opts.gap || "10px") +
@@ -8924,10 +9459,12 @@
         selectArrowFontSize: opts.selectArrowFontSize || "",
         selectFont: opts.selectFont || "",
         selectTextAlignLast: opts.selectTextAlignLast || "",
-        selectOptionFont: opts.selectOptionFont || ""
+        selectOptionFont: opts.selectOptionFont || "",
+        inputAttrs: opts.inputAttrs || ""
       }),
       {
         kind: opts.kind || prop,
+        attrs: opts.attrs || "",
         height: opts.height || PANEL_UI.atomHeight,
         flex: opts.flex || "",
         iconWidth: opts.iconWidth || null,
@@ -8962,10 +9499,12 @@
         selectArrowFontSize: opts.selectArrowFontSize || "",
         selectFont: opts.selectFont || "",
         selectTextAlignLast: opts.selectTextAlignLast || "",
-        selectOptionFont: opts.selectOptionFont || ""
+        selectOptionFont: opts.selectOptionFont || "",
+        inputAttrs: opts.inputAttrs || ""
       }),
       {
         kind: opts.kind || prop,
+        attrs: opts.attrs || "",
         height: opts.height || PANEL_UI.atomHeight,
         flex: opts.flex || "",
         iconWidth: opts.iconWidth || null,
@@ -8980,6 +9519,10 @@
     var colorMeta = getColorComponents(colorValue);
     var alphaFieldId = prop + "-alpha";
     var allowDelete = !!opts.allowDelete;
+    var shadowIdAttr = opts.shadowId ? ' data-shadow-id="' + esc(opts.shadowId) + '"' : "";
+    var colorShadowPropAttr = opts.shadowId ? ' data-shadow-prop="color"' : "";
+    var alphaShadowPropAttr = opts.shadowId ? ' data-shadow-prop="alpha"' : "";
+    var shadowInputAttr = opts.shadowId ? " data-vqa-shadow-input=\"1\"" : "";
     var columns = opts.columns || (allowDelete ? "minmax(0,2fr) minmax(0,1fr) 36px" : "minmax(0,2fr) minmax(0,1fr)");
     var textFont = opts.textFont || "400 14px/1.2 'PingFang SC',-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif";
     var textTransform = opts.textTransform || "uppercase";
@@ -8997,14 +9540,22 @@
       '<div data-vqa-icon-hit="1" style="position:relative;flex:0 0 auto;width:22px;height:22px;margin:0;padding:0;border-radius:3px;overflow:hidden;box-sizing:border-box;">' +
       '<div data-color-swatch="' +
       esc(prop) +
-      '" aria-hidden="true" style="position:absolute;inset:0;border-radius:3px;background:' +
+      '"' +
+      shadowInputAttr +
+      shadowIdAttr +
+      colorShadowPropAttr +
+      ' aria-hidden="true" style="position:absolute;inset:0;border-radius:3px;background:' +
       esc(colorMeta.hex || "#000000") +
       ';pointer-events:none;box-sizing:border-box;"></div>' +
       '<input type="color" data-color-prop="' +
       esc(prop) +
       '" data-color-picker-input="' +
       esc(prop) +
-      '" value="' +
+      '"' +
+      shadowInputAttr +
+      shadowIdAttr +
+      colorShadowPropAttr +
+      ' value="' +
       esc(colorMeta.hex || "#000000") +
       '" aria-label="修改颜色" oninput="handleColorPickerInput(this,\'' +
       esc(prop) +
@@ -9017,7 +9568,11 @@
       esc(prop) +
       '" data-color-text-prop="' +
       esc(prop) +
-      '" value="' +
+      '"' +
+      shadowInputAttr +
+      shadowIdAttr +
+      colorShadowPropAttr +
+      ' value="' +
       esc((colorMeta.hex || "").replace(/^#/, "")) +
       '" oninput="updateColorTextField(\'' +
       esc(prop) +
@@ -9045,7 +9600,11 @@
       esc(alphaFieldId) +
       '" data-color-alpha-prop="' +
       esc(prop) +
-      '" data-editable="1" data-scrub-enabled="true" data-scrub-locked="false" data-prop="opacity" value="' +
+      '"' +
+      shadowInputAttr +
+      shadowIdAttr +
+      alphaShadowPropAttr +
+      ' data-editable="1" data-scrub-enabled="true" data-scrub-locked="false" data-prop="opacity" value="' +
       esc(String(colorMeta.alpha)) +
       '" style="width:auto;min-width:' +
       alphaMinWidth +
@@ -16095,7 +16654,7 @@
     var title = "投影 " + String(index + 1);
     return (
       '<div data-vqa-shadow-item="' + esc(shadowId) + '" style="display:flex;flex-direction:column;gap:10px;min-width:0;padding:0 0 4px;">' +
-      '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;color:' + PANEL_UI.sectionTitleColor + ';font:600 14px/1.2 \'PingFang SC\',-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;">' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;color:' + PANEL_UI.sectionTitleColor + ';font:400 12px/1.2 \'PingFang SC\',-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;">' +
       '<div>' + esc(title) + '</div>' +
       '<button type="button" data-action="remove-shadow" data-shadow-id="' + esc(shadowId) + '" aria-label="删除投影" style="border:0;background:transparent;color:rgba(255,255,255,.66);font:500 12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;padding:0;">删除</button>' +
       '</div>' +
@@ -16105,10 +16664,12 @@
           columns: "minmax(0,4fr) minmax(76px,.85fr)",
           textFont: "400 12px/1.2 'PingFang SC',-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif",
           alphaGap: "6px",
-          alphaMinWidth: "24px"
+          alphaMinWidth: "24px",
+          shadowId: shadowId
         }),
         panelIconSelectCell("", makeShadowLogicalProp(shadowId, "type"), shadow.type, SHADOW_TYPE_OPTIONS, {
           kind: "shadow-type",
+          attrs: 'data-vqa-shadow-input="1" data-shadow-id="' + esc(shadowId) + '" data-shadow-prop="type"',
           selectKind: "shadow-type",
           flex: "1 1 auto",
           iconWidth: "0px",
@@ -16123,35 +16684,44 @@
           selectArrowFontSize: "8px",
           selectFont: "400 12px/1.25 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif",
           selectOptionFont: "400 12px/1.25 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif",
-          selectTextAlignLast: "left"
+          selectTextAlignLast: "left",
+          inputAttrs: 'data-shadow-id="' + esc(shadowId) + '" data-shadow-prop="type"'
         })
       ], { gap: "10px", columns: "minmax(0,1.42fr) minmax(0,0.68fr)" }) +
       panelAtomGrid([
         panelIconValueCell("", makeShadowLogicalProp(shadowId, "offsetX"), String(shadow.offsetX), {
           kind: "shadow-offset-x",
+          attrs: 'data-vqa-shadow-input="1" data-shadow-id="' + esc(shadowId) + '" data-shadow-prop="offsetX"',
           slotName: "shadow-offset-x",
           iconSize: "30px",
-          iconWidth: "30px"
+          iconWidth: "30px",
+          inputAttrs: 'data-shadow-id="' + esc(shadowId) + '" data-shadow-prop="offsetX"'
         }),
         panelIconValueCell("", makeShadowLogicalProp(shadowId, "offsetY"), String(shadow.offsetY), {
           kind: "shadow-offset-y",
+          attrs: 'data-vqa-shadow-input="1" data-shadow-id="' + esc(shadowId) + '" data-shadow-prop="offsetY"',
           slotName: "shadow-offset-y",
           iconSize: "30px",
-          iconWidth: "30px"
+          iconWidth: "30px",
+          inputAttrs: 'data-shadow-id="' + esc(shadowId) + '" data-shadow-prop="offsetY"'
         })
       ], { gap: "10px" }) +
       panelAtomGrid([
         panelIconValueCell("", makeShadowLogicalProp(shadowId, "blur"), String(shadow.blur), {
           kind: "shadow-blur",
+          attrs: 'data-vqa-shadow-input="1" data-shadow-id="' + esc(shadowId) + '" data-shadow-prop="blur"',
           slotName: "shadow-blur",
           iconSize: "30px",
-          iconWidth: "30px"
+          iconWidth: "30px",
+          inputAttrs: 'data-shadow-id="' + esc(shadowId) + '" data-shadow-prop="blur"'
         }),
         panelIconValueCell("", makeShadowLogicalProp(shadowId, "spread"), String(shadow.spread), {
           kind: "shadow-spread",
+          attrs: 'data-vqa-shadow-input="1" data-shadow-id="' + esc(shadowId) + '" data-shadow-prop="spread"',
           slotName: "shadow-spread",
           iconSize: "30px",
-          iconWidth: "30px"
+          iconWidth: "30px",
+          inputAttrs: 'data-shadow-id="' + esc(shadowId) + '" data-shadow-prop="spread"'
         })
       ], { gap: "10px" }) +
       '</div>'
@@ -16161,7 +16731,13 @@
   function renderSelectedShadowSection(el) {
     var shadowTarget = resolveShadowTarget(el);
     if (!shadowTarget) return "";
+    var shadowMeta = getShadowRuntimeMetaForTarget(shadowTarget);
     var shadowList = getPluginShadowListForTarget(shadowTarget);
+    console.warn("[shadow-debug] render-shadow-section", {
+      targetEl: shadowTarget,
+      meta: shadowMeta,
+      shadows: shadowMeta && Array.isArray(shadowMeta.shadows) ? shadowMeta.shadows : []
+    });
     if (!shadowList.length) return "";
     return section("投影", shadowList.map(function (shadow, index) {
       return renderSingleShadowEditor(shadowTarget, shadow, index);
