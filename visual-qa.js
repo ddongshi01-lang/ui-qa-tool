@@ -832,6 +832,16 @@
     return next;
   }
 
+  function parseGradientAngleInputValue(value) {
+    var text = String(value == null ? "" : value).trim();
+    if (!text) return "";
+    var normalizedText = text.replace(/deg$/i, "").replace(/°/g, "").trim();
+    if (normalizedText === "") return "";
+    var parsed = Number(normalizedText);
+    if (!isFinite(parsed)) return "";
+    return normalizeGradientAngle(parsed);
+  }
+
   function normalizeGradientStops(stops, activeStopId) {
     var nextStops = Array.isArray(stops) ? stops.map(function (stop, index) {
       if (!stop) return null;
@@ -1213,16 +1223,18 @@
     var gradient = picker.gradient;
     var activeStop = findGradientStopById(gradient, gradient.activeStopId) || gradient.stops[0];
     var angleLeft = clamp((normalizeGradientAngle(gradient.angle) / 359) * 100, 0, 100);
+    var angleValue = normalizeGradientAngle(gradient.angle);
     var previewCss = buildLinearGradientCss(gradient);
     var deleteDisabled = !gradient.stops || gradient.stops.length <= 2;
     return (
       '<div style="margin-top:12px;display:flex;flex-direction:column;gap:10px;">' +
       '<div style="display:flex;align-items:center;gap:9px;">' +
       '<div data-color-picker-gradient-angle="1" data-vqa-panel-control="true" style="position:relative;flex:1 1 auto;height:27px;border-radius:6px;background:rgba(255,255,255,.07);">' +
-      '<div data-color-picker-gradient-angle-track="1" data-vqa-panel-control="true" style="position:absolute;left:12px;right:78px;top:11px;height:5px;border-radius:49px;background:rgba(255,255,255,.6);cursor:pointer;">' +
+      '<div data-color-picker-gradient-angle-track="1" data-vqa-panel-control="true" style="position:absolute;left:12px;right:58px;top:11px;height:5px;border-radius:49px;background:rgba(255,255,255,.6);cursor:pointer;">' +
       '<div data-color-picker-gradient-angle-thumb="1" style="position:absolute;left:calc(' + angleLeft + '% - 5.5px);top:50%;width:11px;height:11px;border-radius:999px;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.35);pointer-events:none;transform:translateY(-50%);"></div>' +
       "</div>" +
-      '<div data-color-picker-gradient-angle-value="1" style="position:absolute;right:12px;top:6px;color:#fff;font:400 12px/1 \'PingFang SC\',-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;">' + normalizeGradientAngle(gradient.angle) + "°</div>" +
+      '<input type="text" data-color-picker-gradient-angle-input="1" data-vqa-panel-control="true" value="' + esc(String(angleValue)) + '" inputmode="numeric" autocomplete="off" spellcheck="false" onfocus="this.select()" onmousedown="this.select()" style="position:absolute;right:12px;top:4px;width:40px;height:20px;border:0;background:transparent;color:#fff;font:400 12px/1 \'PingFang SC\',-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;outline:none;text-align:right;padding:0;margin:0;">' +
+      '<span aria-hidden="true" style="position:absolute;right:5px;top:6px;color:#fff;font:400 12px/1 \'PingFang SC\',-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;pointer-events:none;">°</span>' +
       "</div>" +
       '<button type="button" data-action="rotate-gradient-angle" data-vqa-panel-control="true" style="width:27px;height:27px;padding:0;border:0;border-radius:6px;background:rgba(255,255,255,.07);display:flex;align-items:center;justify-content:center;cursor:pointer;">' + renderFloatingSlotIcon("gradient-rotate", "27px") + "</button>" +
       '<button type="button" data-action="delete-gradient-stop" data-vqa-panel-control="true" ' + (deleteDisabled ? 'disabled aria-disabled="true" ' : "") + 'style="width:27px;height:27px;padding:0;border:0;border-radius:6px;background:rgba(255,255,255,.07);display:flex;align-items:center;justify-content:center;cursor:' + (deleteDisabled ? "not-allowed" : "pointer") + ';opacity:' + (deleteDisabled ? ".45" : "1") + ';">' + renderFloatingSlotIcon("gradient-delete-stop", "27px") + "</button>" +
@@ -1370,11 +1382,12 @@
     if (alphaInput && (forceSyncInputs || document.activeElement !== alphaInput)) alphaInput.value = String(picker.alpha);
     if (picker.mode === "gradient" && picker.gradient) {
       var gradientAngleThumb = colorPickerPopover.querySelector("[data-color-picker-gradient-angle-thumb]");
-      var gradientAngleValue = colorPickerPopover.querySelector("[data-color-picker-gradient-angle-value]");
+      var gradientAngleInput = colorPickerPopover.querySelector("[data-color-picker-gradient-angle-input]");
       var gradientBar = colorPickerPopover.querySelector("[data-color-picker-gradient-bar]");
       var angleLeft = clamp((normalizeGradientAngle(picker.gradient.angle) / 359) * 100, 0, 100);
+      var angleValue = normalizeGradientAngle(picker.gradient.angle);
       if (gradientAngleThumb) gradientAngleThumb.style.left = "calc(" + angleLeft + "% - 5.5px)";
-      if (gradientAngleValue) gradientAngleValue.textContent = normalizeGradientAngle(picker.gradient.angle) + "°";
+      if (gradientAngleInput && (forceSyncInputs || document.activeElement !== gradientAngleInput)) gradientAngleInput.value = String(angleValue);
       if (gradientBar) gradientBar.style.background = buildLinearGradientCss(picker.gradient);
       picker.gradient.stops.forEach(function (stop) {
         var stopEl = colorPickerPopover.querySelector('[data-gradient-stop-id="' + stop.id + '"]');
@@ -1478,7 +1491,10 @@
     var picker = getColorPickerState();
     if (!picker.open || picker.mode !== "gradient" || !picker.gradient) return;
     picker.gradient.angle = normalizeGradientAngle(angle);
-    applyGradientPickerState(picker, { forceRender: true });
+    state.colorPicker = picker;
+    applyBackgroundGradient(picker.targetEl, picker.gradient);
+    syncColorPickerPopoverUi();
+    updateColorPickerOpenProtection(picker.prop);
   }
 
   function updateGradientStop(stopId, updates, shouldSort) {
@@ -2000,7 +2016,7 @@
     var rotateButton = event.target.closest && event.target.closest('[data-action="rotate-gradient-angle"]');
     if (rotateButton) {
       var pickerForRotate = getColorPickerState();
-      if (pickerForRotate.gradient) setGradientAngle((normalizeGradientAngle(pickerForRotate.gradient.angle) + 45) % 360);
+      if (pickerForRotate.gradient) setGradientAngle((normalizeGradientAngle(pickerForRotate.gradient.angle) + 90) % 360);
       event.preventDefault();
       return;
     }
@@ -2083,6 +2099,13 @@
       applyColorPickerValue(getColorPickerState().hex, clamp(parseInt(alphaText, 10) || 0, 0, 100));
       return;
     }
+    var gradientAngleInput = event.target.closest && event.target.closest("[data-color-picker-gradient-angle-input]");
+    if (gradientAngleInput) {
+      var angleText = parseGradientAngleInputValue(gradientAngleInput.value);
+      if (angleText === "") return;
+      setGradientAngle(angleText);
+      return;
+    }
     var formatInput = event.target.closest && event.target.closest("[data-color-picker-format-input]");
     if (formatInput) {
       applyColorPickerFormatChannel(formatInput.getAttribute("data-color-picker-format-input") || "", formatInput.value);
@@ -2105,6 +2128,17 @@
       if (nextAlpha === "") nextAlpha = getColorPickerState().alpha;
       alphaInput.value = String(clamp(nextAlpha, 0, 100));
       applyColorPickerValue(getColorPickerState().hex, nextAlpha);
+      return;
+    }
+    var gradientAngleInput = event.target.closest && event.target.closest("[data-color-picker-gradient-angle-input]");
+    if (gradientAngleInput) {
+      var nextAngle = parseGradientAngleInputValue(gradientAngleInput.value);
+      if (nextAngle === "") {
+        gradientAngleInput.value = String(normalizeGradientAngle(getColorPickerState().gradient && getColorPickerState().gradient.angle));
+        return;
+      }
+      gradientAngleInput.value = String(nextAngle);
+      setGradientAngle(nextAngle);
       return;
     }
     var formatInput = event.target.closest && event.target.closest("[data-color-picker-format-input]");
@@ -7943,8 +7977,12 @@
 
   function toHexColor(c) {
     if (!c || c === "transparent" || c === "rgba(0, 0, 0, 0)") return "";
-    if (c[0] === "#") return c.toUpperCase();
-    var m = c.match(/rgba?\(([^)]+)\)/i);
+    var text = String(c).trim();
+    if (!text) return "";
+    if (text[0] === "#") return text.toUpperCase();
+    var bareHex = expandBareHexText(text);
+    if (bareHex) return "#" + bareHex;
+    var m = text.match(/rgba?\(([^)]+)\)/i);
     if (!m) return c;
     var p = m[1].split(",").map(function (x) {
       return x.trim();
@@ -11113,6 +11151,10 @@
     var colorMeta = getColorComponents(colorValue);
     var alphaFieldId = prop + "-alpha";
     var allowDelete = !!opts.allowDelete;
+    var readOnly = !!opts.readOnly;
+    var swatchBackground = opts.swatchBackground || colorMeta.hex || "#000000";
+    var textValue = opts.textValue != null ? String(opts.textValue) : String((colorMeta.hex || "").replace(/^#/, ""));
+    var alphaValue = opts.alphaValue != null ? String(opts.alphaValue) : String(colorMeta.alpha);
     var shadowIdAttr = opts.shadowId ? ' data-shadow-id="' + esc(opts.shadowId) + '"' : "";
     var colorShadowPropAttr = opts.shadowId ? ' data-shadow-prop="color"' : "";
     var alphaShadowPropAttr = opts.shadowId ? ' data-shadow-prop="alpha"' : "";
@@ -11141,29 +11183,33 @@
       shadowIdAttr +
       colorShadowPropAttr +
       ' aria-hidden="true" style="position:absolute;inset:0;border-radius:3px;background:' +
-      esc(colorMeta.hex || "#000000") +
+      esc(swatchBackground) +
       ';pointer-events:none;box-sizing:border-box;"></div>' +
       "</button>" +
       '<div style="min-width:0;flex:1 1 auto;margin-left:8px;display:flex;align-items:center;">' +
       '<input type="text" inputmode="text" autocomplete="off" spellcheck="false" data-field-id="' +
       esc(prop + "-color-text") +
-      '" data-prop="' +
-      esc(prop) +
-      '" data-color-text-prop="' +
-      esc(prop) +
       '"' +
-      shadowInputAttr +
-      shadowIdAttr +
-      colorShadowPropAttr +
+      (readOnly
+        ? ' readonly aria-readonly="true"'
+        : ' data-prop="' +
+          esc(prop) +
+          '" data-color-text-prop="' +
+          esc(prop) +
+          '"' +
+          shadowInputAttr +
+          shadowIdAttr +
+          colorShadowPropAttr +
+          ' oninput="updateColorTextField(\'' +
+          esc(prop) +
+          '\', this, false)" onblur="updateColorTextField(\'' +
+          esc(prop) +
+          '\', this, true)" onkeydown="return handleColorTextKeyDown(event, this, \'' +
+          esc(prop) +
+          '\')"') +
       ' value="' +
-      esc((colorMeta.hex || "").replace(/^#/, "")) +
-      '" oninput="updateColorTextField(\'' +
-      esc(prop) +
-      '\', this, false)" onblur="updateColorTextField(\'' +
-      esc(prop) +
-      '\', this, true)" onkeydown="return handleColorTextKeyDown(event, this, \'' +
-      esc(prop) +
-      '\')" style="width:100%;min-width:0;height:' +
+      esc(textValue) +
+      '" style="width:100%;min-width:0;height:' +
       PANEL_UI.atomHeight +
       ';box-sizing:border-box;padding:0;border:0;background:transparent;color:' +
       PANEL_UI.atomText +
@@ -11181,14 +11227,18 @@
       ';">' +
       '<input type="text" inputmode="decimal" autocomplete="off" spellcheck="false" data-field-id="' +
       esc(alphaFieldId) +
-      '" data-color-alpha-prop="' +
-      esc(prop) +
       '"' +
-      shadowInputAttr +
-      shadowIdAttr +
-      alphaShadowPropAttr +
-      ' data-editable="1" data-scrub-enabled="true" data-scrub-locked="false" data-prop="opacity" value="' +
-      esc(String(colorMeta.alpha)) +
+      (readOnly
+        ? ' readonly aria-readonly="true"'
+        : ' data-color-alpha-prop="' +
+          esc(prop) +
+          '"' +
+          shadowInputAttr +
+          shadowIdAttr +
+          alphaShadowPropAttr +
+          ' data-editable="1" data-scrub-enabled="true" data-scrub-locked="false" data-prop="opacity"') +
+      ' value="' +
+      esc(alphaValue) +
       '" style="width:auto;min-width:' +
       alphaMinWidth +
       ';height:' +
@@ -18417,6 +18467,16 @@
   }
 
   function renderBackgroundSolidControls(applyTarget, presence) {
+    var gradientState = readBackgroundGradientState(applyTarget);
+    if (gradientState && gradientState.mode === "gradient" && gradientState.gradient) {
+      return panelColorValueCell("backgroundColor", "#FFFFFF", {
+        kind: "background-color",
+        swatchBackground: buildLinearGradientCss(gradientState.gradient) || presence.backgroundImage || "#FFFFFF",
+        textValue: "渐变填充",
+        alphaValue: 100,
+        readOnly: true
+      });
+    }
     var displayValue = presence.hasBackgroundColor ? getVisibleBackgroundColorValue(applyTarget, getComputedStyle(applyTarget)) : presence.backgroundColor || "#FFFFFF";
     if (!displayValue) displayValue = "#FFFFFF";
     return panelColorValueCell("backgroundColor", displayValue, { kind: "background-color" });
@@ -18427,7 +18487,7 @@
     if (!applyTarget) return "";
     var applyTargetStyle = getComputedStyle(applyTarget);
     var presence = resolveBackgroundPresence(applyTarget, applyTargetStyle);
-    if (presence.mode === "none") return "";
+    if (!presence.hasBackgroundColor && !presence.hasBackgroundImage) return "";
     return section(
       "背景",
       [renderBackgroundSolidControls(applyTarget, presence)],

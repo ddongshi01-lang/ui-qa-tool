@@ -6362,8 +6362,12 @@
 
   function toHexColor(c) {
     if (!c || c === "transparent" || c === "rgba(0, 0, 0, 0)") return "";
-    if (c[0] === "#") return c.toUpperCase();
-    var m = c.match(/rgba?\(([^)]+)\)/i);
+    var text = String(c).trim();
+    if (!text) return "";
+    if (text[0] === "#") return text.toUpperCase();
+    var bareHex = expandBareHexText(text);
+    if (bareHex) return "#" + bareHex;
+    var m = text.match(/rgba?\(([^)]+)\)/i);
     if (!m) return c;
     var p = m[1].split(",").map(function (x) {
       return x.trim();
@@ -9519,6 +9523,10 @@
     var colorMeta = getColorComponents(colorValue);
     var alphaFieldId = prop + "-alpha";
     var allowDelete = !!opts.allowDelete;
+    var readOnly = !!opts.readOnly;
+    var swatchBackground = opts.swatchBackground || colorMeta.hex || "#000000";
+    var textValue = opts.textValue != null ? String(opts.textValue) : String((colorMeta.hex || "").replace(/^#/, ""));
+    var alphaValue = opts.alphaValue != null ? String(opts.alphaValue) : String(colorMeta.alpha);
     var shadowIdAttr = opts.shadowId ? ' data-shadow-id="' + esc(opts.shadowId) + '"' : "";
     var colorShadowPropAttr = opts.shadowId ? ' data-shadow-prop="color"' : "";
     var alphaShadowPropAttr = opts.shadowId ? ' data-shadow-prop="alpha"' : "";
@@ -9545,7 +9553,7 @@
       shadowIdAttr +
       colorShadowPropAttr +
       ' aria-hidden="true" style="position:absolute;inset:0;border-radius:3px;background:' +
-      esc(colorMeta.hex || "#000000") +
+      esc(swatchBackground) +
       ';pointer-events:none;box-sizing:border-box;"></div>' +
       '<input type="color" data-color-prop="' +
       esc(prop) +
@@ -9564,23 +9572,27 @@
       '<div style="min-width:0;flex:1 1 auto;margin-left:8px;display:flex;align-items:center;">' +
       '<input type="text" inputmode="text" autocomplete="off" spellcheck="false" data-field-id="' +
       esc(prop + "-color-text") +
-      '" data-prop="' +
-      esc(prop) +
-      '" data-color-text-prop="' +
-      esc(prop) +
       '"' +
-      shadowInputAttr +
-      shadowIdAttr +
-      colorShadowPropAttr +
+      (readOnly
+        ? ' readonly aria-readonly="true"'
+        : ' data-prop="' +
+          esc(prop) +
+          '" data-color-text-prop="' +
+          esc(prop) +
+          '"' +
+          shadowInputAttr +
+          shadowIdAttr +
+          colorShadowPropAttr +
+          ' oninput="updateColorTextField(\'' +
+          esc(prop) +
+          '\', this, false)" onblur="updateColorTextField(\'' +
+          esc(prop) +
+          '\', this, true)" onkeydown="return handleColorTextKeyDown(event, this, \'' +
+          esc(prop) +
+          '\')"') +
       ' value="' +
-      esc((colorMeta.hex || "").replace(/^#/, "")) +
-      '" oninput="updateColorTextField(\'' +
-      esc(prop) +
-      '\', this, false)" onblur="updateColorTextField(\'' +
-      esc(prop) +
-      '\', this, true)" onkeydown="return handleColorTextKeyDown(event, this, \'' +
-      esc(prop) +
-      '\')" style="width:100%;min-width:0;height:' +
+      esc(textValue) +
+      '" style="width:100%;min-width:0;height:' +
       PANEL_UI.atomHeight +
       ';box-sizing:border-box;padding:0;border:0;background:transparent;color:' +
       PANEL_UI.atomText +
@@ -9598,14 +9610,18 @@
       ';">' +
       '<input type="text" inputmode="decimal" autocomplete="off" spellcheck="false" data-field-id="' +
       esc(alphaFieldId) +
-      '" data-color-alpha-prop="' +
-      esc(prop) +
       '"' +
-      shadowInputAttr +
-      shadowIdAttr +
-      alphaShadowPropAttr +
-      ' data-editable="1" data-scrub-enabled="true" data-scrub-locked="false" data-prop="opacity" value="' +
-      esc(String(colorMeta.alpha)) +
+      (readOnly
+        ? ' readonly aria-readonly="true"'
+        : ' data-color-alpha-prop="' +
+          esc(prop) +
+          '"' +
+          shadowInputAttr +
+          shadowIdAttr +
+          alphaShadowPropAttr +
+          ' data-editable="1" data-scrub-enabled="true" data-scrub-locked="false" data-prop="opacity"') +
+      ' value="' +
+      esc(alphaValue) +
       '" style="width:auto;min-width:' +
       alphaMinWidth +
       ';height:' +
@@ -16745,6 +16761,16 @@
   }
 
   function renderBackgroundSolidControls(applyTarget, presence) {
+    var gradientState = readBackgroundGradientState(applyTarget);
+    if (gradientState && gradientState.mode === "gradient" && gradientState.gradient) {
+      return panelColorValueCell("backgroundColor", "#FFFFFF", {
+        kind: "background-color",
+        swatchBackground: buildLinearGradientCss(gradientState.gradient) || presence.backgroundImage || "#FFFFFF",
+        textValue: "渐变填充",
+        alphaValue: 100,
+        readOnly: true
+      });
+    }
     var displayValue = presence.hasBackgroundColor ? getVisibleBackgroundColorValue(applyTarget, getComputedStyle(applyTarget)) : presence.backgroundColor || "#FFFFFF";
     if (!displayValue) displayValue = "#FFFFFF";
     return panelColorValueCell("backgroundColor", displayValue, { kind: "background-color" });
@@ -16755,7 +16781,7 @@
     if (!applyTarget) return "";
     var applyTargetStyle = getComputedStyle(applyTarget);
     var presence = resolveBackgroundPresence(applyTarget, applyTargetStyle);
-    if (presence.mode === "none") return "";
+    if (!presence.hasBackgroundColor && !presence.hasBackgroundImage) return "";
     return section(
       "背景",
       [renderBackgroundSolidControls(applyTarget, presence)],
