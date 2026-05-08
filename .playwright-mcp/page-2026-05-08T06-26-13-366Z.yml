@@ -1,0 +1,57 @@
+- generic [ref=e2]:
+  - generic [ref=e4]:
+    - link:
+      - /url: http://www.koolearn.com
+      - img [ref=e5] [cursor=pointer]
+    - text: 欢迎登录
+  - generic [ref=e11]:
+    - generic [ref=e13]: 微信扫码快捷登录
+    - img "loading" [ref=e16]
+    - generic [ref=e17]: 使用【微信扫一扫】登录更方便
+  - generic [ref=e23]:
+    - list [ref=e24]:
+      - listitem [ref=e25]:
+        - link "关于我们" [ref=e26] [cursor=pointer]:
+          - /url: //www.koolearn.com/about/
+      - listitem [ref=e27]:
+        - link "招商合作" [ref=e28] [cursor=pointer]:
+          - /url: //www.koolearn.com/about/shangwu/
+      - listitem [ref=e29]:
+        - link "广告服务" [ref=e30] [cursor=pointer]:
+          - /url: //www.koolearn.com/about/guanggao/
+      - listitem [ref=e31]:
+        - link "线下体验店" [ref=e32] [cursor=pointer]:
+          - /url: //sc.koolearn.com/
+      - listitem [ref=e33]:
+        - link "客服中心" [ref=e34] [cursor=pointer]:
+          - /url: //help.koolearn.com/
+      - listitem [ref=e35]:
+        - link "合作伙伴" [ref=e36] [cursor=pointer]:
+          - /url: //www.koolearn.com/about/hezuo/
+      - listitem [ref=e37]:
+        - link "联系我们" [ref=e38] [cursor=pointer]:
+          - /url: //www.koolearn.com/about/lianxi/
+      - listitem [ref=e39]:
+        - link "人员招聘" [ref=e40] [cursor=pointer]:
+          - /url: http://zhaopin.koolearn.com/
+      - listitem [ref=e41]:
+        - link "热点关注" [ref=e42] [cursor=pointer]:
+          - /url: //www.koolearn.com/zt/
+      - listitem [ref=e43]:
+        - link "网盟合作" [ref=e44] [cursor=pointer]:
+          - /url: //union.koolearn.com/
+      - listitem [ref=e45]:
+        - link "用户隐私保护政策" [ref=e46] [cursor=pointer]:
+          - /url: //koolearn.com//user/policy
+    - paragraph [ref=e47]:
+      - link "京ICP备2024050960号-2" [ref=e48] [cursor=pointer]:
+        - /url: https://beian.miit.gov.cn/#/Integrated/index
+      - link "营业执照" [ref=e49] [cursor=pointer]:
+        - /url: https://daxueui-cos.koocdn.com/images/fe_upload/2024/4/2024-4-10-1712739472063.jpg
+      - link "安备 京公网安备 11010802044296号" [ref=e50] [cursor=pointer]:
+        - /url: https://beian.mps.gov.cn/#/query/webSearch?code=11010802044296
+        - img "安备" [ref=e51]
+        - text: 京公网安备 11010802044296号
+      - link "ICP许可证编号:京B2-20241156" [ref=e52] [cursor=pointer]:
+        - /url: https://daxue-file-1255817909.cos.ap-beijing.myqcloud.com/daxue/common/icp/icp_licence.pdf
+    - paragraph [ref=e53]: Copyright © 2024-2026, All Rights Reserved

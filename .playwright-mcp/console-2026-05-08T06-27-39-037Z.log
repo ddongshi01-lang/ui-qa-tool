@@ -1,0 +1,7 @@
+[    1582ms] [INFO] iconfontUrl https://cdn.huaban.com/_next/public/v1767513259606/_assets/iconfont/iconfont.js @ https://cdn.huaban.com/_next/static/chunks/pages/_app-8916a0b572227220.js:4
+[    2750ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_CLOSED @ https://gaoding-prod.cn-hangzhou.log.aliyuncs.com/logstores/gaoding-prod-rum-raw/track?APIVersion=0.6.0:0
+[    2750ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_CLOSED @ https://gaoding-prod.cn-hangzhou.log.aliyuncs.com/logstores/gaoding-prod-rum-raw/track?APIVersion=0.6.0:0
+[    2750ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_CLOSED @ https://gaoding-prod.cn-hangzhou.log.aliyuncs.com/logstores/gaoding-prod-rum-raw/track?APIVersion=0.6.0:0
+[    2881ms] [WARNING] Error while trying to use the following icon from the Manifest: https://st0.dancf.com/static/02/202309110212-daac.png (Download error or resource isn't a valid image) @ https://huaban.com/discovery:0
+[    2932ms] [INFO] iconfontUrl https://cdn.huaban.com/_next/public/v1767513259606/_assets/iconfont/iconfont.js @ https://cdn.huaban.com/_next/static/chunks/pages/_app-8916a0b572227220.js:4
+[    4451ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_CLOSED @ https://gaoding-prod.cn-hangzhou.log.aliyuncs.com/logstores/gaoding-prod-rum-raw/track?APIVersion=0.6.0:0

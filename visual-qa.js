@@ -1,6 +1,6 @@
 ﻿// Visual QA Inspector
 (function () {
-  console.warn("[VQA ACTIVE BUILD] shadow-debug-2026-04-29-01", location.href);
+  console.debug("[VQA ACTIVE BUILD] shadow-debug-2026-04-29-01", location.href);
 
   function notifyPluginActionState(active) {
     try {
@@ -255,6 +255,7 @@
     colorPickerOpenProp: "",
     colorPickerOpenAt: 0,
     colorPickerOpenTimerId: 0,
+    colorPicker: createEmptyColorPickerState(),
     rafId: null,
     modifiedProps: {},
     editedProps: {},
@@ -495,6 +496,8 @@
           !iconUrls["shadow-offset-y"] ||
           !iconUrls["shadow-blur"] ||
           !iconUrls["shadow-spread"] ||
+          !iconUrls["gradient-rotate"] ||
+          !iconUrls["gradient-delete-stop"] ||
           !iconUrls["appearance-opacity"] ||
           !iconUrls["appearance-radius"]
         ) {
@@ -553,6 +556,1564 @@
       iconSize +
       ';object-fit:contain;pointer-events:none;user-select:none;">'
     );
+  }
+
+  function normalizeHueValue(hue) {
+    var next = Number(hue);
+    if (!isFinite(next)) return 0;
+    next = next % 360;
+    if (next < 0) next += 360;
+    return next;
+  }
+
+  function hsvToHex(h, s, v) {
+    var hue = normalizeHueValue(h);
+    var sat = clamp(Number(s), 0, 1);
+    var val = clamp(Number(v), 0, 1);
+    var c = val * sat;
+    var x = c * (1 - Math.abs((hue / 60) % 2 - 1));
+    var m = val - c;
+    var r = 0;
+    var g = 0;
+    var b = 0;
+    if (hue < 60) {
+      r = c;
+      g = x;
+    } else if (hue < 120) {
+      r = x;
+      g = c;
+    } else if (hue < 180) {
+      g = c;
+      b = x;
+    } else if (hue < 240) {
+      g = x;
+      b = c;
+    } else if (hue < 300) {
+      r = x;
+      b = c;
+    } else {
+      r = c;
+      b = x;
+    }
+    function toHexByte(value) {
+      var byte = Math.round((value + m) * 255);
+      var text = byte.toString(16).toUpperCase();
+      return text.length === 1 ? "0" + text : text;
+    }
+    return "#" + toHexByte(r) + toHexByte(g) + toHexByte(b);
+  }
+
+  function hexToHsv(hex) {
+    var normalized = toCssHexColor(hex) || "#FFFFFF";
+    var expanded = normalized.length === 4
+      ? "#" + normalized.charAt(1) + normalized.charAt(1) + normalized.charAt(2) + normalized.charAt(2) + normalized.charAt(3) + normalized.charAt(3)
+      : normalized;
+    var r = parseInt(expanded.slice(1, 3), 16) / 255;
+    var g = parseInt(expanded.slice(3, 5), 16) / 255;
+    var b = parseInt(expanded.slice(5, 7), 16) / 255;
+    var max = Math.max(r, g, b);
+    var min = Math.min(r, g, b);
+    var delta = max - min;
+    var hue = 0;
+    if (delta) {
+      if (max === r) {
+        hue = 60 * (((g - b) / delta) % 6);
+      } else if (max === g) {
+        hue = 60 * ((b - r) / delta + 2);
+      } else {
+        hue = 60 * ((r - g) / delta + 4);
+      }
+    }
+    return {
+      hue: normalizeHueValue(hue),
+      saturation: max === 0 ? 0 : delta / max,
+      value: max
+    };
+  }
+
+  function normalizeColorPickerFormat(format) {
+    var text = String(format || "").trim().toUpperCase();
+    return text === "RGB" || text === "HSL" ? text : "HEX";
+  }
+
+  function hexToRgb(hex) {
+    var normalized = toCssHexColor(hex) || "#FFFFFF";
+    var expanded = normalized.length === 4
+      ? "#" + normalized.charAt(1) + normalized.charAt(1) + normalized.charAt(2) + normalized.charAt(2) + normalized.charAt(3) + normalized.charAt(3)
+      : normalized;
+    return {
+      r: parseInt(expanded.slice(1, 3), 16),
+      g: parseInt(expanded.slice(3, 5), 16),
+      b: parseInt(expanded.slice(5, 7), 16)
+    };
+  }
+
+  function rgbToHex(r, g, b) {
+    function toHexByte(value) {
+      var next = clamp(Math.round(Number(value) || 0), 0, 255);
+      var text = next.toString(16).toUpperCase();
+      return text.length === 1 ? "0" + text : text;
+    }
+    return "#" + toHexByte(r) + toHexByte(g) + toHexByte(b);
+  }
+
+  function rgbToHsl(r, g, b) {
+    var red = clamp(Number(r) / 255, 0, 1);
+    var green = clamp(Number(g) / 255, 0, 1);
+    var blue = clamp(Number(b) / 255, 0, 1);
+    var max = Math.max(red, green, blue);
+    var min = Math.min(red, green, blue);
+    var delta = max - min;
+    var h = 0;
+    var l = (max + min) / 2;
+    var s = 0;
+    if (delta) {
+      s = delta / (1 - Math.abs(2 * l - 1));
+      if (max === red) {
+        h = 60 * (((green - blue) / delta) % 6);
+      } else if (max === green) {
+        h = 60 * ((blue - red) / delta + 2);
+      } else {
+        h = 60 * ((red - green) / delta + 4);
+      }
+    }
+    return {
+      h: Math.round(normalizeHueValue(h)),
+      s: Math.round(clamp(s, 0, 1) * 100),
+      l: Math.round(clamp(l, 0, 1) * 100)
+    };
+  }
+
+  function hexToHsl(hex) {
+    var rgb = hexToRgb(hex);
+    return rgbToHsl(rgb.r, rgb.g, rgb.b);
+  }
+
+  function hslToRgb(h, s, l) {
+    var hue = normalizeHueValue(h);
+    var sat = clamp(Number(s) / 100, 0, 1);
+    var light = clamp(Number(l) / 100, 0, 1);
+    var c = (1 - Math.abs(2 * light - 1)) * sat;
+    var x = c * (1 - Math.abs((hue / 60) % 2 - 1));
+    var m = light - c / 2;
+    var r = 0;
+    var g = 0;
+    var b = 0;
+    if (hue < 60) {
+      r = c;
+      g = x;
+    } else if (hue < 120) {
+      r = x;
+      g = c;
+    } else if (hue < 180) {
+      g = c;
+      b = x;
+    } else if (hue < 240) {
+      g = x;
+      b = c;
+    } else if (hue < 300) {
+      r = x;
+      b = c;
+    } else {
+      r = c;
+      b = x;
+    }
+    return {
+      r: Math.round((r + m) * 255),
+      g: Math.round((g + m) * 255),
+      b: Math.round((b + m) * 255)
+    };
+  }
+
+  function hslToHex(h, s, l) {
+    var rgb = hslToRgb(h, s, l);
+    return rgbToHex(rgb.r, rgb.g, rgb.b);
+  }
+
+  function buildColorPickerColorModels(hex) {
+    var normalizedHex = toCssHexColor(hex) || "#FFFFFF";
+    return {
+      hex: normalizedHex,
+      hsv: hexToHsv(normalizedHex),
+      rgb: hexToRgb(normalizedHex),
+      hsl: hexToHsl(normalizedHex)
+    };
+  }
+
+  function normalizeColorPickerSvUnit(value) {
+    var next = Number(value);
+    if (!isFinite(next)) return 0;
+    if (next > 1) next = next / 100;
+    return clamp(next, 0, 1);
+  }
+
+  function createEmptyGradientState() {
+    return {
+      type: "linear",
+      angle: 90,
+      activeStopId: "",
+      stops: []
+    };
+  }
+
+  function createEmptyColorPickerState() {
+    return {
+      open: false,
+      prop: "",
+      targetEl: null,
+      sourceType: "",
+      shadowId: "",
+      format: "HEX",
+      draftFormat: "HEX",
+      formatMenuOpen: false,
+      hex: "#FFFFFF",
+      alpha: 100,
+      hue: 0,
+      hueUi: 0,
+      saturation: 0,
+      value: 1,
+      rgb: { r: 255, g: 255, b: 255 },
+      hsl: { h: 0, s: 0, l: 100 },
+      preserveHueUi: false,
+      dragging: false,
+      dragPointerId: null,
+      dragKind: "",
+      dragRect: null,
+      anchorFieldKey: "",
+      eyeDropperActive: false,
+      mode: "solid",
+      gradientTabEnabled: false,
+      gradientNotice: "",
+      gradient: createEmptyGradientState()
+    };
+  }
+
+  function syncColorPickerDerivedState(picker, hex, options) {
+    var opts = options || {};
+    var models = buildColorPickerColorModels(hex);
+    var preserveHueUi = !opts.resetHueUi && !!picker.preserveHueUi;
+    picker.hex = models.hex;
+    picker.hue = models.hsv.hue;
+    picker.hueUi = preserveHueUi ? clamp(Number(picker.hueUi) || 0, 0, 360) : models.hsv.hue;
+    picker.saturation = normalizeColorPickerSvUnit(models.hsv.saturation);
+    picker.value = normalizeColorPickerSvUnit(models.hsv.value);
+    picker.rgb = models.rgb;
+    picker.hsl = models.hsl;
+    picker.preserveHueUi = false;
+    return picker;
+  }
+
+  function resetColorPickerModelsFromHex(picker, hex, alpha) {
+    if (!picker) return picker;
+    picker.alpha = clamp(parsePercentValue(alpha), 0, 100);
+    picker.preserveHueUi = false;
+    return syncColorPickerDerivedState(picker, hex, { resetHueUi: true });
+  }
+
+  function isGradientEditableProp(prop) {
+    return prop === "backgroundColor";
+  }
+
+  function createGradientStop(hex, alpha, position, hueUi) {
+    var normalizedHex = toCssHexColor(hex) || "#FFFFFF";
+    var fallbackHueUi = hexToHsv(normalizedHex).hue;
+    return {
+      id: makeChangeEntityId("gradient-stop"),
+      position: clamp(Number(position) || 0, 0, 100),
+      hex: toDisplayHex(normalizedHex),
+      alpha: clamp(parsePercentValue(alpha), 0, 100),
+      hueUi: clamp(Number(hueUi != null ? hueUi : fallbackHueUi) || 0, 0, 360)
+    };
+  }
+
+  function normalizeGradientAngle(angle) {
+    var next = Math.round(Number(angle) || 0) % 360;
+    if (next < 0) next += 360;
+    return next;
+  }
+
+  function normalizeGradientStops(stops, activeStopId) {
+    var nextStops = Array.isArray(stops) ? stops.map(function (stop, index) {
+      if (!stop) return null;
+      return {
+        id: String(stop.id || makeChangeEntityId("gradient-stop-" + index)),
+        position: clamp(Number(stop.position) || 0, 0, 100),
+        hex: toDisplayHex(toCssHexColor(stop.hex) || "#FFFFFF"),
+        alpha: clamp(parsePercentValue(stop.alpha), 0, 100),
+        hueUi: clamp(Number(stop.hueUi != null ? stop.hueUi : hexToHsv(toCssHexColor(stop.hex) || "#FFFFFF").hue) || 0, 0, 360)
+      };
+    }).filter(Boolean) : [];
+    nextStops.sort(function (a, b) {
+      return a.position - b.position;
+    });
+    var nextActiveStopId = activeStopId;
+    if (!nextStops.length) {
+      nextActiveStopId = "";
+    } else if (!nextActiveStopId || !nextStops.some(function (stop) { return stop.id === nextActiveStopId; })) {
+      nextActiveStopId = nextStops[0].id;
+    }
+    return {
+      activeStopId: nextActiveStopId,
+      stops: nextStops
+    };
+  }
+
+  function buildDefaultBackgroundGradient(hex, alpha) {
+    return {
+      type: "linear",
+      angle: 90,
+      activeStopId: "",
+      stops: [
+        createGradientStop(hex || "#FFFFFF", alpha == null ? 100 : alpha, 0),
+        createGradientStop("#FFFFFF", 100, 100)
+      ]
+    };
+  }
+
+  function findGradientStopById(gradient, stopId) {
+    if (!gradient || !Array.isArray(gradient.stops) || !stopId) return null;
+    for (var i = 0; i < gradient.stops.length; i += 1) {
+      if (gradient.stops[i] && gradient.stops[i].id === stopId) return gradient.stops[i];
+    }
+    return null;
+  }
+
+  function syncColorPickerModelsFromActiveStop(picker) {
+    if (!picker || picker.mode !== "gradient" || !picker.gradient) return picker;
+    var stop = findGradientStopById(picker.gradient, picker.gradient.activeStopId);
+    if (!stop) return picker;
+    var stopHex = "#" + toDisplayHex(stop.hex || "#FFFFFF");
+    var models = buildColorPickerColorModels(stopHex);
+    resetColorPickerModelsFromHex(picker, stopHex, stop.alpha);
+    if (picker.preserveHueUi && Number.isFinite(picker.hueUi)) {
+      picker.hueUi = clamp(Number(picker.hueUi) || 0, 0, 360);
+    } else if (Number.isFinite(stop.hueUi)) {
+      picker.hueUi = clamp(Number(stop.hueUi) || 0, 0, 360);
+    } else {
+      picker.hueUi = models.hsv.hue;
+    }
+    picker.hue = picker.hueUi >= 360 ? 0 : normalizeHueValue(picker.hueUi);
+    picker.preserveHueUi = false;
+    return picker;
+  }
+
+  function gradientStopToCssColor(stop) {
+    if (!stop) return "rgba(255,255,255,1)";
+    return rgbaFromHexAndAlpha("#" + toDisplayHex(stop.hex || "#FFFFFF"), stop.alpha);
+  }
+
+  function buildLinearGradientCss(gradientConfig) {
+    if (!gradientConfig || !Array.isArray(gradientConfig.stops) || gradientConfig.stops.length < 2) return "";
+    var normalized = normalizeGradientStops(gradientConfig.stops, gradientConfig.activeStopId);
+    return "linear-gradient(" + normalizeGradientAngle(gradientConfig.angle) + "deg, " + normalized.stops.map(function (stop) {
+      return gradientStopToCssColor(stop) + " " + clamp(stop.position, 0, 100) + "%";
+    }).join(", ") + ")";
+  }
+
+  function interpolateGradientStopColor(leftStop, rightStop, position, fallbackStop) {
+    var fallback = fallbackStop || leftStop || rightStop || createGradientStop("#FFFFFF", 100, position);
+    if (!leftStop || !rightStop) {
+      return {
+        hex: toDisplayHex(fallback.hex || "#FFFFFF"),
+        alpha: clamp(parsePercentValue(fallback.alpha), 0, 100)
+      };
+    }
+    var range = Math.max(0.0001, rightStop.position - leftStop.position);
+    var ratio = clamp((position - leftStop.position) / range, 0, 1);
+    var leftRgb = hexToRgb("#" + toDisplayHex(leftStop.hex || "#FFFFFF"));
+    var rightRgb = hexToRgb("#" + toDisplayHex(rightStop.hex || "#FFFFFF"));
+    var nextRgb = {
+      r: Math.round(leftRgb.r + (rightRgb.r - leftRgb.r) * ratio),
+      g: Math.round(leftRgb.g + (rightRgb.g - leftRgb.g) * ratio),
+      b: Math.round(leftRgb.b + (rightRgb.b - leftRgb.b) * ratio)
+    };
+    return {
+      hex: toDisplayHex(rgbToHex(nextRgb.r, nextRgb.g, nextRgb.b)),
+      alpha: Math.round(clamp((Number(leftStop.alpha) || 0) + ((Number(rightStop.alpha) || 0) - (Number(leftStop.alpha) || 0)) * ratio, 0, 100))
+    };
+  }
+
+  function parseGradientColorToken(token) {
+    var text = String(token || "").trim();
+    if (!text) return null;
+    var rgbaMatch = text.match(/^rgba?\((.+)\)$/i);
+    if (rgbaMatch) {
+      var parts = rgbaMatch[1].split(",").map(function (part) {
+        return String(part || "").trim();
+      });
+      if (parts.length < 3) return null;
+      var r = clamp(parseFloat(parts[0]) || 0, 0, 255);
+      var g = clamp(parseFloat(parts[1]) || 0, 0, 255);
+      var b = clamp(parseFloat(parts[2]) || 0, 0, 255);
+      var alpha = parts.length > 3 ? clamp(Math.round((parseFloat(parts[3]) || 0) * 100), 0, 100) : 100;
+      return { hex: toDisplayHex(rgbToHex(r, g, b)), alpha: alpha };
+    }
+    var hex = toCssHexColor(text);
+    if (!hex) return null;
+    return { hex: toDisplayHex(hex), alpha: 100 };
+  }
+
+  function splitGradientArgs(text) {
+    var parts = [];
+    var current = "";
+    var depth = 0;
+    for (var i = 0; i < text.length; i += 1) {
+      var ch = text.charAt(i);
+      if (ch === "(") depth += 1;
+      if (ch === ")") depth = Math.max(0, depth - 1);
+      if (ch === "," && depth === 0) {
+        parts.push(current.trim());
+        current = "";
+      } else {
+        current += ch;
+      }
+    }
+    if (current.trim()) parts.push(current.trim());
+    return parts;
+  }
+
+  function resolveGradientDirectionToAngle(token) {
+    var text = String(token || "").trim().toLowerCase();
+    if (!text) return null;
+    if (/^-?\d+(\.\d+)?deg$/.test(text)) return normalizeGradientAngle(parseFloat(text));
+    if (text === "to right") return 90;
+    if (text === "to left") return 270;
+    if (text === "to bottom") return 180;
+    if (text === "to top") return 0;
+    if (text === "to bottom right" || text === "to right bottom") return 135;
+    if (text === "to top right" || text === "to right top") return 45;
+    if (text === "to bottom left" || text === "to left bottom") return 225;
+    if (text === "to top left" || text === "to left top") return 315;
+    return null;
+  }
+
+  function parseLinearGradientCss(cssText) {
+    var text = String(cssText || "").trim();
+    if (!/^linear-gradient\(/i.test(text)) return null;
+    if (/url\(/i.test(text) || /repeating-|radial-gradient|conic-gradient/i.test(text)) {
+      return { editable: false, reason: "complex" };
+    }
+    var openIndex = text.indexOf("(");
+    var closeIndex = text.lastIndexOf(")");
+    if (openIndex < 0 || closeIndex <= openIndex) return { editable: false, reason: "unsupported" };
+    var parts = splitGradientArgs(text.slice(openIndex + 1, closeIndex));
+    if (parts.length < 2) return { editable: false, reason: "unsupported" };
+    var angle = 180;
+    var stopStartIndex = 0;
+    var maybeAngle = resolveGradientDirectionToAngle(parts[0]);
+    if (maybeAngle != null) {
+      angle = maybeAngle;
+      stopStartIndex = 1;
+    }
+    var stops = [];
+    for (var i = stopStartIndex; i < parts.length; i += 1) {
+      var stopText = parts[i];
+      var colorMatch = stopText.match(/^(rgba?\([^)]+\)|#[0-9a-fA-F]{3,8})\s*(.*)$/);
+      if (!colorMatch) return { editable: false, reason: "unsupported" };
+      var colorMeta = parseGradientColorToken(colorMatch[1]);
+      if (!colorMeta) return { editable: false, reason: "unsupported" };
+      var posText = String(colorMatch[2] || "").trim();
+      var position = posText && /-?\d+(\.\d+)?%/.test(posText) ? clamp(parseFloat(posText), 0, 100) : null;
+      stops.push({
+        id: makeChangeEntityId("gradient-stop"),
+        position: position,
+        hex: colorMeta.hex,
+        alpha: colorMeta.alpha
+      });
+    }
+    if (stops.length < 2) return { editable: false, reason: "unsupported" };
+    var unresolved = stops.some(function (stop) { return stop.position == null; });
+    if (unresolved) {
+      var lastIndex = Math.max(1, stops.length - 1);
+      stops.forEach(function (stop, index) {
+        if (stop.position == null) stop.position = (index / lastIndex) * 100;
+      });
+    }
+    var normalized = normalizeGradientStops(stops, stops[0].id);
+    return {
+      editable: true,
+      type: "linear",
+      angle: normalizeGradientAngle(angle),
+      activeStopId: normalized.activeStopId,
+      stops: normalized.stops
+    };
+  }
+
+  function renderColorPickerTripletInput(prefix, channel, value) {
+    return (
+      '<input type="text" data-color-picker-format-input="' +
+      esc(prefix + "-" + channel) +
+      '" data-vqa-panel-control="true" value="' +
+      esc(String(value)) +
+      '" inputmode="decimal" autocomplete="off" spellcheck="false" style="width:100%;min-width:0;height:27px;border:0;background:transparent;color:#fff;font:400 12px/1 \'PingFang SC\',-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;outline:none;text-align:center;">'
+    );
+  }
+
+  function renderColorPickerFormatValueEditor(picker) {
+    var format = normalizeColorPickerFormat(picker.format);
+    if (format === "RGB") {
+      return (
+        '<div data-color-picker-format-value-group="1" data-color-picker-format="' + format + '" style="display:flex;align-items:center;gap:0;flex:1 1 auto;height:27px;border-radius:6px;background:rgba(255,255,255,.07);padding:0 8px;box-sizing:border-box;">' +
+        renderColorPickerTripletInput("rgb", "r", picker.rgb.r) +
+        '<span style="flex:0 0 auto;color:rgba(255,255,255,.42);font:400 12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;">/</span>' +
+        renderColorPickerTripletInput("rgb", "g", picker.rgb.g) +
+        '<span style="flex:0 0 auto;color:rgba(255,255,255,.42);font:400 12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;">/</span>' +
+        renderColorPickerTripletInput("rgb", "b", picker.rgb.b) +
+        "</div>"
+      );
+    }
+    if (format === "HSL") {
+      return (
+        '<div data-color-picker-format-value-group="1" data-color-picker-format="' + format + '" style="display:flex;align-items:center;gap:0;flex:1 1 auto;height:27px;border-radius:6px;background:rgba(255,255,255,.07);padding:0 8px;box-sizing:border-box;">' +
+        renderColorPickerTripletInput("hsl", "h", picker.hsl.h) +
+        '<span style="flex:0 0 auto;color:rgba(255,255,255,.42);font:400 12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;">/</span>' +
+        renderColorPickerTripletInput("hsl", "s", picker.hsl.s) +
+        '<span style="flex:0 0 auto;color:rgba(255,255,255,.42);font:400 12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;">/</span>' +
+        renderColorPickerTripletInput("hsl", "l", picker.hsl.l) +
+        "</div>"
+      );
+    }
+    return (
+      '<input type="text" data-color-picker-hex-input="1" data-vqa-panel-control="true" value="' +
+      esc(toDisplayHex(picker.hex)) +
+      '" inputmode="text" autocomplete="off" spellcheck="false" style="flex:1 1 auto;width:100%;min-width:0;height:27px;border:0;border-radius:6px;background:rgba(255,255,255,.07);padding:0 8px;box-sizing:border-box;color:#fff;font:400 12px/1 \'PingFang SC\',-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;outline:none;text-transform:uppercase;">'
+    );
+  }
+
+  function getColorPickerState() {
+    return state.colorPicker || {};
+  }
+
+  function isColorPickerOpen() {
+    return !!getColorPickerState().open;
+  }
+
+  function isColorPickerUiTarget(target) {
+    return !!(target && colorPickerPopover && colorPickerPopover.contains && colorPickerPopover.contains(target));
+  }
+
+  function getColorPickerAnchorFieldKey(prop) {
+    return String(prop || "") + "-color-picker-trigger";
+  }
+
+  function getColorPickerAnchorEl(prop) {
+    return queryPanelSelector('[data-color-picker-trigger="' + esc(prop) + '"]');
+  }
+
+  function updateColorPickerOpenProtection(prop) {
+    state.colorPickerOpenProp = prop || "";
+    state.colorPickerOpenAt = prop ? Date.now() : 0;
+    window.clearTimeout(state.colorPickerOpenTimerId);
+    if (!prop) return;
+    state.colorPickerOpenTimerId = window.setTimeout(function () {
+      if (state.colorPickerOpenProp === prop) {
+        state.colorPickerOpenProp = "";
+        state.colorPickerOpenAt = 0;
+      }
+    }, 900);
+  }
+
+  function syncColorAlphaUi(prop, alphaValue) {
+    var alphaField = queryPanelSelector('input[data-color-alpha-prop="' + prop + '"]');
+    if (alphaField) alphaField.value = String(clamp(parsePercentValue(alphaValue), 0, 100));
+  }
+
+  function syncColorDraftInputs(prop, hexValue, alphaValue) {
+    var displayHex = toDisplayHex(hexValue);
+    state.draftInputs[prop + "-color-text"] = displayHex;
+    state.draftInputs[prop + "-alpha"] = String(clamp(parsePercentValue(alphaValue), 0, 100));
+  }
+
+  function getColorPickerTarget(prop) {
+    var baseTarget = getSelectedPanelTarget() || getEditableTargetEl();
+    if (!baseTarget) return null;
+    if (prop === "backgroundColor") return resolveBackgroundHost(baseTarget);
+    if (prop === "strokeColor") return resolveStrokeTarget(baseTarget);
+    if (isShadowLogicalProp(prop)) return resolveShadowTarget(baseTarget);
+    return baseTarget;
+  }
+
+  function buildColorPickerContext(prop) {
+    var targetEl = getColorPickerTarget(prop);
+    if (!targetEl) return null;
+    var meta = getColorDraftMeta(prop);
+    var hex = toCssHexColor(meta.hex) || "#FFFFFF";
+    var alpha = clamp(parsePercentValue(meta.alpha), 0, 100);
+    var models = buildColorPickerColorModels(hex);
+    var parsedShadow = isShadowLogicalProp(prop) ? parseShadowLogicalProp(prop) : null;
+    var currentPicker = getColorPickerState();
+    var nextFormat = normalizeColorPickerFormat(currentPicker.format || "HEX");
+    var gradientMeta = null;
+    var nextMode = "solid";
+    var gradientTabEnabled = false;
+    var gradientNotice = "";
+    var nextGradient = createEmptyGradientState();
+    if (prop === "backgroundColor") {
+      gradientMeta = readBackgroundGradientState(targetEl);
+      gradientTabEnabled = !!(gradientMeta && gradientMeta.editable);
+      gradientNotice = gradientMeta && gradientMeta.notice ? gradientMeta.notice : "";
+      if (gradientMeta && gradientMeta.mode === "gradient" && gradientMeta.gradient) {
+        nextMode = "gradient";
+        nextGradient = gradientMeta.gradient;
+        var activeStop = findGradientStopById(nextGradient, nextGradient.activeStopId) || nextGradient.stops[0];
+        if (activeStop) {
+          hex = toCssHexColor("#" + toDisplayHex(activeStop.hex)) || hex;
+          alpha = clamp(parsePercentValue(activeStop.alpha), 0, 100);
+          models = buildColorPickerColorModels(hex);
+        }
+      }
+    }
+    return {
+      prop: prop,
+      targetEl: targetEl,
+      sourceType: parsedShadow ? "shadow" : prop === "strokeColor" ? "stroke" : prop === "backgroundColor" ? "background" : "color",
+      shadowId: parsedShadow ? parsedShadow.id : "",
+      format: nextFormat,
+      draftFormat: nextFormat,
+      formatMenuOpen: false,
+      hex: models.hex,
+      alpha: alpha,
+      hue: models.hsv.hue,
+      hueUi: models.hsv.hue,
+      saturation: normalizeColorPickerSvUnit(models.hsv.saturation),
+      value: normalizeColorPickerSvUnit(models.hsv.value),
+      rgb: models.rgb,
+      hsl: models.hsl,
+      anchorFieldKey: getColorPickerAnchorFieldKey(prop),
+      eyeDropperActive: false,
+      mode: nextMode,
+      gradientTabEnabled: gradientTabEnabled,
+      gradientNotice: gradientNotice,
+      gradient: nextGradient
+    };
+  }
+
+  function getColorPickerPanelRect() {
+    return colorPickerPopover ? colorPickerPopover.getBoundingClientRect() : { width: 250, height: 381 };
+  }
+
+  function clampColorPickerPosition(x, y, rect) {
+    var width = rect && rect.width ? rect.width : 290;
+    var height = rect && rect.height ? rect.height : 381;
+    return {
+      x: clamp(x, 8, Math.max(8, window.innerWidth - width - 8)),
+      y: clamp(y, 8, Math.max(8, window.innerHeight - height - 8))
+    };
+  }
+
+  function renderGradientTabButton(mode, currentMode, enabled) {
+    var active = mode === currentMode;
+    return '<button type="button" data-action="set-color-picker-mode" data-color-picker-mode="' + mode + '" data-vqa-panel-control="true" ' +
+      (!enabled ? 'disabled aria-disabled="true" ' : "") +
+      'style="width:127px;height:27px;border:0;border-radius:6px;background:' + (active ? "rgba(255,255,255,.15)" : "rgba(255,255,255,.07)") + ';color:rgba(255,255,255,' + (enabled ? (active ? ".98" : ".5") : ".34") + ');font:400 12px/1 \'PingFang SC\',-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:' + (enabled ? "pointer" : "not-allowed") + ';">' + (mode === "solid" ? "单色" : "渐变") + "</button>";
+  }
+
+  function renderGradientControls(picker) {
+    if (!picker || picker.mode !== "gradient" || !picker.gradient) return "";
+    var gradient = picker.gradient;
+    var activeStop = findGradientStopById(gradient, gradient.activeStopId) || gradient.stops[0];
+    var angleLeft = clamp((normalizeGradientAngle(gradient.angle) / 359) * 100, 0, 100);
+    var previewCss = buildLinearGradientCss(gradient);
+    var deleteDisabled = !gradient.stops || gradient.stops.length <= 2;
+    return (
+      '<div style="margin-top:12px;display:flex;flex-direction:column;gap:10px;">' +
+      '<div style="display:flex;align-items:center;gap:9px;">' +
+      '<div data-color-picker-gradient-angle="1" data-vqa-panel-control="true" style="position:relative;flex:1 1 auto;height:27px;border-radius:6px;background:rgba(255,255,255,.07);">' +
+      '<div data-color-picker-gradient-angle-track="1" data-vqa-panel-control="true" style="position:absolute;left:12px;right:78px;top:11px;height:5px;border-radius:49px;background:rgba(255,255,255,.6);cursor:pointer;">' +
+      '<div data-color-picker-gradient-angle-thumb="1" style="position:absolute;left:calc(' + angleLeft + '% - 5.5px);top:50%;width:11px;height:11px;border-radius:999px;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.35);pointer-events:none;transform:translateY(-50%);"></div>' +
+      "</div>" +
+      '<div data-color-picker-gradient-angle-value="1" style="position:absolute;right:12px;top:6px;color:#fff;font:400 12px/1 \'PingFang SC\',-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;">' + normalizeGradientAngle(gradient.angle) + "°</div>" +
+      "</div>" +
+      '<button type="button" data-action="rotate-gradient-angle" data-vqa-panel-control="true" style="width:27px;height:27px;padding:0;border:0;border-radius:6px;background:rgba(255,255,255,.07);display:flex;align-items:center;justify-content:center;cursor:pointer;">' + renderFloatingSlotIcon("gradient-rotate", "27px") + "</button>" +
+      '<button type="button" data-action="delete-gradient-stop" data-vqa-panel-control="true" ' + (deleteDisabled ? 'disabled aria-disabled="true" ' : "") + 'style="width:27px;height:27px;padding:0;border:0;border-radius:6px;background:rgba(255,255,255,.07);display:flex;align-items:center;justify-content:center;cursor:' + (deleteDisabled ? "not-allowed" : "pointer") + ';opacity:' + (deleteDisabled ? ".45" : "1") + ';">' + renderFloatingSlotIcon("gradient-delete-stop", "27px") + "</button>" +
+      "</div>" +
+      '<div data-color-picker-gradient-bar="1" data-vqa-panel-control="true" style="position:relative;width:263px;height:17px;border-radius:8.5px;background:' + esc(previewCss) + ';cursor:pointer;">' +
+      gradient.stops.map(function (stop) {
+        var isActive = activeStop && stop.id === activeStop.id;
+        return '<button type="button" data-action="select-gradient-stop" data-gradient-stop-id="' + esc(stop.id) + '" data-vqa-panel-control="true" style="position:absolute;left:calc(' + clamp(stop.position, 0, 100) + '% - 8.5px);top:0;width:17px;height:17px;padding:0;border:0;border-radius:999px;background:' + esc(gradientStopToCssColor(stop)) + ';box-shadow:0 0 0 3px ' + (isActive ? "#2F7BFF" : "#FFFFFF") + ',0 2px 8px rgba(0,0,0,.34);cursor:grab;"></button>';
+      }).join("") +
+      "</div>" +
+      (picker.gradientNotice ? '<div style="margin-top:2px;color:rgba(255,255,255,.6);font:400 11px/1.4 \'PingFang SC\',-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;">' + esc(picker.gradientNotice) + "</div>" : "") +
+      "</div>"
+    );
+  }
+
+  function renderColorPickerPopover() {
+    if (!colorPickerPopover) return;
+    var picker = getColorPickerState();
+    if (!picker.open || !picker.prop) {
+      colorPickerPopover.style.display = "none";
+      colorPickerPopover.innerHTML = "";
+      return;
+    }
+    if (!shouldKeepColorPickerOpen()) {
+      closeColorPicker({ keepFrozen: true });
+      return;
+    }
+    if (picker.mode === "gradient") syncColorPickerModelsFromActiveStop(picker);
+    var showTabs = shouldShowColorPickerTabs(picker);
+    var uiHue = clamp(typeof picker.hueUi === "number" ? picker.hueUi : picker.hue, 0, 360);
+    var colorHue = uiHue >= 360 ? 0 : normalizeHueValue(uiHue);
+    var topExtraHtml = "";
+    if (showTabs) {
+      topExtraHtml =
+        '<div style="display:flex;gap:10px;margin-top:16px;">' +
+        renderGradientTabButton("solid", picker.mode, true) +
+        renderGradientTabButton("gradient", picker.mode, !!picker.gradientTabEnabled) +
+        "</div>" +
+        (picker.mode === "gradient"
+          ? renderGradientControls(picker)
+          : (picker.gradientNotice
+            ? '<div style="margin-top:12px;color:rgba(255,255,255,.6);font:400 11px/1.4 \'PingFang SC\',-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;">' + esc(picker.gradientNotice) + "</div>"
+            : ""));
+    }
+    var hueColor = hsvToHex(colorHue, 1, 1);
+    var hueUi = uiHue;
+    var saturation = normalizeColorPickerSvUnit(picker.saturation);
+    var value = normalizeColorPickerSvUnit(picker.value);
+    var thumbLeft = clamp(saturation * 100, 0, 100);
+    var thumbTop = clamp((1 - value) * 100, 0, 100);
+    var hueLeft = clamp((hueUi / 360) * 100, 0, 100);
+    var alphaLeft = clamp((picker.alpha / 100) * 100, 0, 100);
+    var format = normalizeColorPickerFormat(picker.format);
+    var formatMenuHtml = picker.formatMenuOpen
+      ? (
+        '<div data-color-picker-format-menu="1" style="position:absolute;left:0;bottom:31px;width:72px;padding:4px;border-radius:10px;background:#15171B;border:1px solid rgba(255,255,255,.1);box-shadow:0 10px 20px rgba(0,0,0,.28);display:flex;flex-direction:column;gap:3px;">' +
+        ["HEX", "RGB", "HSL"].map(function (item) {
+          var active = item === format;
+          return '<button type="button" data-action="select-color-picker-format" data-color-picker-format="' + item + '" data-vqa-panel-control="true" style="width:100%;height:28px;border:0;border-radius:8px;background:' + (active ? "rgba(255,255,255,.08)" : "transparent") + ';color:rgba(255,255,255,' + (active ? ".98" : ".82") + ');font:400 12px/1 \'PingFang SC\',-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;">' + item + "</button>";
+        }).join("") +
+        "</div>"
+      )
+      : "";
+    colorPickerPopover.innerHTML =
+      '<div data-vqa-color-picker-root="1" style="width:290px;box-sizing:border-box;padding:11px 13px 11px;border-radius:12.931px;background:#1A1C20;border:1px solid #343434;box-shadow:0 18px 44px rgba(0,0,0,.38);backdrop-filter:blur(12.931px);">' +
+      '<div style="display:flex;align-items:center;gap:8px;">' +
+      '<div style="flex:1 1 auto;color:#fff;font:500 12px/1.4 \'PingFang SC\',-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;">颜色属性</div>' +
+      '<button type="button" data-action="close-color-picker" data-vqa-panel-control="true" style="width:20px;height:20px;padding:0;border:0;background:transparent;color:rgba(255,255,255,.9);cursor:pointer;display:flex;align-items:center;justify-content:center;"><span style="display:block;font:300 18px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;transform:translateY(-1px);">×</span></button>' +
+      "</div>" +
+      topExtraHtml +
+      '<div data-color-picker-sv="1" data-vqa-panel-control="true" style="position:relative;width:264px;height:187px;margin-top:' + (showTabs ? 12 : 16) + 'px;border-radius:10px;overflow:hidden;cursor:crosshair;background:' + esc(hueColor) + ';">' +
+      '<div style="position:absolute;inset:0;background:linear-gradient(90deg,#FFFFFF 0%,rgba(255,255,255,0) 100%);"></div>' +
+      '<div style="position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,0) 0%,#000000 100%);"></div>' +
+      '<div data-color-picker-sv-thumb="1" style="position:absolute;left:calc(' + thumbLeft + '% - 10px);top:calc(' + thumbTop + '% - 10px);width:21px;height:21px;border-radius:999px;border:3px solid #fff;box-sizing:border-box;box-shadow:0 2px 8px rgba(0,0,0,.34);pointer-events:none;"></div>' +
+      "</div>" +
+      '<div style="display:flex;align-items:center;gap:16px;margin-top:11px;">' +
+      '<button type="button" data-action="activate-color-picker-eyedropper" data-vqa-panel-control="true" ' + (picker.eyeDropperActive ? 'disabled aria-disabled="true" ' : "") + 'style="width:36px;height:28px;display:flex;align-items:center;justify-content:center;padding:0;border:0;background:transparent;cursor:' + (picker.eyeDropperActive ? "wait" : "pointer") + ';opacity:' + (picker.eyeDropperActive ? ".56" : "1") + ';">' + renderFloatingSlotIcon("xiguan", "28px") + "</button>" +
+      '<div style="flex:1 1 auto;display:flex;flex-direction:column;gap:12px;">' +
+      '<div data-color-picker-hue="1" data-vqa-panel-control="true" style="position:relative;width:212px;height:17px;overflow:visible;cursor:pointer;">' +
+      '<div style="position:absolute;inset:0;border-radius:8.5px;background:linear-gradient(90deg,#FC0005 0%,#ECFA0B 13.474%,#22FF19 36.11%,#1DDFEE 59.261%,#0F00FF 73.151%,#FB00E4 87.5%,#FB0027 100%);"></div>' +
+      '<div data-color-picker-hue-thumb="1" style="position:absolute;left:calc(' + hueLeft + '% - 8.5px);top:0;width:17px;height:17px;border-radius:999px;border:3px solid #fff;box-sizing:border-box;box-shadow:0 2px 8px rgba(0,0,0,.32);pointer-events:none;background:#fff;">' +
+      '<div data-color-picker-hue-thumb-fill="1" style="width:100%;height:100%;border-radius:999px;background:' + esc(hueColor) + ';"></div>' +
+      '</div></div>' +
+      '<div data-color-picker-alpha="1" data-vqa-panel-control="true" style="position:relative;width:212px;height:17px;overflow:visible;cursor:pointer;">' +
+      '<div style="position:absolute;inset:0;border-radius:8.5px;overflow:hidden;background:linear-gradient(90deg,rgba(255,255,255,1) 0%, rgba(0,0,0,1) 100%);">' +
+      '<div data-color-picker-alpha-overlay="1" style="position:absolute;inset:0;background:linear-gradient(90deg,rgba(255,255,255,0) 0%,' + esc(rgbaFromHexAndAlpha(picker.hex, 100) || picker.hex) + ' 100%);"></div>' +
+      '</div>' +
+      '<div data-color-picker-alpha-thumb="1" style="position:absolute;left:calc(' + alphaLeft + '% - 8.5px);top:0;width:17px;height:17px;border-radius:999px;border:3px solid #fff;box-sizing:border-box;box-shadow:0 2px 8px rgba(0,0,0,.32);pointer-events:none;background:#fff;">' +
+      '<div data-color-picker-alpha-thumb-fill="1" style="width:100%;height:100%;border-radius:999px;background:#fff;"></div>' +
+      "</div></div>" +
+      "</div></div>" +
+      '<div style="display:flex;align-items:center;gap:8px;margin-top:12px;"><div style="position:relative;width:68px;flex:0 0 68px;"><button type="button" data-action="toggle-color-picker-format-menu" data-vqa-panel-control="true" style="width:100%;height:27px;border:0;border-radius:6px;background:rgba(255,255,255,.07);display:flex;align-items:center;justify-content:space-between;padding:0 8px;box-sizing:border-box;color:#fff;font:400 12px/1 \'PingFang SC\',-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;"><span data-color-picker-format-label="1">' + format + '</span><span style="display:block;width:0;height:0;border-left:4px solid transparent;border-right:4px solid transparent;border-top:5px solid rgba(255,255,255,.82);transform:translateY(1px);"></span></button>' + formatMenuHtml + '</div>' +
+      renderColorPickerFormatValueEditor(picker) +
+      '<div style="display:flex;align-items:center;gap:6px;width:108px;height:27px;border-radius:6px;background:rgba(255,255,255,.07);padding:0 8px;box-sizing:border-box;"><input type="text" data-color-picker-alpha-input="1" data-vqa-panel-control="true" value="' + esc(String(picker.alpha)) + '" inputmode="decimal" autocomplete="off" spellcheck="false" style="width:100%;min-width:0;height:27px;border:0;background:transparent;color:#fff;font:400 12px/1 \'PingFang SC\',-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;outline:none;text-align:right;"><span style="flex:0 0 auto;color:#B6B6B6;font:400 12px/1 \'PingFang SC\',-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;">%</span></div></div></div>';
+    colorPickerPopover.style.display = "block";
+  }
+
+  function syncColorPickerPopoverUi() {
+    if (!colorPickerPopover || colorPickerPopover.style.display === "none") return;
+    var picker = getColorPickerState();
+    if (!picker.open) return;
+    if (!shouldKeepColorPickerOpen()) {
+      closeColorPicker({ keepFrozen: true });
+      return;
+    }
+    var uiHue = clamp(typeof picker.hueUi === "number" ? picker.hueUi : picker.hue, 0, 360);
+    var colorHue = uiHue >= 360 ? 0 : normalizeHueValue(uiHue);
+    var hueColor = hsvToHex(colorHue, 1, 1);
+    var hueUi = uiHue;
+    var saturation = normalizeColorPickerSvUnit(picker.saturation);
+    var value = normalizeColorPickerSvUnit(picker.value);
+    var svEl = colorPickerPopover.querySelector("[data-color-picker-sv]");
+    var svThumb = colorPickerPopover.querySelector("[data-color-picker-sv-thumb]");
+    var hueThumb = colorPickerPopover.querySelector("[data-color-picker-hue-thumb]");
+    var hueThumbFill = colorPickerPopover.querySelector("[data-color-picker-hue-thumb-fill]");
+    var alphaOverlay = colorPickerPopover.querySelector("[data-color-picker-alpha-overlay]");
+    var alphaThumb = colorPickerPopover.querySelector("[data-color-picker-alpha-thumb]");
+    var formatLabel = colorPickerPopover.querySelector("[data-color-picker-format-label]");
+    var hexInput = colorPickerPopover.querySelector("[data-color-picker-hex-input]");
+    var alphaInput = colorPickerPopover.querySelector("[data-color-picker-alpha-input]");
+    var rgbRInput = colorPickerPopover.querySelector('[data-color-picker-format-input="rgb-r"]');
+    var rgbGInput = colorPickerPopover.querySelector('[data-color-picker-format-input="rgb-g"]');
+    var rgbBInput = colorPickerPopover.querySelector('[data-color-picker-format-input="rgb-b"]');
+    var hslHInput = colorPickerPopover.querySelector('[data-color-picker-format-input="hsl-h"]');
+    var hslSInput = colorPickerPopover.querySelector('[data-color-picker-format-input="hsl-s"]');
+    var hslLInput = colorPickerPopover.querySelector('[data-color-picker-format-input="hsl-l"]');
+    if (svEl) svEl.style.background = hueColor;
+    if (svThumb) {
+      svThumb.style.left = "calc(" + clamp(saturation * 100, 0, 100) + "% - 10px)";
+      svThumb.style.top = "calc(" + clamp((1 - value) * 100, 0, 100) + "% - 10px)";
+    }
+    if (hueThumb) hueThumb.style.left = "calc(" + clamp((hueUi / 360) * 100, 0, 100) + "% - 8.5px)";
+    if (hueThumbFill) hueThumbFill.style.background = hueColor;
+    if (alphaOverlay) alphaOverlay.style.background = "linear-gradient(90deg,rgba(255,255,255,0) 0%," + (rgbaFromHexAndAlpha(picker.hex, 100) || picker.hex) + " 100%)";
+    if (alphaThumb) alphaThumb.style.left = "calc(" + clamp((picker.alpha / 100) * 100, 0, 100) + "% - 8.5px)";
+    if (formatLabel) formatLabel.textContent = normalizeColorPickerFormat(picker.format);
+    var forceSyncInputs = !!picker.dragging;
+    if (hexInput && (forceSyncInputs || document.activeElement !== hexInput)) hexInput.value = toDisplayHex(picker.hex);
+    if (rgbRInput && (forceSyncInputs || document.activeElement !== rgbRInput)) rgbRInput.value = String(picker.rgb.r);
+    if (rgbGInput && (forceSyncInputs || document.activeElement !== rgbGInput)) rgbGInput.value = String(picker.rgb.g);
+    if (rgbBInput && (forceSyncInputs || document.activeElement !== rgbBInput)) rgbBInput.value = String(picker.rgb.b);
+    if (hslHInput && (forceSyncInputs || document.activeElement !== hslHInput)) hslHInput.value = String(picker.hsl.h);
+    if (hslSInput && (forceSyncInputs || document.activeElement !== hslSInput)) hslSInput.value = String(picker.hsl.s);
+    if (hslLInput && (forceSyncInputs || document.activeElement !== hslLInput)) hslLInput.value = String(picker.hsl.l);
+    if (alphaInput && (forceSyncInputs || document.activeElement !== alphaInput)) alphaInput.value = String(picker.alpha);
+    if (picker.mode === "gradient" && picker.gradient) {
+      var gradientAngleThumb = colorPickerPopover.querySelector("[data-color-picker-gradient-angle-thumb]");
+      var gradientAngleValue = colorPickerPopover.querySelector("[data-color-picker-gradient-angle-value]");
+      var gradientBar = colorPickerPopover.querySelector("[data-color-picker-gradient-bar]");
+      var angleLeft = clamp((normalizeGradientAngle(picker.gradient.angle) / 359) * 100, 0, 100);
+      if (gradientAngleThumb) gradientAngleThumb.style.left = "calc(" + angleLeft + "% - 5.5px)";
+      if (gradientAngleValue) gradientAngleValue.textContent = normalizeGradientAngle(picker.gradient.angle) + "°";
+      if (gradientBar) gradientBar.style.background = buildLinearGradientCss(picker.gradient);
+      picker.gradient.stops.forEach(function (stop) {
+        var stopEl = colorPickerPopover.querySelector('[data-gradient-stop-id="' + stop.id + '"]');
+        if (!stopEl) return;
+        stopEl.style.left = "calc(" + clamp(stop.position, 0, 100) + "% - 8.5px)";
+        stopEl.style.background = gradientStopToCssColor(stop);
+        stopEl.style.boxShadow = "0 0 0 3px " + (stop.id === picker.gradient.activeStopId ? "#2F7BFF" : "#FFFFFF") + ",0 2px 8px rgba(0,0,0,.34)";
+      });
+    }
+  }
+
+  function positionColorPickerPopover() {
+    if (!colorPickerPopover || !isColorPickerOpen()) return;
+    if (colorPickerPopover.style.display === "none") colorPickerPopover.style.display = "block";
+    var anchor = getColorPickerAnchorEl(getColorPickerState().prop);
+    var rect = getColorPickerPanelRect();
+    var pos = null;
+    if (anchor && anchor.getBoundingClientRect) {
+      var anchorRect = anchor.getBoundingClientRect();
+      pos = clampColorPickerPosition(anchorRect.left, anchorRect.bottom + 10, rect);
+      if (pos.y + rect.height > window.innerHeight - 8) {
+        pos = clampColorPickerPosition(anchorRect.left, anchorRect.top - rect.height - 10, rect);
+      }
+    } else {
+      var tooltipRect = tooltip.getBoundingClientRect();
+      pos = clampColorPickerPosition(tooltipRect.left - rect.width - 12, tooltipRect.top, rect);
+      if (pos.x <= 8) {
+        pos = clampColorPickerPosition(tooltipRect.right + 12, tooltipRect.top, rect);
+      }
+    }
+    colorPickerPopover.style.transform = "translate(" + pos.x + "px," + pos.y + "px)";
+  }
+
+  function syncColorPickerPanelState(prop, hexValue, alphaValue) {
+    syncColorUi(prop, hexValue);
+    syncColorAlphaUi(prop, alphaValue);
+    syncColorDraftInputs(prop, hexValue, alphaValue);
+    syncQuickRecordUiForCurrentPanel();
+  }
+
+  function setColorPickerFormat(format) {
+    var picker = getColorPickerState();
+    if (!picker.open) return;
+    var nextFormat = normalizeColorPickerFormat(format);
+    picker.format = nextFormat;
+    picker.draftFormat = nextFormat;
+    picker.formatMenuOpen = false;
+    state.colorPicker = picker;
+    renderColorPickerPopover();
+    positionColorPickerPopover();
+  }
+
+  function applyGradientPickerState(picker, options) {
+    if (!picker || !picker.targetEl || !picker.gradient) return;
+    var opts = options || {};
+    var normalized = normalizeGradientStops(picker.gradient.stops, picker.gradient.activeStopId);
+    picker.gradient.stops = normalized.stops;
+    picker.gradient.activeStopId = normalized.activeStopId;
+    syncColorPickerModelsFromActiveStop(picker);
+    state.colorPicker = picker;
+    syncColorPickerPanelState(picker.prop, picker.hex, picker.alpha);
+    applyBackgroundGradient(picker.targetEl, picker.gradient);
+    if (opts.forceRender) {
+      renderColorPickerPopover();
+      positionColorPickerPopover();
+    } else {
+      syncColorPickerPopoverUi();
+    }
+    updateColorPickerOpenProtection(picker.prop);
+  }
+
+  function setColorPickerMode(mode) {
+    var picker = getColorPickerState();
+    if (!picker.open) return;
+    var nextMode = mode === "gradient" ? "gradient" : "solid";
+    if (nextMode === "gradient") {
+      if (!picker.gradientTabEnabled) return;
+      if (!picker.gradient || !Array.isArray(picker.gradient.stops) || picker.gradient.stops.length < 2) {
+        picker.gradient = buildDefaultBackgroundGradient(picker.hex, picker.alpha);
+      }
+      picker.mode = "gradient";
+      picker.gradientNotice = "";
+      applyGradientPickerState(picker, { forceRender: true });
+      return;
+    }
+    picker.mode = "solid";
+    picker.gradientNotice = picker.gradientNotice || "";
+    state.colorPicker = picker;
+    applyPureBackgroundCover(picker.targetEl, picker.hex, picker.alpha);
+    removeChangePatch(picker.targetEl, "backgroundImage");
+    removeChangePatch(picker.targetEl, "background");
+    delete state.modifiedProps.backgroundImage;
+    state.modifiedProps.backgroundColor = true;
+    state.editedProps = state.modifiedProps;
+    renderColorPickerPopover();
+    positionColorPickerPopover();
+    updateColorPickerOpenProtection(picker.prop);
+  }
+
+  function setGradientAngle(angle) {
+    var picker = getColorPickerState();
+    if (!picker.open || picker.mode !== "gradient" || !picker.gradient) return;
+    picker.gradient.angle = normalizeGradientAngle(angle);
+    applyGradientPickerState(picker, { forceRender: true });
+  }
+
+  function updateGradientStop(stopId, updates, shouldSort) {
+    var picker = getColorPickerState();
+    if (!picker.open || picker.mode !== "gradient" || !picker.gradient) return;
+    picker.gradient.stops = picker.gradient.stops.map(function (stop) {
+      if (!stop || stop.id !== stopId) return stop;
+      var nextStop = {
+        id: stop.id,
+        position: updates && updates.position != null ? clamp(Number(updates.position) || 0, 0, 100) : stop.position,
+        hex: updates && updates.hex ? toDisplayHex(toCssHexColor(updates.hex) || ("#" + stop.hex)) : stop.hex,
+        alpha: updates && updates.alpha != null ? clamp(parsePercentValue(updates.alpha), 0, 100) : stop.alpha,
+        hueUi: updates && updates.hueUi != null ? clamp(Number(updates.hueUi) || 0, 0, 360) : clamp(Number(stop.hueUi != null ? stop.hueUi : hexToHsv("#" + toDisplayHex(stop.hex || "#FFFFFF")).hue) || 0, 0, 360)
+      };
+      return nextStop;
+    });
+    if (shouldSort !== false) {
+      var normalized = normalizeGradientStops(picker.gradient.stops, picker.gradient.activeStopId);
+      picker.gradient.stops = normalized.stops;
+      picker.gradient.activeStopId = normalized.activeStopId;
+    }
+    applyGradientPickerState(picker, { forceRender: true });
+  }
+
+  function addGradientStopAtPosition(position) {
+    var picker = getColorPickerState();
+    if (!picker.open || picker.mode !== "gradient" || !picker.gradient) return;
+    var normalized = normalizeGradientStops(picker.gradient.stops, picker.gradient.activeStopId);
+    var leftStop = null;
+    var rightStop = null;
+    normalized.stops.forEach(function (stop) {
+      if (stop.position <= position) leftStop = stop;
+      if (!rightStop && stop.position >= position) rightStop = stop;
+    });
+    var activeStop = findGradientStopById(picker.gradient, picker.gradient.activeStopId);
+    var interpolated = interpolateGradientStopColor(leftStop, rightStop, position, activeStop);
+    var interpolatedHueUi = leftStop && Number.isFinite(leftStop.hueUi) ? leftStop.hueUi : (activeStop && Number.isFinite(activeStop.hueUi) ? activeStop.hueUi : hexToHsv("#" + interpolated.hex).hue);
+    var nextStop = createGradientStop("#" + interpolated.hex, interpolated.alpha, position, interpolatedHueUi);
+    picker.gradient.stops = normalized.stops.concat([nextStop]);
+    picker.gradient.activeStopId = nextStop.id;
+    applyGradientPickerState(picker, { forceRender: true });
+  }
+
+  function deleteActiveGradientStop() {
+    var picker = getColorPickerState();
+    if (!picker.open || picker.mode !== "gradient" || !picker.gradient || picker.gradient.stops.length <= 2) return;
+    var currentStops = Array.isArray(picker.gradient.stops) ? picker.gradient.stops.slice() : [];
+    var removedIndex = currentStops.findIndex(function (stop) {
+      return !!(stop && stop.id === picker.gradient.activeStopId);
+    });
+    if (removedIndex < 0) return;
+    var nextStops = currentStops.filter(function (stop) {
+      return stop && stop.id !== picker.gradient.activeStopId;
+    });
+    if (nextStops.length <= 1) return;
+    var nextActiveStop = nextStops[Math.max(0, removedIndex - 1)] || nextStops[0];
+    var normalized = normalizeGradientStops(nextStops, nextActiveStop ? nextActiveStop.id : "");
+    picker.gradient.stops = normalized.stops;
+    picker.gradient.activeStopId = normalized.activeStopId;
+    applyGradientPickerState(picker, { forceRender: true });
+    schedule();
+  }
+
+  function parseColorPickerNumericInput(rawValue, min, max) {
+    var text = String(rawValue == null ? "" : rawValue).replace(/[^\d]/g, "");
+    if (!text) return { text: "", valid: false, value: null };
+    var value = clamp(parseInt(text, 10) || 0, min, max);
+    return {
+      text: String(value),
+      valid: true,
+      value: value
+    };
+  }
+
+  function applyColorPickerFormatChannel(channelKey, rawValue) {
+    var picker = getColorPickerState();
+    if (!picker.open) return false;
+    if (/^rgb-/.test(channelKey)) {
+      var rgbChannel = channelKey.replace(/^rgb-/, "");
+      var parsedRgb = parseColorPickerNumericInput(rawValue, 0, 255);
+      if (!parsedRgb.valid || !/^[rgb]$/.test(rgbChannel)) return false;
+      var nextRgb = {
+        r: picker.rgb.r,
+        g: picker.rgb.g,
+        b: picker.rgb.b
+      };
+      nextRgb[rgbChannel] = parsedRgb.value;
+      applyColorPickerValue(rgbToHex(nextRgb.r, nextRgb.g, nextRgb.b), picker.alpha);
+      return true;
+    }
+    if (/^hsl-/.test(channelKey)) {
+      var hslChannel = channelKey.replace(/^hsl-/, "");
+      var parsedHsl = parseColorPickerNumericInput(rawValue, hslChannel === "h" ? 0 : 0, hslChannel === "h" ? 360 : 100);
+      if (!parsedHsl.valid || !/^[hsl]$/.test(hslChannel)) return false;
+      var nextHsl = {
+        h: picker.hsl.h,
+        s: picker.hsl.s,
+        l: picker.hsl.l
+      };
+      nextHsl[hslChannel] = parsedHsl.value;
+      applyColorPickerValue(hslToHex(nextHsl.h, nextHsl.s, nextHsl.l), picker.alpha);
+      return true;
+    }
+    return false;
+  }
+
+  function syncColorPickerFormatInputFallback(channelKey, input) {
+    if (!input) return;
+    var picker = getColorPickerState();
+    if (/^rgb-/.test(channelKey)) {
+      var rgbChannel = channelKey.replace(/^rgb-/, "");
+      input.value = String(picker.rgb[rgbChannel]);
+      return;
+    }
+    if (/^hsl-/.test(channelKey)) {
+      var hslChannel = channelKey.replace(/^hsl-/, "");
+      input.value = String(picker.hsl[hslChannel]);
+    }
+  }
+
+  function startColorPickerEyeDropper() {
+    var picker = getColorPickerState();
+    if (!picker.open || picker.eyeDropperActive) return;
+    if (typeof window.EyeDropper !== "function") {
+      showV12Notice("当前浏览器不支持吸管");
+      return;
+    }
+    picker.eyeDropperActive = true;
+    picker.formatMenuOpen = false;
+    state.colorPicker = picker;
+    renderColorPickerPopover();
+    positionColorPickerPopover();
+    var eyeDropper = new window.EyeDropper();
+    eyeDropper.open()
+      .then(function (result) {
+        if (result && result.sRGBHex) {
+          applyColorPickerValue(result.sRGBHex, getColorPickerState().alpha);
+        }
+      })
+      .catch(function (err) {
+        if (err && err.name !== "AbortError") {
+          showV12Notice("吸管取色失败");
+        }
+      })
+      .finally(function () {
+        var nextPicker = getColorPickerState();
+        nextPicker.eyeDropperActive = false;
+        state.colorPicker = nextPicker;
+        state.v12.suppressNextClick = true;
+        renderColorPickerPopover();
+        positionColorPickerPopover();
+      });
+  }
+
+  function applyColorPickerValue(hexValue, alphaValue) {
+    var picker = getColorPickerState();
+    if (!picker.open || !picker.prop || !picker.targetEl) return;
+    var safeHex = toCssHexColor(hexValue) || picker.hex || "#FFFFFF";
+    var safeAlpha = clamp(parsePercentValue(alphaValue), 0, 100);
+    if (picker.mode === "gradient" && picker.gradient && picker.gradient.activeStopId) {
+      var stopUpdates = {
+        hex: safeHex,
+        alpha: safeAlpha
+      };
+      if (!picker.preserveHueUi) {
+        stopUpdates.hueUi = buildColorPickerColorModels(safeHex).hsv.hue;
+      }
+      updateGradientStop(picker.gradient.activeStopId, stopUpdates);
+      return;
+    }
+    picker.alpha = safeAlpha;
+    syncColorPickerDerivedState(picker, safeHex);
+    state.colorPicker = picker;
+    syncColorPickerPanelState(picker.prop, safeHex, safeAlpha);
+    applyColorWithAlpha(picker.prop, safeHex, safeAlpha, picker.targetEl);
+    syncColorPickerPopoverUi();
+    updateColorPickerOpenProtection(picker.prop);
+  }
+
+  function closeColorPicker(options) {
+    var opts = options || {};
+    removeColorPickerDragEndListeners();
+    clearColorPickerDragState();
+    state.colorPicker = createEmptyColorPickerState();
+    updateColorPickerOpenProtection("");
+    if (!opts.keepFrozen) scheduleSelectedPanelHoverUnfreeze(0);
+    if (colorPickerPopover) {
+      colorPickerPopover.style.display = "none";
+      colorPickerPopover.innerHTML = "";
+    }
+  }
+
+  function openColorPicker(prop) {
+    var context = buildColorPickerContext(prop);
+    if (!context) return false;
+    if (context.sourceType !== "background") {
+      context.mode = "solid";
+      context.gradientTabEnabled = false;
+      context.gradientNotice = "";
+      context.gradient = createEmptyGradientState();
+    }
+    if (!FLOATING_ICON_URLS_READY || !FLOATING_ICON_URLS) {
+      getFloatingIconUrlsFromBridge()
+        .then(function () {
+          if (isInspectorAlive() && isColorPickerOpen()) {
+            renderColorPickerPopover();
+            positionColorPickerPopover();
+          }
+        })
+        .catch(function () {});
+    }
+    state.colorPicker = {
+      open: true,
+      prop: context.prop,
+      targetEl: context.targetEl,
+      sourceType: context.sourceType,
+      shadowId: context.shadowId,
+      format: context.format,
+      draftFormat: context.draftFormat,
+      formatMenuOpen: false,
+      hex: context.hex,
+      alpha: context.alpha,
+      hue: context.hue,
+      hueUi: context.hueUi,
+      saturation: context.saturation,
+      value: context.value,
+      rgb: context.rgb,
+      hsl: context.hsl,
+      preserveHueUi: false,
+      dragging: false,
+      dragPointerId: null,
+      dragKind: "",
+      anchorFieldKey: context.anchorFieldKey,
+      eyeDropperActive: false,
+      mode: context.mode || "solid",
+      gradientTabEnabled: !!context.gradientTabEnabled,
+      gradientNotice: context.gradientNotice || "",
+      gradient: context.gradient || createEmptyGradientState()
+    };
+    if (state.colorPicker.mode === "gradient") {
+      syncColorPickerModelsFromActiveStop(state.colorPicker);
+    } else {
+      resetColorPickerModelsFromHex(state.colorPicker, context.hex, context.alpha);
+    }
+    setSelectedPanelHoverFreeze(true);
+    state.isPointerInsideSelectedPanel = true;
+    syncColorPickerPanelState(context.prop, context.hex, context.alpha);
+    renderColorPickerPopover();
+    positionColorPickerPopover();
+    updateColorPickerOpenProtection(context.prop);
+    return true;
+  }
+
+  function updateColorPickerFromSvPosition(clientX, clientY, rect) {
+    var picker = getColorPickerState();
+    var nextS = clamp((clientX - rect.left) / Math.max(1, rect.width), 0, 1);
+    var nextV = clamp(1 - (clientY - rect.top) / Math.max(1, rect.height), 0, 1);
+    picker.saturation = nextS;
+    picker.value = nextV;
+    picker.preserveHueUi = true;
+    state.colorPicker = picker;
+    applyColorPickerValue(hsvToHex(picker.hue, nextS, nextV), picker.alpha);
+  }
+
+  function updateColorPickerFromHuePosition(clientX, rect) {
+    var nextHue = clamp((clientX - rect.left) / Math.max(1, rect.width), 0, 1) * 360;
+    var picker = getColorPickerState();
+    picker.hueUi = clamp(nextHue, 0, 360);
+    picker.hue = picker.hueUi >= 360 ? 0 : normalizeHueValue(picker.hueUi);
+    picker.preserveHueUi = true;
+    state.colorPicker = picker;
+    if (picker.mode === "gradient" && picker.gradient && picker.gradient.activeStopId) {
+      updateGradientStop(picker.gradient.activeStopId, {
+        hueUi: picker.hueUi,
+        hex: hsvToHex(picker.hue, picker.saturation, picker.value),
+        alpha: picker.alpha
+      });
+      return;
+    }
+    applyColorPickerValue(hsvToHex(picker.hue, picker.saturation, picker.value), picker.alpha);
+  }
+
+  function updateColorPickerFromAlphaPosition(clientX, rect) {
+    var nextAlpha = Math.round(clamp((clientX - rect.left) / Math.max(1, rect.width), 0, 1) * 100);
+    applyColorPickerValue(getColorPickerState().hex, nextAlpha);
+  }
+
+  function updateGradientAngleFromPosition(clientX, rect) {
+    var ratio = clamp((clientX - rect.left) / Math.max(1, rect.width), 0, 1);
+    setGradientAngle(Math.round(ratio * 359));
+  }
+
+  function updateGradientStopFromPosition(stopId, clientX, rect, shouldSort) {
+    var position = clamp(((clientX - rect.left) / Math.max(1, rect.width)) * 100, 0, 100);
+    updateGradientStop(stopId, { position: position }, shouldSort);
+  }
+
+  function updateColorPickerDrag(kind, clientX, clientY, rect) {
+    if (!rect) return;
+    if (kind === "sv") {
+      updateColorPickerFromSvPosition(clientX, clientY, rect);
+      return;
+    }
+    if (kind === "hue") {
+      updateColorPickerFromHuePosition(clientX, rect);
+      return;
+    }
+    if (kind === "alpha") {
+      updateColorPickerFromAlphaPosition(clientX, rect);
+      return;
+    }
+    if (kind === "gradient-angle") {
+      updateGradientAngleFromPosition(clientX, rect);
+      return;
+    }
+    if (/^gradient-stop:/.test(kind)) {
+      updateGradientStopFromPosition(kind.replace(/^gradient-stop:/, ""), clientX, rect, false);
+    }
+  }
+
+  function snapshotColorPickerDragRect(dragTarget) {
+    if (!dragTarget || !dragTarget.getBoundingClientRect) return null;
+    var rect = dragTarget.getBoundingClientRect();
+    return {
+      left: rect.left,
+      top: rect.top,
+      width: rect.width,
+      height: rect.height,
+      right: rect.right,
+      bottom: rect.bottom
+    };
+  }
+
+  function clearColorPickerDragState() {
+    var picker = getColorPickerState();
+    picker.dragging = false;
+    picker.dragKind = "";
+    picker.dragPointerId = null;
+    picker.dragRect = null;
+    state.colorPicker = picker;
+  }
+
+  function removeColorPickerDragEndListeners() {
+    document.removeEventListener("pointermove", handleColorPickerGlobalPointerMove, true);
+    document.removeEventListener("pointerup", handleColorPickerGlobalPointerEnd, true);
+    document.removeEventListener("pointercancel", handleColorPickerGlobalPointerEnd, true);
+    window.removeEventListener("blur", handleColorPickerWindowBlur, true);
+  }
+
+  function handleColorPickerGlobalPointerMove(event) {
+    var picker = getColorPickerState();
+    if (!picker.dragging) return;
+    if (picker.dragPointerId != null && event && event.pointerId != null && event.pointerId !== picker.dragPointerId) return;
+    if (!picker.dragRect) return;
+    if ((event.pointerType === "mouse" || event.pointerType === "pen") && event.buttons === 0) {
+      clearColorPickerDragState();
+      removeColorPickerDragEndListeners();
+      schedule();
+      return;
+    }
+    if (event && typeof event.stopPropagation === "function") event.stopPropagation();
+    if (event && typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+    updateColorPickerDrag(picker.dragKind, event.clientX, event.clientY, picker.dragRect);
+    if (event && typeof event.preventDefault === "function") event.preventDefault();
+  }
+
+  function handleColorPickerGlobalPointerEnd(event) {
+    var picker = getColorPickerState();
+    if (!picker.dragging) return;
+    if (picker.dragPointerId != null && event && event.pointerId != null && event.pointerId !== picker.dragPointerId) return;
+    if (event && typeof event.stopPropagation === "function") event.stopPropagation();
+    if (event && typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+    if (/^gradient-stop:/.test(picker.dragKind)) {
+      updateGradientStop(picker.dragKind.replace(/^gradient-stop:/, ""), {}, true);
+    }
+    clearColorPickerDragState();
+    removeColorPickerDragEndListeners();
+    schedule();
+    if (event && typeof event.preventDefault === "function") event.preventDefault();
+  }
+
+  function handleColorPickerWindowBlur() {
+    var picker = getColorPickerState();
+    if (!picker.dragging) return;
+    if (/^gradient-stop:/.test(picker.dragKind)) {
+      updateGradientStop(picker.dragKind.replace(/^gradient-stop:/, ""), {}, true);
+    }
+    clearColorPickerDragState();
+    removeColorPickerDragEndListeners();
+    schedule();
+  }
+
+  function handleColorPickerLostPointerCapture(event) {
+    var picker = getColorPickerState();
+    if (!picker.dragging) return;
+    if (picker.dragPointerId != null && event && event.pointerId != null && event.pointerId !== picker.dragPointerId) return;
+    if (/^gradient-stop:/.test(picker.dragKind)) {
+      updateGradientStop(picker.dragKind.replace(/^gradient-stop:/, ""), {}, true);
+    }
+    clearColorPickerDragState();
+    removeColorPickerDragEndListeners();
+    schedule();
+  }
+
+  function beginColorPickerDrag(kind, event, dragTarget) {
+    if (!event || !dragTarget) return false;
+    var dragRect = snapshotColorPickerDragRect(dragTarget);
+    if (!dragRect || !dragRect.width || !dragRect.height) return false;
+    var picker = getColorPickerState();
+    picker.dragging = true;
+    picker.dragPointerId = event.pointerId;
+    picker.dragKind = kind;
+    picker.dragRect = dragRect;
+    state.colorPicker = picker;
+    removeColorPickerDragEndListeners();
+    document.addEventListener("pointermove", handleColorPickerGlobalPointerMove, true);
+    document.addEventListener("pointerup", handleColorPickerGlobalPointerEnd, true);
+    document.addEventListener("pointercancel", handleColorPickerGlobalPointerEnd, true);
+    window.addEventListener("blur", handleColorPickerWindowBlur, true);
+    if (dragTarget.setPointerCapture) {
+      try {
+        dragTarget.setPointerCapture(event.pointerId);
+      } catch (err) {}
+    }
+    updateColorPickerDrag(kind, event.clientX, event.clientY, dragRect);
+    return true;
+  }
+
+  function endColorPickerDrag(event, dragTarget) {
+    var picker = getColorPickerState();
+    if (!picker.dragging) return;
+    var dragKind = picker.dragKind;
+    if (dragTarget && dragTarget.releasePointerCapture && picker.dragPointerId != null) {
+      try {
+        dragTarget.releasePointerCapture(picker.dragPointerId);
+      } catch (err) {}
+    }
+    clearColorPickerDragState();
+    removeColorPickerDragEndListeners();
+    if (/^gradient-stop:/.test(dragKind)) {
+      updateGradientStop(dragKind.replace(/^gradient-stop:/, ""), {}, true);
+    }
+    if (event && typeof event.preventDefault === "function") event.preventDefault();
+  }
+
+  function handleColorPickerPopoverPointerDown(event) {
+    if (!isColorPickerUiTarget(event.target)) return;
+    event.stopPropagation();
+    if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+    var svTarget = event.target.closest && event.target.closest("[data-color-picker-sv]");
+    var hueTarget = event.target.closest && event.target.closest("[data-color-picker-hue]");
+    var alphaTarget = event.target.closest && event.target.closest("[data-color-picker-alpha]");
+    var gradientAngleTarget = event.target.closest && event.target.closest("[data-color-picker-gradient-angle-track]");
+    var gradientStopTarget = event.target.closest && event.target.closest('[data-action="select-gradient-stop"]');
+    if (svTarget) {
+      beginColorPickerDrag("sv", event, svTarget);
+      event.preventDefault();
+      return;
+    }
+    if (hueTarget) {
+      beginColorPickerDrag("hue", event, hueTarget);
+      event.preventDefault();
+      return;
+    }
+    if (alphaTarget) {
+      beginColorPickerDrag("alpha", event, alphaTarget);
+      event.preventDefault();
+      return;
+    }
+    if (gradientAngleTarget) {
+      beginColorPickerDrag("gradient-angle", event, gradientAngleTarget);
+      event.preventDefault();
+      return;
+    }
+    if (gradientStopTarget) {
+      var stopId = gradientStopTarget.getAttribute("data-gradient-stop-id") || "";
+      if (stopId) {
+        var picker = getColorPickerState();
+        if (picker.gradient) picker.gradient.activeStopId = stopId;
+        syncColorPickerModelsFromActiveStop(picker);
+        state.colorPicker = picker;
+        syncColorPickerPanelState(picker.prop, picker.hex, picker.alpha);
+        syncColorPickerPopoverUi();
+        beginColorPickerDrag("gradient-stop:" + stopId, event, gradientStopTarget.parentElement || gradientStopTarget);
+      }
+      event.preventDefault();
+    }
+  }
+
+  function handleColorPickerPopoverPointerMove(event) {
+    if (!isColorPickerOpen()) return;
+    var picker = getColorPickerState();
+    if (!picker.dragging || picker.dragPointerId !== event.pointerId || !picker.dragRect) return;
+    event.stopPropagation();
+    if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+    updateColorPickerDrag(picker.dragKind, event.clientX, event.clientY, picker.dragRect);
+    event.preventDefault();
+  }
+
+  function handleColorPickerPopoverPointerUp(event) {
+    if (!isColorPickerOpen()) return;
+    var picker = getColorPickerState();
+    if (!picker.dragging || picker.dragPointerId !== event.pointerId) return;
+    event.stopPropagation();
+    if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+    endColorPickerDrag(event, event.currentTarget);
+  }
+
+  function handleColorPickerPopoverClick(event) {
+    if (!isColorPickerUiTarget(event.target)) return;
+    event.stopPropagation();
+    if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+    var setModeButton = event.target.closest && event.target.closest('[data-action="set-color-picker-mode"]');
+    if (setModeButton) {
+      setColorPickerMode(setModeButton.getAttribute("data-color-picker-mode") || "solid");
+      event.preventDefault();
+      return;
+    }
+    var rotateButton = event.target.closest && event.target.closest('[data-action="rotate-gradient-angle"]');
+    if (rotateButton) {
+      var pickerForRotate = getColorPickerState();
+      if (pickerForRotate.gradient) setGradientAngle((normalizeGradientAngle(pickerForRotate.gradient.angle) + 45) % 360);
+      event.preventDefault();
+      return;
+    }
+    var deleteStopButton = event.target.closest && event.target.closest('[data-action="delete-gradient-stop"]');
+    if (deleteStopButton) {
+      deleteActiveGradientStop();
+      event.preventDefault();
+      return;
+    }
+    var selectStopButton = event.target.closest && event.target.closest('[data-action="select-gradient-stop"]');
+    if (selectStopButton) {
+      var stopId = selectStopButton.getAttribute("data-gradient-stop-id") || "";
+      if (stopId) {
+        var pickerForStop = getColorPickerState();
+        if (pickerForStop.gradient) {
+          pickerForStop.gradient.activeStopId = stopId;
+          syncColorPickerModelsFromActiveStop(pickerForStop);
+          state.colorPicker = pickerForStop;
+          syncColorPickerPanelState(pickerForStop.prop, pickerForStop.hex, pickerForStop.alpha);
+          syncColorPickerPopoverUi();
+        }
+      }
+      event.preventDefault();
+      return;
+    }
+    var gradientBar = event.target.closest && event.target.closest("[data-color-picker-gradient-bar]");
+    if (gradientBar && !(event.target.closest && event.target.closest('[data-action="select-gradient-stop"]'))) {
+      var barRect = gradientBar.getBoundingClientRect();
+      var position = clamp(((event.clientX - barRect.left) / Math.max(1, barRect.width)) * 100, 0, 100);
+      addGradientStopAtPosition(position);
+      event.preventDefault();
+      return;
+    }
+    var toggleFormatButton = event.target.closest && event.target.closest('[data-action="toggle-color-picker-format-menu"]');
+    if (toggleFormatButton) {
+      var togglePicker = getColorPickerState();
+      togglePicker.formatMenuOpen = !togglePicker.formatMenuOpen;
+      state.colorPicker = togglePicker;
+      renderColorPickerPopover();
+      positionColorPickerPopover();
+      event.preventDefault();
+      return;
+    }
+    var selectFormatButton = event.target.closest && event.target.closest('[data-action="select-color-picker-format"]');
+    if (selectFormatButton) {
+      setColorPickerFormat(selectFormatButton.getAttribute("data-color-picker-format") || "HEX");
+      event.preventDefault();
+      return;
+    }
+    var eyeDropperButton = event.target.closest && event.target.closest('[data-action="activate-color-picker-eyedropper"]');
+    if (eyeDropperButton) {
+      startColorPickerEyeDropper();
+      event.preventDefault();
+      return;
+    }
+    var closeButton = event.target.closest && event.target.closest('[data-action="close-color-picker"]');
+    if (!closeButton) return;
+    closeColorPicker();
+    schedule();
+    event.preventDefault();
+  }
+
+  function handleColorPickerPopoverInput(event) {
+    if (!isColorPickerUiTarget(event.target)) return;
+    event.stopPropagation();
+    if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+    var hexInput = event.target.closest && event.target.closest("[data-color-picker-hex-input]");
+    if (hexInput) {
+      var draftHex = normalizeBareHexText(hexInput.value);
+      if (!draftHex) return;
+      var expandedHex = expandBareHexText(draftHex);
+      if (!expandedHex) return;
+      applyColorPickerValue("#" + expandedHex, getColorPickerState().alpha);
+      return;
+    }
+    var alphaInput = event.target.closest && event.target.closest("[data-color-picker-alpha-input]");
+    if (alphaInput) {
+      var alphaText = String(alphaInput.value || "").replace(/[^\d]/g, "");
+      if (alphaText === "") return;
+      applyColorPickerValue(getColorPickerState().hex, clamp(parseInt(alphaText, 10) || 0, 0, 100));
+      return;
+    }
+    var formatInput = event.target.closest && event.target.closest("[data-color-picker-format-input]");
+    if (formatInput) {
+      applyColorPickerFormatChannel(formatInput.getAttribute("data-color-picker-format-input") || "", formatInput.value);
+    }
+  }
+
+  function handleColorPickerPopoverChange(event) {
+    if (!isColorPickerUiTarget(event.target)) return;
+    event.stopPropagation();
+    if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+    var hexInput = event.target.closest && event.target.closest("[data-color-picker-hex-input]");
+    if (hexInput) {
+      var expandedHex = expandBareHexText(hexInput.value);
+      hexInput.value = expandedHex || toDisplayHex(getColorPickerState().hex);
+      return;
+    }
+    var alphaInput = event.target.closest && event.target.closest("[data-color-picker-alpha-input]");
+    if (alphaInput) {
+      var nextAlpha = parsePercentValue(alphaInput.value);
+      if (nextAlpha === "") nextAlpha = getColorPickerState().alpha;
+      alphaInput.value = String(clamp(nextAlpha, 0, 100));
+      applyColorPickerValue(getColorPickerState().hex, nextAlpha);
+      return;
+    }
+    var formatInput = event.target.closest && event.target.closest("[data-color-picker-format-input]");
+    if (formatInput) {
+      var channelKey = formatInput.getAttribute("data-color-picker-format-input") || "";
+      if (!applyColorPickerFormatChannel(channelKey, formatInput.value)) {
+        syncColorPickerFormatInputFallback(channelKey, formatInput);
+      }
+    }
   }
 
   function renderLayoutToggleButton(expanded) {
@@ -2345,6 +3906,19 @@
     return !isRecordMode() && !state.v12.drawerOpen && isPlainSelectMode() && !!getSelectedPanelTarget();
   }
 
+  function shouldKeepColorPickerOpen() {
+    var picker = getColorPickerState();
+    if (!picker.open) return false;
+    if (state.panelCollapsed || !shouldShowSelectedPanel()) return false;
+    if (!picker.targetEl || !picker.targetEl.isConnected) return false;
+    return true;
+  }
+
+  function shouldShowColorPickerTabs(picker) {
+    if (!picker) return false;
+    return picker.sourceType === "background" || picker.prop === "backgroundColor";
+  }
+
   function shouldShowHoverCard() {
     return !isRecordMode() && !state.v12.drawerOpen && !isMeasureTopbarMode() && !isPlainSelectMode();
   }
@@ -2581,7 +4155,7 @@
 
   function ensureShadowMeta(targetEl) {
     if (!isValidShadowTarget(targetEl)) {
-      console.warn("[shadow-debug] invalid target for ensureShadowMeta", targetEl);
+      console.debug("[shadow-debug] invalid target for ensureShadowMeta", targetEl);
       return null;
     }
     captureBaseBoxShadowSnapshot(targetEl);
@@ -2947,7 +4521,7 @@
 
   function composeBoxShadowEffects(targetEl) {
     if (!isValidShadowTarget(targetEl)) {
-      console.warn("[shadow-debug] composeBoxShadowEffects invalid target", targetEl);
+      console.debug("[shadow-debug] composeBoxShadowEffects invalid target", targetEl);
       return "";
     }
     var snapshot = captureBaseBoxShadowSnapshot(targetEl);
@@ -2958,7 +4532,7 @@
     var shadowList = getPluginShadowListForTarget(targetEl);
     var shadowLayers = buildShadowLayers(shadowList);
     var composed = [baseShadow].concat(strokeLayers).concat(shadowLayers).filter(Boolean).join(", ");
-    console.warn("[shadow-debug] compose-layers", {
+    console.debug("[shadow-debug] compose-layers", {
       baseBoxShadow: baseShadow || "none",
       strokeLayer: strokeLayers,
       shadows: shadowMeta && Array.isArray(shadowMeta.shadows) ? shadowMeta.shadows : shadowList,
@@ -2970,7 +4544,7 @@
 
   function syncPluginBoxShadowValue(targetEl) {
     if (!isValidShadowTarget(targetEl)) {
-      console.warn("[shadow-debug] syncPluginBoxShadowValue invalid target", targetEl);
+      console.debug("[shadow-debug] syncPluginBoxShadowValue invalid target", targetEl);
       return false;
     }
     captureBaseBoxShadowSnapshot(targetEl);
@@ -3087,7 +4661,7 @@
     if (!targetEl || !shadowId || !field) return;
     var logicalProp = makeShadowLogicalProp(shadowId, field);
     if (!logicalProp) {
-      console.warn("[shadow-debug] skip logical change record", {
+      console.debug("[shadow-debug] skip logical change record", {
         reason: "invalid-logical-prop",
         shadowId: shadowId,
         field: field
@@ -3109,7 +4683,7 @@
   function applyShadowList(targetEl, shadows, options) {
     options = options || {};
     if (!isValidShadowTarget(targetEl)) {
-      console.warn("[shadow-debug] applyShadowList invalid target", targetEl);
+      console.debug("[shadow-debug] applyShadowList invalid target", targetEl);
       return false;
     }
     ensureShadowMeta(targetEl);
@@ -3141,7 +4715,7 @@
 
   function upsertShadowConfig(targetEl, shadowConfig, options) {
     if (!isValidShadowTarget(targetEl)) {
-      console.warn("[shadow-debug] upsertShadowConfig invalid target", targetEl);
+      console.debug("[shadow-debug] upsertShadowConfig invalid target", targetEl);
       return false;
     }
     ensureShadowMeta(targetEl);
@@ -3159,7 +4733,7 @@
 
   function removeShadowById(targetEl, shadowId, options) {
     if (!isValidShadowTarget(targetEl) || !shadowId) {
-      if (!isValidShadowTarget(targetEl)) console.warn("[shadow-debug] removeShadowById invalid target", targetEl);
+      if (!isValidShadowTarget(targetEl)) console.debug("[shadow-debug] removeShadowById invalid target", targetEl);
       return false;
     }
     var safeShadowId = normalizeShadowId(shadowId);
@@ -3255,6 +4829,9 @@
 
   function setV12Mode(mode) {
     if (mode !== "select" && mode !== "record-element" && mode !== "record-region") return;
+    if (mode !== "select" && isColorPickerOpen()) {
+      closeColorPicker({ keepFrozen: true });
+    }
     closeFeedbackPopover({ schedule: false });
     closeAddPropertyMenu();
     clearBackgroundFillMeta();
@@ -3396,6 +4973,9 @@
     clearBackgroundFillMeta();
     clearMeasureSelection({ keepTopbarMode: true });
     clearDrawerClearConfirm();
+    if (state.v12.drawerOpen) {
+      closeColorPicker({ keepFrozen: true });
+    }
     if (state.v12.drawerOpen) {
       state.v12.recordMenuOpen = false;
       state.v12.categoryMenuOpen = false;
@@ -5019,7 +6599,7 @@
       addShadowHint = "无可写入目标";
     }
     var menuOpen = !!state.addPropMenuOpen;
-    console.warn("[add-prop-debug] render", {
+    console.debug("[add-prop-debug] render", {
       addPropMenuOpen: menuOpen,
       hasShadow: !!(shadowTarget && getPluginShadowListForTarget(shadowTarget).length),
       targetEl: targetEl
@@ -5221,6 +6801,7 @@
       lineHeight: "行高",
       color: "字色",
       backgroundColor: "背景色",
+      backgroundImage: "背景渐变",
       borderRadius: "圆角",
       opacity: "透明度",
       padding: "内边距",
@@ -6384,6 +7965,7 @@
     if (state.colorPickerOpenProp) return true;
     var active = document.activeElement;
     if (!active) return false;
+    if (isColorPickerUiTarget(active)) return true;
     if (!tooltip.contains(active)) return false;
     if (active.matches && active.matches('[data-vqa-custom-select-trigger="1"]')) return false;
     if (active.getAttribute("data-color-picker-input") || active.getAttribute("data-color-prop")) return true;
@@ -6391,7 +7973,9 @@
   }
 
   function isSelectedPanelInteractiveTarget(target) {
-    if (!target || !tooltip.contains(target) || !target.closest) return false;
+    if (!target || !target.closest) return false;
+    if (isColorPickerUiTarget(target)) return true;
+    if (!tooltip.contains(target)) return false;
     return !!target.closest(
       'input[data-editable="1"],input[data-prop],input[data-box-summary],input[data-color-alpha-prop],textarea[data-editable="1"],select[data-editable="1"],[contenteditable="true"]'
     );
@@ -6403,6 +7987,7 @@
 
   function isEventInsideSelectedPanel(e) {
     if (!e || !shouldShowSelectedPanel()) return false;
+    if (isColorPickerUiTarget(e.target)) return true;
     var root = getSelectedPanelRoot();
     if (!root) return false;
     if (typeof e.composedPath === "function") {
@@ -6441,7 +8026,7 @@
       state.panelHoverFreezeTimerId = 0;
       if (state.colorPickerOpenProp) return;
       var active = document.activeElement;
-      if (active && tooltip.contains(active) && isSelectedPanelInteractiveTarget(active)) return;
+      if (active && isSelectedPanelInteractiveTarget(active)) return;
       state.panelHoverFreeze = false;
       if (!state.panelCollapsed) schedule();
     }, delay || 0);
@@ -6740,7 +8325,7 @@
       if (!parsedShadowProp) return;
       var shadowTarget = resolveShadowTarget(el);
       if (!isValidShadowTarget(shadowTarget)) {
-        console.warn("[shadow-debug] previewFieldValue invalid shadow target", {
+        console.debug("[shadow-debug] previewFieldValue invalid shadow target", {
           prop: prop,
           value: rawValue,
           targetEl: shadowTarget
@@ -6965,7 +8550,7 @@
   function applyShadowColorAlphaValue(prop, hexValue, alphaValue, targetOverride, source) {
     var parsedShadowApply = parseShadowLogicalProp(prop);
     if (!parsedShadowApply) {
-      console.warn("[shadow-debug] shadow-color:return", {
+      console.debug("[shadow-debug] shadow-color:return", {
         reason: "invalid-logical-prop",
         prop: prop,
         color: hexValue,
@@ -6975,7 +8560,7 @@
     }
     var shadowTarget = resolveShadowTarget(targetOverride || getEditableTargetEl());
     if (!isValidShadowTarget(shadowTarget)) {
-      console.warn("[shadow-debug] shadow-color:return", {
+      console.debug("[shadow-debug] shadow-color:return", {
         reason: "invalid-target",
         prop: prop,
         color: hexValue,
@@ -6993,7 +8578,7 @@
       }
     }
     if (shadowIndex < 0) {
-      console.warn("[shadow-debug] shadow-color:return", {
+      console.debug("[shadow-debug] shadow-color:return", {
         reason: "shadow-not-found",
         prop: prop,
         shadowId: parsedShadowApply.id,
@@ -7004,14 +8589,14 @@
     }
     var nextList = cloneShadowList(currentList);
     var nextShadow = normalizeShadowConfig(nextList[shadowIndex], nextList[shadowIndex]);
-    console.warn("[shadow-debug] shadow-color:start", {
+    console.debug("[shadow-debug] shadow-color:start", {
       shadowId: parsedShadowApply.id,
       prop: parsedShadowApply.field,
       color: hexValue,
       alpha: alphaValue,
       targetEl: shadowTarget
     });
-    console.warn("[shadow-debug] shadow-color:update-before", {
+    console.debug("[shadow-debug] shadow-color:update-before", {
       shadow: cloneShadowConfig(nextShadow)
     });
     var normalizedColor = toHexColor(hexValue) || nextShadow.color || DEFAULT_SHADOW_CONFIG.color;
@@ -7020,18 +8605,18 @@
     nextShadow.color = normalizedColor;
     nextShadow.alpha = clamp(normalizedAlpha, 0, 100);
     nextList[shadowIndex] = nextShadow;
-    console.warn("[shadow-debug] shadow-color:update-after", {
+    console.debug("[shadow-debug] shadow-color:update-after", {
       shadow: cloneShadowConfig(nextShadow)
     });
     applyShadowList(shadowTarget, nextList, {
       source: source || "shadow-color"
     });
     var composed = composeBoxShadowEffects(shadowTarget);
-    console.warn("[shadow-debug] shadow-color:compose", {
+    console.debug("[shadow-debug] shadow-color:compose", {
       composed: composed,
       inlineBoxShadow: shadowTarget.style ? shadowTarget.style.boxShadow || "" : ""
     });
-    console.warn("[shadow-debug] shadow-color:done", {
+    console.debug("[shadow-debug] shadow-color:done", {
       shadowId: parsedShadowApply.id,
       shadow: cloneShadowConfig(nextShadow),
       boxShadow: shadowTarget.style ? shadowTarget.style.boxShadow || "" : ""
@@ -7044,7 +8629,7 @@
     var safeShadowId = normalizeShadowId(shadowId);
     var shadowTarget = resolveShadowTarget(targetEl || getEditableTargetEl());
     if (!isValidShadowTarget(shadowTarget)) {
-      console.warn("[shadow-debug] shadow-color:return", {
+      console.debug("[shadow-debug] shadow-color:return", {
         reason: "invalid-target",
         shadowId: safeShadowId,
         nextColor: nextColor,
@@ -7060,7 +8645,7 @@
         break;
       }
     }
-    console.warn("[shadow-debug] shadow-color:context", {
+    console.debug("[shadow-debug] shadow-color:context", {
       activeColorContext: {
         type: "shadow",
         targetEl: shadowTarget,
@@ -7073,7 +8658,7 @@
       })
     });
     if (shadowIndex < 0) {
-      console.warn("[shadow-debug] shadow-color:return", {
+      console.debug("[shadow-debug] shadow-color:return", {
         reason: "shadow-not-found",
         shadowId: safeShadowId,
         nextColor: nextColor,
@@ -7083,7 +8668,7 @@
     }
     var nextList = cloneShadowList(currentList);
     var nextShadow = normalizeShadowConfig(nextList[shadowIndex], nextList[shadowIndex]);
-    console.warn("[shadow-debug] shadow-color:apply-start", {
+    console.debug("[shadow-debug] shadow-color:apply-start", {
       targetEl: shadowTarget,
       shadowId: safeShadowId,
       nextColor: nextColor,
@@ -7091,7 +8676,7 @@
     });
     var normalized = toCssHexColor(nextColor);
     if (!normalized) {
-      console.warn("[shadow-debug] shadow-color:invalid", { nextColor: nextColor });
+      console.debug("[shadow-debug] shadow-color:invalid", { nextColor: nextColor });
       return false;
     }
     nextShadow.color = normalized;
@@ -7101,7 +8686,7 @@
     });
     var composed = composeBoxShadowEffects(shadowTarget);
     shadowTarget.style.boxShadow = composed;
-    console.warn("[shadow-debug] shadow-color:apply-done", {
+    console.debug("[shadow-debug] shadow-color:apply-done", {
       shadowId: safeShadowId,
       color: nextShadow.color,
       displayHex: toDisplayHex(nextShadow.color),
@@ -7922,6 +9507,8 @@
     modifiedPropsBeforeReset.forEach(function (prop) {
       if (prop === "background" || prop === "backgroundImage" || prop === "backgroundColor") {
         removeChangePatch(backgroundTarget || el, "backgroundColor");
+        removeChangePatch(backgroundTarget || el, "backgroundImage");
+        removeChangePatch(backgroundTarget || el, "background");
         return;
       }
       if (isStrokeLogicalProp(prop)) {
@@ -7947,7 +9534,7 @@
     var shadowInput = target.closest && target.closest("[data-vqa-shadow-input]");
     if (shadowInput) {
       if (isShadowColorUiTarget(target, shadowInput)) return;
-      console.warn("[shadow-debug] shadow-input:caught", {
+      console.debug("[shadow-debug] shadow-input:caught", {
         target: e.target,
         shadowInput: shadowInput,
         shadowId: shadowInput.dataset ? shadowInput.dataset.shadowId : "",
@@ -8074,13 +9661,13 @@
 
   function handleShadowInput(shadowInput) {
     if (!shadowInput) {
-      console.warn("[shadow-debug] shadow-input:return", { reason: "missing-shadow-input" });
+      console.debug("[shadow-debug] shadow-input:return", { reason: "missing-shadow-input" });
       return false;
     }
     var logicalProp = getShadowInputLogicalProp(shadowInput);
     var parsed = parseShadowLogicalProp(logicalProp);
     if (!parsed) {
-      console.warn("[shadow-debug] shadow-input:return", {
+      console.debug("[shadow-debug] shadow-input:return", {
         reason: "invalid-logical-prop",
         logicalProp: logicalProp,
         shadowInput: shadowInput
@@ -8091,7 +9678,7 @@
     var baseTargetEl = getEditableTargetEl() || getSelectedPanelTarget();
     var targetEl = resolveShadowTarget(baseTargetEl);
     if (!isValidShadowTarget(targetEl)) {
-      console.warn("[shadow-debug] shadow-input:return", {
+      console.debug("[shadow-debug] shadow-input:return", {
         reason: "invalid-target",
         shadowId: parsed.id,
         prop: parsed.field,
@@ -8102,7 +9689,7 @@
     }
     var meta = getShadowRuntimeMetaForTarget(targetEl);
     if (!meta || !Array.isArray(meta.shadows)) {
-      console.warn("[shadow-debug] shadow-input:return", {
+      console.debug("[shadow-debug] shadow-input:return", {
         reason: "missing-shadow-meta",
         shadowId: parsed.id,
         prop: parsed.field,
@@ -8112,7 +9699,7 @@
       return false;
     }
     var rawValue = readShadowInputRawValue(shadowInput);
-    console.warn("[shadow-debug] shadow-input:start", {
+    console.debug("[shadow-debug] shadow-input:start", {
       shadowId: parsed.id,
       prop: parsed.field,
       rawValue: rawValue,
@@ -8129,7 +9716,7 @@
       }
     }
     if (shadowIndex < 0) {
-      console.warn("[shadow-debug] shadow-input:return", {
+      console.debug("[shadow-debug] shadow-input:return", {
         reason: "shadow-not-found",
         shadowId: parsed.id,
         prop: parsed.field,
@@ -8140,7 +9727,7 @@
     }
     var nextList = cloneShadowList(currentList);
     var nextShadow = normalizeShadowConfig(nextList[shadowIndex], nextList[shadowIndex]);
-    console.warn("[shadow-debug] shadow-input:update-before", {
+    console.debug("[shadow-debug] shadow-input:update-before", {
       shadow: cloneShadowConfig(nextShadow)
     });
     var nextValue = normalizeShadowInputRawValue(parsed.field, rawValue);
@@ -8160,18 +9747,18 @@
     if (parsed.field === "blur") nextShadow.blur = Math.max(0, Math.round(parseFloat(nextValue) || 0));
     if (parsed.field === "spread") nextShadow.spread = Math.round(parseFloat(nextValue) || 0);
     nextList[shadowIndex] = nextShadow;
-    console.warn("[shadow-debug] shadow-input:update-after", {
+    console.debug("[shadow-debug] shadow-input:update-after", {
       shadow: cloneShadowConfig(nextShadow)
     });
     applyShadowList(targetEl, nextList, {
       source: "shadow-input"
     });
     var composed = composeBoxShadowEffects(targetEl);
-    console.warn("[shadow-debug] shadow-input:compose", {
+    console.debug("[shadow-debug] shadow-input:compose", {
       composed: composed,
       inlineBoxShadow: targetEl.style ? targetEl.style.boxShadow || "" : ""
     });
-    console.warn("[shadow-debug] shadow-input:done", {
+    console.debug("[shadow-debug] shadow-input:done", {
       shadowId: parsed.id,
       prop: parsed.field,
       value: nextValue,
@@ -8267,7 +9854,7 @@
         if (!state.panelCollapsed) schedule();
         return;
       }
-      console.warn("[shadow-debug] shadow-input:caught", {
+      console.debug("[shadow-debug] shadow-input:caught", {
         target: e.target,
         shadowInput: shadowInput,
         shadowId: shadowInput.dataset ? shadowInput.dataset.shadowId : "",
@@ -8567,7 +10154,7 @@
     }
     var target = e.target;
     if (!target || !tooltip.contains(target)) return;
-    console.warn("[add-prop-debug] panel-click", {
+    console.debug("[add-prop-debug] panel-click", {
       target: e.target,
       action: e.target && e.target.closest ? ((e.target.closest("[data-action]") || {}).dataset || {}).action : "",
       addPropMenuOpen: state.addPropMenuOpen
@@ -8584,11 +10171,18 @@
     }
     var actionTarget = target.closest ? target.closest("[data-action]") : null;
     var action = actionTarget ? actionTarget.getAttribute("data-action") : "";
+    if (action === "open-color-picker") {
+      if (openColorPicker(actionTarget.getAttribute("data-color-picker-trigger") || "")) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+      return;
+    }
     if (action === "toggle-add-property-menu") {
       e.preventDefault();
       e.stopPropagation();
       state.addPropMenuOpen = !state.addPropMenuOpen;
-      console.warn("[add-prop-debug] toggle", {
+      console.debug("[add-prop-debug] toggle", {
         next: state.addPropMenuOpen
       });
       schedule();
@@ -8671,10 +10265,10 @@
       return;
     }
     if (action === "add-prop-shadow") {
-      console.warn("[shadow-debug] click add-prop-shadow");
+      console.debug("[shadow-debug] click add-prop-shadow");
       var addShadowBaseTarget = getEditableTargetEl() || getSelectedPanelTarget();
       var addShadowTarget = resolveShadowTarget(addShadowBaseTarget);
-      console.warn("[shadow-debug] add-prop-shadow context", {
+      console.debug("[shadow-debug] add-prop-shadow context", {
         eventTarget: target,
         action: action,
         editableTargetEl: getEditableTargetEl(),
@@ -8685,7 +10279,7 @@
         isInDocument: !!(addShadowTarget && document.contains(addShadowTarget))
       });
       if (!isValidShadowTarget(addShadowTarget)) {
-        console.warn("[shadow-debug] add-prop-shadow invalid target", {
+        console.debug("[shadow-debug] add-prop-shadow invalid target", {
           baseTarget: addShadowBaseTarget,
           targetEl: addShadowTarget
         });
@@ -9537,7 +11131,9 @@
       '<div style="display:flex;align-items:center;min-width:0;height:' +
       PANEL_UI.atomHeight +
       ';padding:0 12px 0 10px;box-sizing:border-box;background:transparent;border:0;min-width:0;">' +
-      '<div data-vqa-icon-hit="1" style="position:relative;flex:0 0 auto;width:22px;height:22px;margin:0;padding:0;border-radius:3px;overflow:hidden;box-sizing:border-box;">' +
+      '<button type="button" data-action="open-color-picker" data-vqa-panel-control="true" data-color-picker-trigger="' +
+      esc(prop) +
+      '" style="position:relative;flex:0 0 auto;width:22px;height:22px;margin:0;padding:0;border:0;border-radius:3px;overflow:hidden;box-sizing:border-box;background:transparent;cursor:pointer;">' +
       '<div data-color-swatch="' +
       esc(prop) +
       '"' +
@@ -9547,20 +11143,7 @@
       ' aria-hidden="true" style="position:absolute;inset:0;border-radius:3px;background:' +
       esc(colorMeta.hex || "#000000") +
       ';pointer-events:none;box-sizing:border-box;"></div>' +
-      '<input type="color" data-color-prop="' +
-      esc(prop) +
-      '" data-color-picker-input="' +
-      esc(prop) +
-      '"' +
-      shadowInputAttr +
-      shadowIdAttr +
-      colorShadowPropAttr +
-      ' value="' +
-      esc(colorMeta.hex || "#000000") +
-      '" aria-label="修改颜色" oninput="handleColorPickerInput(this,\'' +
-      esc(prop) +
-      '\')" style="position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;appearance:none;-webkit-appearance:none;-moz-appearance:none;border:0;outline:none;box-shadow:none;background:transparent;padding:0;margin:0;">' +
-      "</div>" +
+      "</button>" +
       '<div style="min-width:0;flex:1 1 auto;margin-left:8px;display:flex;align-items:center;">' +
       '<input type="text" inputmode="text" autocomplete="off" spellcheck="false" data-field-id="' +
       esc(prop + "-color-text") +
@@ -10213,6 +11796,7 @@
         el === floating ||
         el === topbar ||
         el === recordMenu ||
+        el === colorPickerPopover ||
         el === drawerStub ||
         el === recordComposer ||
         el === regionCaptureOverlay ||
@@ -10235,6 +11819,7 @@
       floating,
       topbar,
       recordMenu,
+      colorPickerPopover,
       drawerStub,
       recordComposer,
       regionCaptureOverlay,
@@ -11438,6 +13023,10 @@
 
   function setSelectedEl(el) {
     var prevSelected = state.selectedA;
+    var nextSelected = el || null;
+    if (isColorPickerOpen() && prevSelected !== nextSelected) {
+      closeColorPicker({ keepFrozen: true });
+    }
     setSelectedPanelHoverFreeze(false);
     state.isPointerInsideSelectedPanel = false;
     closeAddPropertyMenu();
@@ -11447,7 +13036,7 @@
       if (activeInput) commitFieldDraft(activeInput, { silent: true });
       clearEditingState();
     }
-    state.selectedA = el || null;
+    state.selectedA = nextSelected;
     state.frozenEl = state.selectedA;
     state.isFrozen = !!state.selectedA;
     if (!state.selectedA) {
@@ -13414,6 +15003,13 @@
       ";display:none;pointer-events:auto;"
   );
   customSelectPopover.className = "v12-custom-select-popover";
+  var colorPickerPopover = make(
+    "div",
+    "position:fixed;left:0;top:0;z-index:" +
+      (CONFIG.zIndexTooltip + 9) +
+      ";display:none;pointer-events:auto;"
+  );
+  colorPickerPopover.className = "v12-color-picker-popover";
   var sharedElementsTooltip = make(
     "div",
     "position:fixed;left:0;top:0;z-index:" +
@@ -15478,6 +17074,7 @@
     state.v12.toolbarCollapsed = nextCollapsed;
     state.panelCollapsed = nextCollapsed;
     if (nextCollapsed) {
+      closeColorPicker({ keepFrozen: true });
       clearDrawerClearConfirm();
     }
     if (nextCollapsed && state.v12.drawerOpen) {
@@ -16485,6 +18082,62 @@
     };
   }
 
+  function readBackgroundGradientState(targetEl) {
+    var presence = resolveBackgroundPresence(targetEl, targetEl ? getComputedStyle(targetEl) : null);
+    var imageText = String((presence && presence.backgroundImage) || "").trim();
+    if (!imageText || imageText.toLowerCase() === "none") {
+      return {
+        mode: "solid",
+        editable: true,
+        notice: "",
+        gradient: null,
+        presence: presence
+      };
+    }
+    if (/url\(|radial-gradient|conic-gradient|repeating-|,\s*(linear-gradient|rgba?\(|#)/i.test(imageText.replace(/^linear-gradient/i, "linear-gradient"))) {
+      if (!/^linear-gradient\(/i.test(imageText) || /,\s*linear-gradient\(/i.test(imageText) || /,\s*url\(/i.test(imageText)) {
+        return {
+          mode: "solid",
+          editable: false,
+          notice: "当前复杂背景暂不支持编辑",
+          gradient: null,
+          presence: presence
+        };
+      }
+    }
+    if (!/^linear-gradient\(/i.test(imageText)) {
+      return {
+        mode: "solid",
+        editable: false,
+        notice: "当前复杂背景暂不支持编辑",
+        gradient: null,
+        presence: presence
+      };
+    }
+    var parsed = parseLinearGradientCss(imageText);
+    if (!parsed || !parsed.editable) {
+      return {
+        mode: "solid",
+        editable: false,
+        notice: "当前渐变暂不支持编辑",
+        gradient: null,
+        presence: presence
+      };
+    }
+    return {
+      mode: "gradient",
+      editable: true,
+      notice: "",
+      gradient: {
+        type: "linear",
+        angle: normalizeGradientAngle(parsed.angle),
+        activeStopId: parsed.activeStopId,
+        stops: parsed.stops
+      },
+      presence: presence
+    };
+  }
+
   function isBackgroundHostTag(tagName) {
     return /^(button|a|label|summary|details|input|textarea|select|option)$/i.test(tagName || "");
   }
@@ -16593,6 +18246,25 @@
     applyStyle("background", "", targetEl, { skipChangeRecord: true });
     applyStyle("backgroundImage", "none", targetEl, { skipChangeRecord: true });
     applyStyle("backgroundColor", rgbaFromHexAndAlpha(hexValue, alphaValue) || "", targetEl);
+  }
+
+  function applyBackgroundGradient(targetEl, gradientConfig, options) {
+    if (!targetEl || !gradientConfig) return "";
+    var opts = options || {};
+    var cssValue = buildLinearGradientCss(gradientConfig);
+    if (!cssValue) return "";
+    captureBackgroundStyleSnapshot(targetEl);
+    applyStyle("background", "", targetEl, { skipChangeRecord: true });
+    applyStyle("backgroundImage", cssValue, targetEl, opts);
+    removeChangePatch(targetEl, "background");
+    if (!opts.preserveBackgroundColorPatch) {
+      removeChangePatch(targetEl, "backgroundColor");
+    }
+    state.modifiedProps.backgroundImage = true;
+    delete state.modifiedProps.backgroundColor;
+    delete state.modifiedProps.background;
+    state.editedProps = state.modifiedProps;
+    return cssValue;
   }
 
   function renderStrokeConfigControls(targetEl) {
@@ -16733,7 +18405,7 @@
     if (!shadowTarget) return "";
     var shadowMeta = getShadowRuntimeMetaForTarget(shadowTarget);
     var shadowList = getPluginShadowListForTarget(shadowTarget);
-    console.warn("[shadow-debug] render-shadow-section", {
+    console.debug("[shadow-debug] render-shadow-section", {
       targetEl: shadowTarget,
       meta: shadowMeta,
       shadows: shadowMeta && Array.isArray(shadowMeta.shadows) ? shadowMeta.shadows : []
@@ -16786,6 +18458,7 @@
 
   function renderSelectedPanel(el) {
     if (!el) {
+      closeColorPicker({ keepFrozen: true });
       closeCustomSelectPopover();
       body.innerHTML = '<div style="color:#8FA1B3;">点击页面元素后锁定为 A，查看并直接编辑完整属性。</div>';
       return;
@@ -17014,6 +18687,9 @@
     syncPageScrollLock();
     updatePanelChrome();
     syncTopbar();
+    if (isColorPickerOpen() && !shouldKeepColorPickerOpen()) {
+      closeColorPicker({ keepFrozen: true });
+    }
     var collapsed = state.panelCollapsed;
     var measurementModeActive = isMeasureTopbarMode() || isPlainSelectMode();
     var measureHoverEl = state.hoveredEl || null;
@@ -17024,6 +18700,7 @@
     topbar.style.display = "flex";
     if (collapsed) {
       tooltip.style.display = "none";
+      colorPickerPopover.style.display = "none";
       hideTopbarTooltip(true);
       hideSharedElementsTooltip(true);
       recordMenu.style.display = "none";
@@ -17059,6 +18736,14 @@
     if (!collapsed && state.v12.topbarTooltip.visible) renderTopbarTooltip();
     if (!collapsed && sharedElementsTooltip.__state && sharedElementsTooltip.__state.visible) renderSharedElementsTooltip();
     if (!collapsed) renderFeedbackPopover();
+    if (!collapsed) {
+      if (isColorPickerOpen() && colorPickerPopover.innerHTML) {
+        syncColorPickerPopoverUi();
+      } else {
+        renderColorPickerPopover();
+      }
+      positionColorPickerPopover();
+    }
     renderDrawerStub();
     var el = getActiveEl();
     state.primaryMeasure = collapsed || isRecordMode() || measurementModeActive ? null : hasSelectedEl() ? resolvePrimaryMeasure(state.mouseX, state.mouseY, state.hoveredEl) : null;
@@ -17120,6 +18805,11 @@
     if (state.floatDragging) return;
     if (state.v12.pendingRecord) return;
     if (isEventInsideAiChangePanel(e)) return;
+    if (isColorPickerUiTarget(e.target)) {
+      state.isPointerInsideSelectedPanel = true;
+      setSelectedPanelHoverFreeze(true);
+      return;
+    }
 
     if (isEventInsideSelectedPanel(e)) {
       state.isPointerInsideSelectedPanel = true;
@@ -17309,7 +18999,7 @@
       var popoverAction = e.target && e.target.closest ? e.target.closest("[data-v12-feedback-action]") : null;
       var feedbackTarget = e.target && e.target.closest ? e.target.closest("[data-v12-feedback-popover]") : null;
       var feedbackAnchor = isFeedbackAnchorElement(e.target);
-      var strongUiTarget = topbar.contains(e.target) || aiChangePopover.contains(e.target) || customSelectPopover.contains(e.target) || recordMenu.contains(e.target) || drawerStub.contains(e.target) || recordComposer.contains(e.target) || recordPreview.contains(e.target) || tooltip.contains(e.target);
+      var strongUiTarget = topbar.contains(e.target) || aiChangePopover.contains(e.target) || customSelectPopover.contains(e.target) || colorPickerPopover.contains(e.target) || recordMenu.contains(e.target) || drawerStub.contains(e.target) || recordComposer.contains(e.target) || recordPreview.contains(e.target) || tooltip.contains(e.target);
       if (popoverAction && feedbackPopover.contains(popoverAction)) {
         onFeedbackPopoverClick(e);
         return;
@@ -17354,7 +19044,12 @@
       e.stopPropagation();
       return;
     }
-    if (topbar.contains(e.target) || aiChangePopover.contains(e.target) || customSelectPopover.contains(e.target) || recordMenu.contains(e.target) || drawerStub.contains(e.target) || recordComposer.contains(e.target)) return;
+    if (isColorPickerOpen() && !isPluginDomElement(e.target)) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    if (topbar.contains(e.target) || aiChangePopover.contains(e.target) || customSelectPopover.contains(e.target) || colorPickerPopover.contains(e.target) || recordMenu.contains(e.target) || drawerStub.contains(e.target) || recordComposer.contains(e.target)) return;
     if (recordPreview.contains(e.target)) return;
     if (tooltip.contains(e.target)) return;
     if (state.panelHoverFreeze) {
@@ -17689,6 +19384,14 @@
     tooltip.removeEventListener("mouseleave", onPanelMouseLeave, true);
     tooltip.removeEventListener("mousedown", onPanelMouseDown, true);
     customSelectPopover.removeEventListener("click", onCustomSelectPopoverClick, true);
+    colorPickerPopover.removeEventListener("pointerdown", handleColorPickerPopoverPointerDown, true);
+    colorPickerPopover.removeEventListener("pointermove", handleColorPickerPopoverPointerMove, true);
+    colorPickerPopover.removeEventListener("pointerup", handleColorPickerPopoverPointerUp, true);
+    colorPickerPopover.removeEventListener("pointercancel", handleColorPickerPopoverPointerUp, true);
+    colorPickerPopover.removeEventListener("lostpointercapture", handleColorPickerLostPointerCapture, true);
+    colorPickerPopover.removeEventListener("click", handleColorPickerPopoverClick, true);
+    colorPickerPopover.removeEventListener("input", handleColorPickerPopoverInput, true);
+    colorPickerPopover.removeEventListener("change", handleColorPickerPopoverChange, true);
     topbar.removeEventListener("pointerdown", onV12TopbarPointerDown, true);
     topbar.removeEventListener("pointerup", onV12TopbarPointerUp, true);
     topbar.removeEventListener("pointercancel", onV12TopbarPointerCancel, true);
@@ -17719,7 +19422,7 @@
     floating.removeEventListener("mouseenter", onFloatEnter, true);
     floating.removeEventListener("mouseleave", onFloatLeave, true);
     btnMeasure.removeEventListener("click", onMeasureClick, true);
-    [highlight, selectA, selectB, sharedHighlightLayer, tooltip, topbarTooltip, sharedElementsTooltip, aiChangePopover, customSelectPopover, feedbackPopover, spacingLayer, measureLayer, floating, topbar, recordMenu, regionCaptureOverlay, drawerStub, regionSelectBox, recordComposer, recordPreview, v12Notice].forEach(function (el) {
+    [highlight, selectA, selectB, sharedHighlightLayer, tooltip, topbarTooltip, sharedElementsTooltip, aiChangePopover, customSelectPopover, colorPickerPopover, feedbackPopover, spacingLayer, measureLayer, floating, topbar, recordMenu, regionCaptureOverlay, drawerStub, regionSelectBox, recordComposer, recordPreview, v12Notice].forEach(function (el) {
       if (el && el.parentNode) el.parentNode.removeChild(el);
     });
     Object.keys(bridgePending).forEach(function (requestId) {
@@ -17867,6 +19570,14 @@
   tooltip.addEventListener("mouseleave", onPanelMouseLeave, true);
   tooltip.addEventListener("mousedown", onPanelMouseDown, true);
   customSelectPopover.addEventListener("click", onCustomSelectPopoverClick, true);
+  colorPickerPopover.addEventListener("pointerdown", handleColorPickerPopoverPointerDown, true);
+    colorPickerPopover.addEventListener("pointermove", handleColorPickerPopoverPointerMove, true);
+    colorPickerPopover.addEventListener("pointerup", handleColorPickerPopoverPointerUp, true);
+    colorPickerPopover.addEventListener("pointercancel", handleColorPickerPopoverPointerUp, true);
+    colorPickerPopover.addEventListener("lostpointercapture", handleColorPickerLostPointerCapture, true);
+  colorPickerPopover.addEventListener("click", handleColorPickerPopoverClick, true);
+  colorPickerPopover.addEventListener("input", handleColorPickerPopoverInput, true);
+  colorPickerPopover.addEventListener("change", handleColorPickerPopoverChange, true);
   document.addEventListener("mousemove", onMouseMove, true);
   document.addEventListener("pointerdown", startRegionCapture, true);
   document.addEventListener("pointermove", updateRegionCapture, true);

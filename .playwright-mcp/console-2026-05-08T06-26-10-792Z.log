@@ -1,0 +1,14 @@
+[     346ms] [WARNING] document.domain mutation is ignored because the surrounding agent cluster is origin-keyed. @ https://daxueui-oss.koocdn.com/chuguo/liuxue2/static/js/tool.js:7
+[     353ms] [LOG] UAInfo {appId: , platform: pc, ua: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Ap…KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36} @ https://static.koocdn.com/project/teach/1.x/common/plus-helping/2.x/plus-helping-single.bundle.js:0
+[     354ms] [LOG] in app @ https://static.koocdn.com/project/teach/1.x/common/plus-helping/2.x/plus-helping-single.bundle.js:0
+[     571ms] [LOG] XDF 办公网络不初始化在线咨询。生产环境请连接手机热点来验证对应功能。国内内部环境不进行初始化，出国内部环境正常初始化。 @ https://daxueui-oss.koocdn.com/chuguo/liuxue2/_next/static/chunks/pages/_app-4a4ceda3eb6823e6.js:16
+[     682ms] Uncaught (in promise) undefined
+    at xhr.onreadystatechange (https://images.koolearn.com/shark/project/chuguo-error/index.js:0:2139)
+    at sentryWrapped (https://daxueui-oss.koocdn.com/chuguo/liuxue2/_next/static/chunks/pages/_app-4a4ceda3eb6823e6.js:13:3956)
+    at rs (https://daxueui-cos.koocdn.com/bonree/BonreeSDK_JS.min.js:1:27725)
+[     838ms] [WARNING] A parser-blocking, cross site (i.e. different eTLD+1) script, https://hm.baidu.com/h.js?5023f5fc98cfb5712c364bb50b12e50e, is invoked via document.write. The network request for this script MAY be blocked by the browser in this or a future page load due to poor network connectivity. If blocked in this page load, it will be confirmed in a subsequent console message. See https://www.chromestatus.com/feature/5718547946799104 for more details. @ https://images.koolearn.com/www/subject/script/tongji.js:31
+[     838ms] [WARNING] A parser-blocking, cross site (i.e. different eTLD+1) script, https://hm.baidu.com/h.js?5023f5fc98cfb5712c364bb50b12e50e, is invoked via document.write. The network request for this script MAY be blocked by the browser in this or a future page load due to poor network connectivity. If blocked in this page load, it will be confirmed in a subsequent console message. See https://www.chromestatus.com/feature/5718547946799104 for more details. @ https://images.koolearn.com/www/subject/script/tongji.js:31
+[     843ms] [LOG] 自动接入生产环境监控sdk，版本V0.0.1 @ https://daxueui-cos.koocdn.com/daxue-monitor-sdk/xdf-monitor.min.js?apikey=static2:0
+[     949ms] [LOG] 监控SDK初始化成功！ @ https://daxueui-cos.koocdn.com/daxue-monitor-sdk/xdf-monitor-0.0.1.min.js?apikey=static2:0
+[     999ms] [WARNING] document.domain mutation is ignored because the surrounding agent cluster is origin-keyed. @ https://login.koolearn.com/sso/toLogin.do?next_page=https%3A%2F%2Fliuxue.koolearn.com%2Fielts%2Fnewmock%2Fresult%2F%3FtestResultId%3D144583:101
+[    1008ms] [LOG] setResolveCall-enter--登录回调赋值成功 @ https://daxueui-cos.koocdn.com/common/dxlogin/static/index.umd.js:278
