@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "PixelAudit 视觉走查助手",
   "short_name": "PixelAudit",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "网页视觉走查工具：快速查看尺寸、字体、颜色与间距，记录问题并导出走查结果。",
   "action": {
     "default_title": "PixelAudit 视觉走查助手（未开启）",

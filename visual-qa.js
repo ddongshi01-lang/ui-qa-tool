@@ -1055,7 +1055,7 @@
       esc(prefix + "-" + channel) +
       '" data-vqa-panel-control="true" value="' +
       esc(String(value)) +
-      '" inputmode="decimal" autocomplete="off" spellcheck="false" style="width:100%;min-width:0;height:27px;border:0;background:transparent;color:#fff;font:400 12px/1 \'PingFang SC\',-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;outline:none;text-align:center;">'
+      '" inputmode="decimal" autocomplete="off" spellcheck="false" style="flex:1 1 0;min-width:0;width:0;height:27px;border:0;background:transparent;color:#fff;font:400 12px/1 \'PingFang SC\',-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;outline:none;text-align:center;">'
     );
   }
 
@@ -1063,7 +1063,7 @@
     var format = normalizeColorPickerFormat(picker.format);
     if (format === "RGB") {
       return (
-        '<div data-color-picker-format-value-group="1" data-color-picker-format="' + format + '" style="display:flex;align-items:center;gap:0;flex:1 1 auto;height:27px;border-radius:6px;background:rgba(255,255,255,.07);padding:0 8px;box-sizing:border-box;">' +
+        '<div data-color-picker-format-value-group="1" data-color-picker-format="' + format + '" style="display:flex;align-items:center;gap:0;flex:1 1 auto;min-width:0;width:100%;height:27px;border-radius:6px;background:rgba(255,255,255,.07);padding:0 8px;box-sizing:border-box;">' +
         renderColorPickerTripletInput("rgb", "r", picker.rgb.r) +
         '<span style="flex:0 0 auto;color:rgba(255,255,255,.42);font:400 12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;">/</span>' +
         renderColorPickerTripletInput("rgb", "g", picker.rgb.g) +
@@ -1074,7 +1074,7 @@
     }
     if (format === "HSL") {
       return (
-        '<div data-color-picker-format-value-group="1" data-color-picker-format="' + format + '" style="display:flex;align-items:center;gap:0;flex:1 1 auto;height:27px;border-radius:6px;background:rgba(255,255,255,.07);padding:0 8px;box-sizing:border-box;">' +
+        '<div data-color-picker-format-value-group="1" data-color-picker-format="' + format + '" style="display:flex;align-items:center;gap:0;flex:1 1 auto;min-width:0;width:100%;height:27px;border-radius:6px;background:rgba(255,255,255,.07);padding:0 8px;box-sizing:border-box;">' +
         renderColorPickerTripletInput("hsl", "h", picker.hsl.h) +
         '<span style="flex:0 0 auto;color:rgba(255,255,255,.42);font:400 12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;">/</span>' +
         renderColorPickerTripletInput("hsl", "s", picker.hsl.s) +
@@ -2148,6 +2148,21 @@
         syncColorPickerFormatInputFallback(channelKey, formatInput);
       }
     }
+  }
+
+  function handleColorPickerPopoverFocusIn(event) {
+    if (!isColorPickerUiTarget(event.target)) return;
+    scheduleColorPickerInputSelectAll(event.target);
+  }
+
+  function handleColorPickerPopoverMouseDown(event) {
+    if (!isColorPickerUiTarget(event.target)) return;
+    var inputTarget = event.target.closest && event.target.closest(
+      "[data-color-picker-hex-input],[data-color-picker-format-input],[data-color-picker-alpha-input],[data-color-picker-gradient-angle-input]"
+    );
+    if (!inputTarget) return;
+    if (document.activeElement === inputTarget) return;
+    scheduleColorPickerInputSelectAll(inputTarget);
   }
 
   function renderLayoutToggleButton(expanded) {
@@ -10074,7 +10089,13 @@
     if (state.scrub.active) return false;
     if (getNodeTagName(target) !== "input") return false;
     if (target.disabled || target.readOnly) return false;
-    if (!target.getAttribute || target.getAttribute("data-editable") !== "1") return false;
+    if (!target.getAttribute) return false;
+    var isEditableField = target.getAttribute("data-editable") === "1";
+    var isPanelColorField =
+      !!target.getAttribute("data-color-text-prop") ||
+      !!target.getAttribute("data-color-alpha-prop") ||
+      !!target.getAttribute("data-color-prop");
+    if (!isEditableField && !isPanelColorField) return false;
     if (target.getAttribute("data-color-picker-input")) return false;
     var inputType = (target.type || "").toLowerCase();
     if (inputType === "color") return false;
@@ -10082,6 +10103,22 @@
       return false;
     }
     return typeof target.select === "function" || typeof target.setSelectionRange === "function";
+  }
+
+  function safeSelectAllInputText(target) {
+    if (!target) return false;
+    try {
+      if (typeof target.select === "function") {
+        target.select();
+        return true;
+      }
+      if (typeof target.setSelectionRange === "function") {
+        var len = String(target.value == null ? "" : target.value).length;
+        target.setSelectionRange(0, len);
+        return true;
+      }
+    } catch (err) {}
+    return false;
   }
 
   function schedulePanelInputSelectAll(target, fieldId) {
@@ -10097,16 +10134,38 @@
       if (!target || document.activeElement !== target) return;
       if (!tooltip.contains(target)) return;
       if (fieldId && getFieldId(target) !== fieldId) return;
-      try {
-        if (typeof target.select === "function") {
-          target.select();
-          return;
-        }
-        if (typeof target.setSelectionRange === "function") {
-          var len = String(target.value == null ? "" : target.value).length;
-          target.setSelectionRange(0, len);
-        }
-      } catch (err) {}
+      safeSelectAllInputText(target);
+    }, 0);
+  }
+
+  function shouldSelectAllOnColorPickerFocus(target) {
+    if (!target || !colorPickerPopover || !colorPickerPopover.contains(target)) return false;
+    if (state.scrub.active) return false;
+    if (getNodeTagName(target) !== "input") return false;
+    if (target.disabled || target.readOnly) return false;
+    if (
+      !target.getAttribute("data-color-picker-hex-input") &&
+      !target.getAttribute("data-color-picker-format-input") &&
+      !target.getAttribute("data-color-picker-alpha-input") &&
+      !target.getAttribute("data-color-picker-gradient-angle-input")
+    ) {
+      return false;
+    }
+    var inputType = (target.type || "").toLowerCase();
+    if (inputType && inputType !== "text" && inputType !== "search" && inputType !== "tel" && inputType !== "url" && inputType !== "password") {
+      return false;
+    }
+    return typeof target.select === "function" || typeof target.setSelectionRange === "function";
+  }
+
+  function scheduleColorPickerInputSelectAll(target) {
+    if (!shouldSelectAllOnColorPickerFocus(target)) return;
+    window.setTimeout(function () {
+      var picker = getColorPickerState();
+      if (!picker.open || picker.dragging || state.scrub.active) return;
+      if (!target || document.activeElement !== target) return;
+      if (!colorPickerPopover || !colorPickerPopover.contains(target)) return;
+      safeSelectAllInputText(target);
     }, 0);
   }
 
@@ -19452,6 +19511,8 @@
     colorPickerPopover.removeEventListener("click", handleColorPickerPopoverClick, true);
     colorPickerPopover.removeEventListener("input", handleColorPickerPopoverInput, true);
     colorPickerPopover.removeEventListener("change", handleColorPickerPopoverChange, true);
+    colorPickerPopover.removeEventListener("focusin", handleColorPickerPopoverFocusIn, true);
+    colorPickerPopover.removeEventListener("mousedown", handleColorPickerPopoverMouseDown, true);
     topbar.removeEventListener("pointerdown", onV12TopbarPointerDown, true);
     topbar.removeEventListener("pointerup", onV12TopbarPointerUp, true);
     topbar.removeEventListener("pointercancel", onV12TopbarPointerCancel, true);
@@ -19638,6 +19699,8 @@
   colorPickerPopover.addEventListener("click", handleColorPickerPopoverClick, true);
   colorPickerPopover.addEventListener("input", handleColorPickerPopoverInput, true);
   colorPickerPopover.addEventListener("change", handleColorPickerPopoverChange, true);
+  colorPickerPopover.addEventListener("focusin", handleColorPickerPopoverFocusIn, true);
+  colorPickerPopover.addEventListener("mousedown", handleColorPickerPopoverMouseDown, true);
   document.addEventListener("mousemove", onMouseMove, true);
   document.addEventListener("pointerdown", startRegionCapture, true);
   document.addEventListener("pointermove", updateRegionCapture, true);
