@@ -8892,10 +8892,28 @@
     return "";
   }
 
+  var textEditableTargetMemory = typeof WeakMap === "function" ? new WeakMap() : null;
+
+  function rememberTextEditableTarget(el) {
+    if (!textEditableTargetMemory || !el) return;
+    textEditableTargetMemory.set(el, true);
+  }
+
+  function wasTextEditableTarget(el) {
+    return !!(textEditableTargetMemory && el && textEditableTargetMemory.get(el));
+  }
+
   function collectDirectTextNodes(el) {
     if (!el || !el.childNodes) return [];
     return Array.prototype.filter.call(el.childNodes, function (node) {
       return node && node.nodeType === 3 && String(node.textContent || "").trim();
+    });
+  }
+
+  function collectAllDirectTextNodes(el) {
+    if (!el || !el.childNodes) return [];
+    return Array.prototype.filter.call(el.childNodes, function (node) {
+      return node && node.nodeType === 3;
     });
   }
 
@@ -8913,19 +8931,26 @@
     var tag = el.tagName.toLowerCase();
     if (/^(input|textarea)$/i.test(tag)) return true;
     var directTextNodes = collectDirectTextNodes(el);
+    var allDirectTextNodes = collectAllDirectTextNodes(el);
     var elementChildCount = countDirectElementChildren(el);
-    if (el.isContentEditable) {
-      return directTextNodes.length === 1 && elementChildCount === 0;
+    if (directTextNodes.length === 1 && elementChildCount === 0) {
+      rememberTextEditableTarget(el);
+      return true;
     }
-    return directTextNodes.length === 1 && elementChildCount === 0;
+    if (wasTextEditableTarget(el) && elementChildCount === 0) {
+      if (allDirectTextNodes.length <= 1) return true;
+      if (el.isContentEditable && allDirectTextNodes.length === 0) return true;
+    }
+    return false;
   }
 
   function getEditableTextValue(el) {
     if (!el || !el.tagName) return "";
     var tag = el.tagName.toLowerCase();
     if (/^(input|textarea)$/i.test(tag)) return String(el.value == null ? "" : el.value);
-    var directTextNodes = collectDirectTextNodes(el);
+    var directTextNodes = collectAllDirectTextNodes(el);
     if (directTextNodes.length === 1) return String(directTextNodes[0].textContent || "");
+    if (wasTextEditableTarget(el) && countDirectElementChildren(el) === 0) return "";
     return String(el.textContent || "");
   }
 
@@ -8938,13 +8963,15 @@
       el.value = value;
       return;
     }
-    var directTextNodes = collectDirectTextNodes(el);
+    var directTextNodes = collectAllDirectTextNodes(el);
     if (directTextNodes.length === 1) {
       directTextNodes[0].textContent = value;
+      rememberTextEditableTarget(el);
       return;
     }
-    if (el.isContentEditable) {
+    if (el.isContentEditable || (wasTextEditableTarget(el) && countDirectElementChildren(el) === 0)) {
       el.textContent = value;
+      rememberTextEditableTarget(el);
     }
   }
 

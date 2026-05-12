@@ -352,6 +352,7 @@
       topbarPressedPointerId: -1,
       topbarActivationAction: "",
       topbarActivationAt: 0,
+      collapsedDrawerHovered: false,
       topbarTooltip: {
         visible: false,
         key: "",
@@ -8892,10 +8893,28 @@
     return "";
   }
 
+  var textEditableTargetMemory = typeof WeakMap === "function" ? new WeakMap() : null;
+
+  function rememberTextEditableTarget(el) {
+    if (!textEditableTargetMemory || !el) return;
+    textEditableTargetMemory.set(el, true);
+  }
+
+  function wasTextEditableTarget(el) {
+    return !!(textEditableTargetMemory && el && textEditableTargetMemory.get(el));
+  }
+
   function collectDirectTextNodes(el) {
     if (!el || !el.childNodes) return [];
     return Array.prototype.filter.call(el.childNodes, function (node) {
       return node && node.nodeType === 3 && String(node.textContent || "").trim();
+    });
+  }
+
+  function collectAllDirectTextNodes(el) {
+    if (!el || !el.childNodes) return [];
+    return Array.prototype.filter.call(el.childNodes, function (node) {
+      return node && node.nodeType === 3;
     });
   }
 
@@ -8913,19 +8932,26 @@
     var tag = el.tagName.toLowerCase();
     if (/^(input|textarea)$/i.test(tag)) return true;
     var directTextNodes = collectDirectTextNodes(el);
+    var allDirectTextNodes = collectAllDirectTextNodes(el);
     var elementChildCount = countDirectElementChildren(el);
-    if (el.isContentEditable) {
-      return directTextNodes.length === 1 && elementChildCount === 0;
+    if (directTextNodes.length === 1 && elementChildCount === 0) {
+      rememberTextEditableTarget(el);
+      return true;
     }
-    return directTextNodes.length === 1 && elementChildCount === 0;
+    if (wasTextEditableTarget(el) && elementChildCount === 0) {
+      if (allDirectTextNodes.length <= 1) return true;
+      if (el.isContentEditable && allDirectTextNodes.length === 0) return true;
+    }
+    return false;
   }
 
   function getEditableTextValue(el) {
     if (!el || !el.tagName) return "";
     var tag = el.tagName.toLowerCase();
     if (/^(input|textarea)$/i.test(tag)) return String(el.value == null ? "" : el.value);
-    var directTextNodes = collectDirectTextNodes(el);
+    var directTextNodes = collectAllDirectTextNodes(el);
     if (directTextNodes.length === 1) return String(directTextNodes[0].textContent || "");
+    if (wasTextEditableTarget(el) && countDirectElementChildren(el) === 0) return "";
     return String(el.textContent || "");
   }
 
@@ -8938,13 +8964,15 @@
       el.value = value;
       return;
     }
-    var directTextNodes = collectDirectTextNodes(el);
+    var directTextNodes = collectAllDirectTextNodes(el);
     if (directTextNodes.length === 1) {
       directTextNodes[0].textContent = value;
+      rememberTextEditableTarget(el);
       return;
     }
-    if (el.isContentEditable) {
+    if (el.isContentEditable || (wasTextEditableTarget(el) && countDirectElementChildren(el) === 0)) {
       el.textContent = value;
+      rememberTextEditableTarget(el);
     }
   }
 
@@ -15191,14 +15219,26 @@
   }
 
   function topbarDrawerEntryHtml(count, active) {
+    var selectIconUrl = (TOPBAR_ICON_URLS && TOPBAR_ICON_URLS.select) || TOPBAR_ICON_PLACEHOLDER_SRC;
     return (
       '<button type="button" class="v12-topbar-btn v12-topbar-drawer-entry" data-v12-action="toggle-drawer" data-active="' +
       (active ? "true" : "false") +
       '" data-pressed="' +
       (state.v12.topbarPressedAction === "toggle-drawer" ? "true" : "false") +
+      '" data-collapsed-hovered="' +
+      (state.v12.collapsedDrawerHovered ? "true" : "false") +
       '" aria-label="记录抽屉">' +
+      '<span class="v12-topbar-entry-face v12-topbar-entry-face-count" aria-hidden="true">' +
       '<span class="v12-topbar-count">' +
       esc(String(count)) +
+      "</span>" +
+      "</span>" +
+      '<span class="v12-topbar-entry-face v12-topbar-entry-face-select" aria-hidden="true">' +
+      '<span class="v12-topbar-icon-slot">' +
+      '<img class="v12-topbar-icon v12-topbar-collapsed-select-icon" data-v12-topbar-icon="collapsed-mode-select" src="' +
+      esc(selectIconUrl) +
+      '" alt="" draggable="false">' +
+      "</span>" +
       "</span>" +
       "</button>"
     );
@@ -15275,10 +15315,24 @@
       ".v12-topbar-drawer-entry[data-active=\"true\"]{background:#404040;color:#fff;box-shadow:none;}" +
       ".v12-topbar-drawer-entry[data-active=\"true\"]:hover{background:#4a4a4a;}" +
       ".v12-topbar-drawer-entry[data-active=\"true\"]:active,.v12-topbar-drawer-entry[data-active=\"true\"][data-pressed=\"true\"]{background:#4f4f4f;}" +
+      ".v12-topbar-entry-face{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;transition:opacity 260ms ease,transform 300ms cubic-bezier(0.2,0,0,1);will-change:opacity,transform;}" +
+      ".v12-topbar-entry-face-count{opacity:1;transform:scale(1);}" +
+      ".v12-topbar-entry-face-select{opacity:0;transform:scale(.92);}" +
+      ".v12-topbar-shell.is-collapsed .v12-topbar-drawer-entry[data-collapsed-hovered=\"true\"] .v12-topbar-entry-face-count{opacity:0;transform:scale(.92);}" +
+      ".v12-topbar-shell.is-collapsed .v12-topbar-drawer-entry[data-collapsed-hovered=\"true\"] .v12-topbar-entry-face-select{opacity:1;transform:scale(1);}" +
       ".v12-topbar-count{display:inline-flex;align-items:center;justify-content:center;min-width:1ch;pointer-events:none;font:400 13.793px/1 'PingFang SC',-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;letter-spacing:0;}" +
       ".v12-topbar-btn[data-v12-action]{position:relative;}" +
       ".v12-topbar-btn[data-v12-action]::after{content:'';position:absolute;left:50%;bottom:-8px;transform:translateX(-50%);width:100%;height:16px;pointer-events:none;}";
     document.head.appendChild(style);
+  }
+
+  function setCollapsedDrawerHoverState(nextHovered) {
+    var hovered = !!nextHovered;
+    if (state.v12.collapsedDrawerHovered === hovered) return;
+    state.v12.collapsedDrawerHovered = hovered;
+    if (topbarDom.drawerBtn) {
+      topbarDom.drawerBtn.setAttribute("data-collapsed-hovered", hovered ? "true" : "false");
+    }
   }
 
   function syncTopbarCollapseMotion() {
@@ -15287,6 +15341,9 @@
     topbarDom.shell.classList.toggle("is-collapsed", collapsed);
     topbarDom.shell.classList.toggle("is-expanded", !collapsed);
     topbarDom.shell.setAttribute("data-toolbar-state", collapsed ? "collapsed" : "expanded");
+    if (!collapsed) {
+      setCollapsedDrawerHoverState(false);
+    }
     [
       topbarDom.selectBtn,
       topbarDom.measureBtn,
@@ -15309,6 +15366,7 @@
     if (!topbarDom.shell) return;
     var iconMap = {
       "mode-select": TOPBAR_ICON_URLS && TOPBAR_ICON_URLS.select,
+      "collapsed-mode-select": TOPBAR_ICON_URLS && TOPBAR_ICON_URLS.select,
       "mode-measure": TOPBAR_ICON_URLS && TOPBAR_ICON_URLS.measure,
       "record-element": TOPBAR_ICON_URLS && TOPBAR_ICON_URLS.recordElement,
       "record-region": TOPBAR_ICON_URLS && TOPBAR_ICON_URLS.recordRegion,
@@ -15966,6 +16024,7 @@
       topbarDom.recordRegionBtn.setAttribute("data-has-dot", getAiChangeCount() > 0 ? "true" : "false");
     }
     if (topbarDom.drawerBtn) {
+      topbarDom.drawerBtn.setAttribute("data-collapsed-hovered", state.v12.collapsedDrawerHovered ? "true" : "false");
       var drawerLabel = topbarDom.drawerBtn.querySelector(".v12-topbar-count");
       if (drawerLabel) drawerLabel.textContent = String(getV12RecordCount());
     }
@@ -16798,9 +16857,18 @@
 
   function onV12TopbarPointerOver(e) {
     if (e.pointerType && e.pointerType === "touch") return;
+    var button = e.target && e.target.closest ? e.target.closest("[data-v12-action]") : null;
+    if (button && topbar.contains(button)) {
+      var buttonAction = button.getAttribute("data-v12-action") || "";
+      if (buttonAction === "toggle-drawer" && isToolbarCollapsed()) {
+        setCollapsedDrawerHoverState(true);
+      } else if (isToolbarCollapsed()) {
+        setCollapsedDrawerHoverState(false);
+      }
+    }
     var action = getTopbarTooltipActionFromTarget(e.target);
     if (!action) return;
-    var button = e.target && e.target.closest ? e.target.closest("[data-v12-action]") : null;
+    button = e.target && e.target.closest ? e.target.closest("[data-v12-action]") : null;
     if (!button) return;
     showTopbarTooltipForAction(action, button);
   }
@@ -16808,6 +16876,11 @@
   function onV12TopbarPointerOut(e) {
     if (e.pointerType && e.pointerType === "touch") return;
     var related = e.relatedTarget || null;
+    var nextButton = related && related.closest ? related.closest("[data-v12-action]") : null;
+    var keepCollapsedDrawerHovered = !!(isToolbarCollapsed() && nextButton && topbar.contains(nextButton) && nextButton.getAttribute("data-v12-action") === "toggle-drawer");
+    if (!keepCollapsedDrawerHovered) {
+      setCollapsedDrawerHoverState(false);
+    }
     if (related && related.closest) {
       var relatedAction = getTopbarTooltipActionFromTarget(related);
       if (relatedAction) return;
@@ -17182,6 +17255,9 @@
     }
     state.v12.toolbarCollapsed = nextCollapsed;
     state.panelCollapsed = nextCollapsed;
+    if (!nextCollapsed) {
+      setCollapsedDrawerHoverState(false);
+    }
     if (nextCollapsed) {
       closeColorPicker({ keepFrozen: true });
       clearDrawerClearConfirm();
