@@ -18671,7 +18671,7 @@
       'px;overflow:visible;">' +
       '<div data-vqa-panel-scroll="1" style="display:flex;position:relative;z-index:1;flex:1 1 auto;flex-direction:column;gap:' +
       PANEL_UI.sectionGap +
-      ';min-height:0;overflow-y:auto;overflow-x:visible;padding-bottom:8px;box-sizing:border-box;overscroll-behavior:contain;">' +
+      ';min-height:0;overflow-y:auto;overflow-x:hidden;padding-bottom:8px;box-sizing:border-box;overscroll-behavior:contain;">' +
       sections.join("") +
       "</div>" +
       '<div data-vqa-panel-footer="1" style="display:flex;flex-direction:column;align-items:stretch;gap:10px;position:relative;z-index:20;flex:0 0 auto;padding:12px 0 0;overflow:visible;">' +
