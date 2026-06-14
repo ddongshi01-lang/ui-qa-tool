@@ -15407,6 +15407,8 @@
       ".v12-selected-panel [data-vqa-custom-select-trigger][aria-expanded=\"true\"] [data-vqa-custom-select-arrow]{transform:rotate(180deg);color:#9ED0FF;}" +
       ".v12-selected-panel [data-vqa-custom-select-label]{display:block;min-width:0;flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left;}" +
       ".v12-selected-panel [data-vqa-custom-select-arrow]{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;color:rgba(255,255,255,.48);transition:transform 140ms ease,color 120ms ease;}" +
+      ".v12-selected-panel [data-vqa-panel-scroll=\"1\"]{-ms-overflow-style:none;scrollbar-width:none;}" +
+      ".v12-selected-panel [data-vqa-panel-scroll=\"1\"]::-webkit-scrollbar{width:0;height:0;display:none;}" +
       ".v12-custom-select-popover-panel{min-width:220px;max-width:min(320px,calc(100vw - 24px));max-height:min(320px,calc(100vh - 40px));padding:8px;border-radius:6px;background:rgba(24,26,31,.96);border:1px solid rgba(255,255,255,.08);box-shadow:0 18px 38px rgba(0,0,0,.34),0 1px 0 rgba(255,255,255,.04) inset;backdrop-filter:blur(18px);overflow:auto;}" +
       ".v12-custom-select-popover-panel[data-select-kind=\"font-weight\"]{min-width:110px;max-width:140px;}" +
       ".v12-custom-select-popover-panel[data-select-kind=\"stroke-align\"],.v12-custom-select-popover-panel[data-select-kind=\"shadow-type\"]{min-width:110px;max-width:120px;}" +
