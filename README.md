@@ -13,8 +13,14 @@
 1. 打开 Chrome 扩展管理页：`chrome://extensions/`
 2. 打开“开发者模式”。
 3. 选择“加载已解压的扩展程序”。
-4. 选择仓库根目录，或稳定发布目录 `dist/visual-qa-release/`。
+4. 优先选择稳定发布目录 `dist/visual-qa-release/`；只有本地开发时才加载仓库根目录。
 5. 在目标页面点击扩展图标，注入 `content-bridge.js` 与 `visual-qa.js`。
+
+如果出现 `Cannot load extension with file or directory name _metadata`：
+
+- 说明你加载了错误的目录，通常是 `.crx` 解压目录，或带有 `_metadata` / `__MACOSX` 的外层目录。
+- 不要加载 zip 文件本身，也不要加载解压 `.crx` 后得到的目录。
+- 请重新选择纯目录 `dist/visual-qa-release/`，或先运行 `node scripts/sync_release.js` 重建发布目录后再加载。
 
 ## 核心能力
 
@@ -35,6 +41,7 @@
 ## 验证命令
 
 ```bash
+node scripts/sync_release.js
 node --check visual-qa.js
 node --check service_worker.js
 node --check content-bridge.js

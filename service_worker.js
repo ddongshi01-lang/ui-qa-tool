@@ -159,22 +159,35 @@ function getAiChangeIconUrls() {
 async function setActionVisualState(tabId, isActive) {
   if (typeof tabId !== "number") return;
   var stateKey = isActive ? "on" : "off";
-  tabPluginState[tabId] = !!isActive;
-  await Promise.all([
-    chrome.action.setIcon({
-      tabId: tabId,
-      path: ACTION_ICON_PATHS[stateKey]
-    }),
-    chrome.action.setTitle({
-      tabId: tabId,
-      title: ACTION_TITLES[stateKey]
-    })
-  ]);
+  if (isActive) {
+    tabPluginState[tabId] = true;
+  } else {
+    delete tabPluginState[tabId];
+  }
+
+  try {
+    await Promise.all([
+      chrome.action.setIcon({
+        tabId: tabId,
+        path: ACTION_ICON_PATHS[stateKey]
+      }),
+      chrome.action.setTitle({
+        tabId: tabId,
+        title: ACTION_TITLES[stateKey]
+      })
+    ]);
+  } catch (err) {
+    var message = err && err.message ? err.message : String(err);
+    if (message.indexOf("No tab with id") !== -1) {
+      delete tabPluginState[tabId];
+      return;
+    }
+    throw err;
+  }
 }
 
 async function resetActionVisualState(tabId) {
   if (typeof tabId !== "number") return;
-  delete tabPluginState[tabId];
   await setActionVisualState(tabId, false);
 }
 
