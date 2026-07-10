@@ -43,7 +43,7 @@
       parentGap: "#2F7BFF",
       measureX: "#2F7BFF",
       measureY: "#2F7BFF",
-      measurePair: "#2F7BFF",
+      measurePair: "#14D19B",
       panelBg: "rgba(33,33,33,.92)",
       panelBorder: "#343434",
       text: "#F5F7FA",
@@ -150,6 +150,11 @@
       boxShadow: "0 0 0 1px rgba(20,209,155,.22) inset"
     },
     selectPair: {
+      border: "2px dashed " + CONFIG.colors.selectB,
+      background: "transparent",
+      boxShadow: "0 0 0 1px rgba(20,209,155,.22) inset"
+    },
+    plainPair: {
       border: "2px dashed " + CONFIG.colors.highlight,
       background: "transparent",
       boxShadow: "0 0 0 1px rgba(255,255,255,.35) inset"
@@ -225,6 +230,7 @@
     frozenEl: null,
     isFrozen: false,
     measureMode: false,
+    measurePhase: "idle",
     measureA: null,
     measureB: null,
     mouseX: 0,
@@ -3149,7 +3155,9 @@
         note: record && record.note ? String(record.note).trim() : "",
         changeSummaryLines: changeSummaryLines,
         pageTitle: pageInfo.pageTitle,
-        pageUrl: pageInfo.pageUrl
+        pageUrl: pageInfo.pageUrl,
+        recordType: isMeasureRecord(record) ? "measure" : "plain",
+        measure: isMeasureRecord(record) ? cloneDraft(record.measure) : null
       };
     });
   }
@@ -3184,8 +3192,20 @@
               ';">' +
               esc(item.categoryLabel) +
               "</span>" +
+              (item.recordType === "measure"
+                ? '<span class="issue-measure-type">测量</span>'
+                : "") +
               "</div>" +
               '<div class="issue-grid">' +
+              (item.recordType === "measure" && item.measure
+                ? '<section class="issue-field issue-measure-summary">' +
+                  "<h3>测量摘要</h3>" +
+                  "<p>" +
+                  esc(item.measure.description || "") +
+                  "</p>" +
+                  '<div class="issue-measure-meta">A: ' + esc(item.measure.elemA || "-") + " · B: " + esc(item.measure.elemB || "-") + " · DPR: " + esc(String(item.measure.dpr || 1)) + "</div>" +
+                  "</section>"
+                : "") +
               '<section class="issue-field issue-note">' +
               "<h3>备注</h3>" +
               "<p>" +
@@ -3252,11 +3272,14 @@
       ".issue-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}" +
       ".issue-index{display:inline-flex;align-items:center;justify-content:center;min-width:42px;height:34px;padding:0 12px;border-radius:999px;background:var(--chip-bg);color:var(--chip-text);font-size:18px;font-weight:800;}" +
       ".issue-category{display:inline-flex;align-items:center;height:34px;padding:0 14px;border-radius:999px;background:color-mix(in srgb,var(--issue-category) 16%,white);color:var(--issue-category);font-size:15px;font-weight:700;}" +
+      ".issue-measure-type{display:inline-flex;align-items:center;height:30px;padding:0 12px;border-radius:999px;background:#dcfce7;color:#15803d;font-size:13px;font-weight:800;}" +
       ".issue-grid{display:flex;flex-direction:column;gap:10px;padding-top:6px;border-top:1px solid var(--line-soft);}" +
       ".issue-field{min-width:0;padding:0;border:0;background:transparent;}" +
       ".issue-field h3{margin:0 0 6px;font-size:12px;color:var(--muted);font-weight:700;letter-spacing:.04em;text-transform:uppercase;}" +
       ".issue-field p{margin:0;color:var(--text);word-break:break-word;white-space:pre-wrap;}" +
       ".issue-note p{font-size:16px;line-height:1.75;color:#0f172a;}" +
+      ".issue-measure-summary p{font-size:15px;line-height:1.65;color:#0f172a;font-weight:700;}" +
+      ".issue-measure-meta{margin-top:6px;color:#64748b;font-size:12px;line-height:1.55;word-break:break-word;}" +
       ".issue-change-summary-list{display:flex;flex-direction:column;gap:4px;}" +
       ".issue-change-summary-item{color:#334155;font-size:13px;line-height:1.55;word-break:break-word;}" +
       ".empty-state{padding:28px;border-radius:18px;border:1px dashed var(--line-strong);background:var(--panel-soft);color:var(--muted);text-align:center;}" +
@@ -3522,6 +3545,14 @@
     );
   }
 
+  function isMeasureRecord(record) {
+    return !!(record && record.recordType === "measure" && record.measure);
+  }
+
+  function getMeasureRecordDescription(record) {
+    return isMeasureRecord(record) && record.measure.description ? String(record.measure.description) : "";
+  }
+
   function getRecordChangeSummaryLines(record) {
     return record && record.changeSummary && Array.isArray(record.changeSummary.lines)
       ? record.changeSummary.lines.filter(function (line) {
@@ -3563,6 +3594,11 @@
     var hasNote = !!note;
     var categoryColor = category && category.color ? category.color : "#94a3b8";
     var changeSummaryHtml = getDrawerRecordChangeSummaryHtml(record);
+    var measureRecord = isMeasureRecord(record);
+    var measureDescription = getMeasureRecordDescription(record);
+    var measureDescriptionHtml = measureRecord
+      ? '<div style="margin-bottom:8px;color:rgba(209,250,229,.94);font:12px/1.55 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;word-break:break-word;">' + esc(measureDescription) + "</div>"
+      : "";
     var noteHtml =
       '<div data-v12-drawer-note-view="1" style="display:block;">' +
       '<button type="button" data-v12-action="drawer-edit-note" data-record-id="' +
@@ -3623,10 +3659,14 @@
       ';color:#fff;font-size:11px;font-weight:700;line-height:1;">' +
       esc(category.label) +
       "</span>" +
+      (measureRecord
+        ? '<span style="display:inline-flex;align-items:center;padding:4px 8px;border-radius:999px;background:rgba(20,209,155,.18);color:#a7f3d0;font-size:11px;font-weight:700;line-height:1;">测量</span>'
+        : "") +
       '<span style="color:rgba(255,255,255,.46);font-size:12px;">' +
       esc(timeText) +
       "</span>" +
       "</div>" +
+      measureDescriptionHtml +
       noteHtml +
       changeSummaryHtml +
       "</div>" +
@@ -4915,6 +4955,7 @@
     clearStrokeRuntimeMeta();
     clearShadowRuntimeMeta();
     clearSelectedPanelHoverFreeze();
+    state.measurePhase = "idle";
     state.measureA = null;
     state.measureB = null;
     state.primaryMeasure = null;
@@ -4924,6 +4965,11 @@
     }
     clearLayer(spacingLayer);
     clearLayer(measureLayer);
+    if (measureToolbar) {
+      measureToolbar.style.display = "none";
+      measureToolbar.innerHTML = "";
+      measureToolbar.removeAttribute("data-vqa-measure-toolbar-key");
+    }
     if (selectA) {
       selectA.style.display = "none";
       selectA.style.width = "0";
@@ -4944,6 +4990,7 @@
     if (enabled) {
       resetSharedElements({ keepSnapshots: true });
       state.measureMode = true;
+      state.measurePhase = "idle";
       state.measureA = null;
       state.measureB = null;
       state.primaryMeasure = null;
@@ -4970,6 +5017,34 @@
     state.measureA = el;
     state.measureB = null;
     resetQuickRecordState();
+  }
+
+  function handleMeasureTopbarClick(el, altKey) {
+    if (shouldBlockPageSelectionDuringScrub() || !el) return;
+    closeAddPropertyMenu();
+    clearBackgroundFillMeta();
+
+    if (altKey) {
+      resetSharedElements({ keepSnapshots: true });
+      state.measureA = el;
+      state.measureB = null;
+      state.measurePhase = "anchorSelected";
+      resetQuickRecordState();
+      return;
+    }
+
+    if (state.measurePhase === "idle" || !state.measureA) {
+      resetSharedElements({ keepSnapshots: true });
+      state.measureA = el;
+      state.measureB = null;
+      state.measurePhase = "anchorSelected";
+      resetQuickRecordState();
+      return;
+    }
+
+    if (el === state.measureA) return;
+    state.measureB = el;
+    state.measurePhase = "pairLocked";
   }
 
   function closeRecordMenu() {
@@ -5708,14 +5783,18 @@
     (document.head || document.documentElement || document.body).appendChild(captureHideStyleEl);
   }
 
-  function getCaptureHiddenElements() {
-    return [
+  function getCaptureHiddenElements(options) {
+    var opts = options || {};
+    var elements = [
       highlight,
-      selectA,
-      selectB,
+      sharedHighlightLayer,
       tooltip,
-      spacingLayer,
-      measureLayer,
+      topbarTooltip,
+      sharedElementsTooltip,
+      aiChangePopover,
+      customSelectPopover,
+      colorPickerPopover,
+      feedbackPopover,
       floating,
       topbar,
       recordMenu,
@@ -5724,11 +5803,16 @@
       regionSelectBox,
       recordComposer,
       recordPreview,
-      v12Notice
+      v12Notice,
+      measureToolbar
     ];
+    if (!opts.keepMeasureOverlay) {
+      elements.splice(1, 0, selectA, selectB, spacingLayer, measureLayer);
+    }
+    return elements;
   }
 
-  function setPluginUiCaptureHidden(hidden) {
+  function setPluginUiCaptureHidden(hidden, options) {
     ensureCaptureHideStyle();
     if (hidden && captureRestoreTimerId) {
       window.clearTimeout(captureRestoreTimerId);
@@ -5737,7 +5821,7 @@
     if (hidden) {
       captureRestoreSeq++;
     }
-    getCaptureHiddenElements().forEach(function (el) {
+    getCaptureHiddenElements(options).forEach(function (el) {
       if (!el) return;
       if (hidden) {
         el.removeAttribute("data-vqa-capture-restoring");
@@ -5817,6 +5901,82 @@
     } finally {
       animateCaptureUiRestore();
     }
+  }
+
+  async function requestMeasureVisibleTabCapture() {
+    if (!isInspectorAlive()) return "";
+    setPluginUiCaptureHidden(true, { keepMeasureOverlay: true });
+    await waitForAnimationFrames(1);
+    try {
+      return await requestVisibleTabCapture();
+    } finally {
+      animateCaptureUiRestore();
+    }
+  }
+
+  function getMeasureRecordElementName(el) {
+    var text = String((el && el.textContent) || "").replace(/\s+/g, " ").trim();
+    if (text) return truncateText(text, 80);
+    var tagName = el && el.tagName ? el.tagName.toLowerCase() : "element";
+    var classes = classSummary(el);
+    return classes ? tagName + "." + classes : tagName;
+  }
+
+  function getMeasureRecordRect(el) {
+    var rect = el && el.getBoundingClientRect ? el.getBoundingClientRect() : null;
+    if (!rect) return null;
+    return {
+      left: Math.round(rect.left),
+      top: Math.round(rect.top),
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+      right: Math.round(rect.right),
+      bottom: Math.round(rect.bottom)
+    };
+  }
+
+  function recordMeasureResult() {
+    if (state.v12.pendingRecord) {
+      showV12Notice("请先保存或取消当前记录");
+      return;
+    }
+    if (state.measurePhase !== "pairLocked" || !state.measureA || !state.measureB) return;
+    var pairState = resolveMeasurePairState(state.measureA, state.measureB);
+    var summary = getMeasureRecordSummary(pairState);
+    if (!summary || !(summary.distance > 0)) {
+      showV12Notice("当前没有可记录间距");
+      return;
+    }
+
+    var elemA = getMeasureRecordElementName(state.measureA);
+    var elemB = getMeasureRecordElementName(state.measureB);
+    var timestampMs = Date.now();
+    var timestamp = new Date(timestampMs).toISOString();
+    var measure = {
+      elemA: elemA,
+      elemB: elemB,
+      distance: summary.distance,
+      axis: summary.axis,
+      rectA: getMeasureRecordRect(state.measureA),
+      rectB: getMeasureRecordRect(state.measureB),
+      url: location.href,
+      dpr: window.devicePixelRatio || 1,
+      timestamp: timestampMs,
+      description: "「" + elemA + "」↔「" + elemB + "」" + getMeasureAxisLabel(summary.axis) + "间距 " + summary.distance + "px"
+    };
+
+    var bRect = getMeasureRecordRect(state.measureB);
+    var record = createPendingRecord(
+      "element",
+      measure.description,
+      viewportRectToDocumentRect(bRect),
+      buildElementTargetHint(state.measureB)
+    );
+    record.recordType = "measure";
+    record.measure = measure;
+    setRecordTarget(state.measureB);
+    openPendingRecord(record);
+    runPendingRecordShotCapture(record);
   }
 
   function normalizeRecordCapture(record, options) {
@@ -6090,6 +6250,49 @@
     }
   }
 
+  async function runPendingMeasureRecordShotCapture(record, token, perf, popupPerf) {
+    var captureSource = null;
+    try {
+      if (popupPerf) popupPerf.mark("captureRequestStart");
+      perf.mark("captureRequestStart");
+      var dataUrl = await requestMeasureVisibleTabCapture();
+      if (popupPerf) popupPerf.mark("captureResponseReceived");
+      perf.mark("captureResponseReceived");
+      if (!dataUrl) throw new Error("Empty measure capture result");
+      if (recordShotCaptureTokens[record.id] !== token || !isInspectorAlive()) return;
+
+      captureSource = await loadCaptureSourceFromDataUrl(dataUrl);
+      var source = captureSource && captureSource.source;
+      if (!source) throw new Error("Failed to decode measure capture");
+      var thumbVariant = buildShotVariantFromSourceCanvas(source, RECORD_THUMB_LONG_EDGE, 0.9);
+      if (!thumbVariant || !thumbVariant.dataUrl) throw new Error("Failed to create measure thumbnail");
+      if (recordShotCaptureTokens[record.id] !== token || !isInspectorAlive()) return;
+
+      record.captureReady = true;
+      record.shotReady = true;
+      setRecordShotById(record.id, {
+        thumb: thumbVariant.dataUrl,
+        export: dataUrl,
+        source: null,
+        marked: true
+      });
+    } catch (err) {
+      if (recordShotCaptureTokens[record.id] !== token || !isInspectorAlive()) return;
+      console.warn("[visual-qa][v1.2] measure shot capture failed:", err);
+      setRecordShotById(record.id, buildFallbackShotBundle(record));
+      record.shotReady = true;
+      showV12Notice("测量截图失败，已使用占位图");
+    } finally {
+      if (captureSource && typeof captureSource.close === "function") captureSource.close();
+      if (recordShotCaptureTokens[record.id] === token) {
+        delete recordShotCaptureTokens[record.id];
+        showRecordComposer(record);
+        syncRecordComposerFocus();
+        schedule();
+      }
+    }
+  }
+
   async function runPendingRecordShotCapture(record) {
     if (!record || !record.id) return;
     var token = ++recordShotCaptureSeq;
@@ -6097,6 +6300,10 @@
     var perf = createShotPerfTracker(record);
     var popupPerf = recordPopupPerfById[record.id] || null;
     var sourceBundle = null;
+    if (isMeasureRecord(record)) {
+      await runPendingMeasureRecordShotCapture(record, token, perf, popupPerf);
+      return;
+    }
     try {
       var captureScroll = getCurrentScrollOffset();
       var currentCapture = normalizeRecordCapture(record, { forceAdaptiveShotRect: true });
@@ -11930,6 +12137,7 @@
         el === sharedHighlightLayer ||
         el === spacingLayer ||
         el === measureLayer ||
+        el === measureToolbar ||
         el === floating ||
         el === topbar ||
         el === recordMenu ||
@@ -11953,6 +12161,7 @@
       sharedHighlightLayer,
       spacingLayer,
       measureLayer,
+      measureToolbar,
       floating,
       topbar,
       recordMenu,
@@ -13526,6 +13735,84 @@
     };
   }
 
+  function getMeasureRecordSummary(pairState) {
+    var distances = pairState && pairState.measurement && pairState.measurement.distances;
+    if (!distances) return null;
+    var horizontal = [];
+    var vertical = [];
+    ["left", "right"].forEach(function (side) {
+      if (typeof distances[side] === "number" && distances[side] > 0) horizontal.push(distances[side]);
+    });
+    ["top", "bottom"].forEach(function (side) {
+      if (typeof distances[side] === "number" && distances[side] > 0) vertical.push(distances[side]);
+    });
+    if (horizontal.length && vertical.length) {
+      return {
+        distance: Math.round(Math.sqrt(Math.pow(Math.min.apply(Math, horizontal), 2) + Math.pow(Math.min.apply(Math, vertical), 2))),
+        axis: "diagonal"
+      };
+    }
+    if (horizontal.length) return { distance: Math.min.apply(Math, horizontal), axis: "horizontal" };
+    if (vertical.length) return { distance: Math.min.apply(Math, vertical), axis: "vertical" };
+    return null;
+  }
+
+  function getMeasureAxisLabel(axis) {
+    if (axis === "horizontal") return "水平";
+    if (axis === "vertical") return "垂直";
+    return "对角";
+  }
+
+  function ensureMeasureToolbarStyles() {
+    if (document.getElementById("vqa-measure-toolbar-styles")) return;
+    var style = document.createElement("style");
+    style.id = "vqa-measure-toolbar-styles";
+    style.textContent =
+      ".vqa-measure-toolbar-button{display:inline-flex;align-items:center;justify-content:center;height:28px;padding:0 8px;border:0;border-radius:8px;background:transparent;color:#fff;font:inherit;line-height:1;cursor:pointer;transition:background-color 120ms ease,color 120ms ease,transform 120ms ease;}" +
+      ".vqa-measure-toolbar-button:hover{background:rgba(255,255,255,.05);color:#fff;}" +
+      ".vqa-measure-toolbar-button:active{background:rgba(255,255,255,.09);transform:translateY(1px);}" +
+      ".vqa-measure-toolbar-button:focus-visible{outline:2px solid #86efac;outline-offset:2px;}" +
+      ".vqa-measure-toolbar-close{flex:0 0 28px;width:28px;padding:0;color:rgba(255,255,255,.86);}" +
+      ".vqa-measure-toolbar-close svg{display:block;width:16px;height:16px;pointer-events:none;}";
+    document.head.appendChild(style);
+  }
+
+  function renderMeasureToolbar(pairState) {
+    if (!measureToolbar) return;
+    ensureMeasureToolbarStyles();
+    var summary = getMeasureRecordSummary(pairState);
+    if (state.v12.pendingRecord || state.measurePhase !== "pairLocked" || !summary) {
+      measureToolbar.style.display = "none";
+      measureToolbar.innerHTML = "";
+      measureToolbar.removeAttribute("data-vqa-measure-toolbar-key");
+      return;
+    }
+    var bRect = state.measureB.getBoundingClientRect();
+    var toolbarKey = summary.distance + ":" + summary.axis;
+    var toolbarNeedsRender = measureToolbar.getAttribute("data-vqa-measure-toolbar-key") !== toolbarKey;
+    if (toolbarNeedsRender) {
+      measureToolbar.innerHTML =
+        '<span style="display:inline-flex;align-items:center;padding:0 7px;color:#d1fae5;font-weight:800;">' +
+        summary.distance +
+        'px</span><span style="width:1px;height:16px;background:rgba(255,255,255,.16);"></span>' +
+        '<button type="button" class="vqa-measure-toolbar-button vqa-measure-toolbar-record" data-vqa-measure-action="record">' +
+        "记录" +
+        '</button><button type="button" class="vqa-measure-toolbar-button vqa-measure-toolbar-close" data-vqa-measure-action="close" aria-label="关闭测量"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>';
+      measureToolbar.setAttribute("data-vqa-measure-toolbar-key", toolbarKey);
+    }
+    measureToolbar.style.display = "flex";
+    if (toolbarNeedsRender) measureToolbar.style.visibility = "hidden";
+    var width = Math.ceil(measureToolbar.getBoundingClientRect().width || 250);
+    var height = Math.ceil(measureToolbar.getBoundingClientRect().height || 34);
+    var x = Math.round((bRect.left + bRect.right) / 2 - width / 2);
+    var belowY = Math.round(bRect.bottom + 12);
+    var aboveY = Math.round(bRect.top - height - 12);
+    var y = belowY + height <= window.innerHeight - 8 ? belowY : aboveY;
+    measureToolbar.style.left = clamp(x, 8, Math.max(8, window.innerWidth - width - 8)) + "px";
+    measureToolbar.style.top = clamp(y, 8, Math.max(8, window.innerHeight - height - 8)) + "px";
+    measureToolbar.style.visibility = "visible";
+  }
+
   function addPairMeasureLabel(layer, x, y, text) {
     addExternalMeasureLabel(layer, x, y, text, {
       width: Math.max(60, Math.min(96, Math.round(String(text).length * 8 + 18))),
@@ -15032,6 +15319,13 @@
     "position:fixed;inset:0;pointer-events:none;z-index:" +
       (CONFIG.zIndexTooltip - 1) +
       ";"
+  );
+
+  var measureToolbar = make(
+    "div",
+    "position:fixed;display:none;pointer-events:auto;z-index:" +
+      CONFIG.zIndexTooltip +
+      ";max-width:calc(100vw - 16px);box-sizing:border-box;flex-wrap:wrap;padding:5px;border:1px solid rgba(255,255,255,.16);border-radius:12px;background:rgba(15,23,42,.96);box-shadow:0 12px 28px rgba(0,0,0,.28);color:#fff;font:600 12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;white-space:nowrap;"
   );
 
   var floating = make(
@@ -17711,11 +18005,12 @@
     });
   }
 
-  function updateBox(box, el) {
+  function updateBox(box, el, marker) {
     if (!el) {
       box.style.display = "none";
       box.style.width = "0";
       box.style.height = "0";
+      box.innerHTML = "";
       return;
     }
     var r = el.getBoundingClientRect();
@@ -17723,6 +18018,13 @@
     box.style.transform = "translate(" + r.left + "px," + r.top + "px)";
     box.style.width = r.width + "px";
     box.style.height = r.height + "px";
+    box.innerHTML = marker
+      ? '<span style="position:absolute;left:-2px;top:-24px;display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;padding:0 5px;border-radius:999px;background:' +
+        (marker === "A" ? CONFIG.colors.highlight : CONFIG.colors.selectB) +
+        ';color:#fff;font:700 11px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;box-shadow:0 4px 10px rgba(15,23,42,.24);">' +
+        marker +
+        "</span>"
+      : "";
   }
 
   function renderMeasureStructureInsetGuides(layer, insetData, showAllBands) {
@@ -18889,6 +19191,8 @@
     }
     var collapsed = state.panelCollapsed;
     var measurementModeActive = isMeasureTopbarMode() || isPlainSelectMode();
+    var measureTopbarActive = isMeasureTopbarMode();
+    var lockedMeasurePair = measureTopbarActive && state.measurePhase === "pairLocked";
     var measureHoverEl = state.hoveredEl || null;
     var measureSingleState = !collapsed && measurementModeActive
       ? (state.measureA ? resolveMeasureSingleState(state.measureA) : (measureHoverEl ? resolveMeasureSingleState(measureHoverEl) : null))
@@ -18909,6 +19213,7 @@
       highlight.style.display = "none";
       selectA.style.display = "none";
       selectB.style.display = "none";
+      measureToolbar.style.display = "none";
       clearLayer(sharedHighlightLayer);
       spacingLayer.style.display = "none";
       measureLayer.style.display = "none";
@@ -18945,11 +19250,11 @@
     var el = getActiveEl();
     state.primaryMeasure = collapsed || isRecordMode() || measurementModeActive ? null : hasSelectedEl() ? resolvePrimaryMeasure(state.mouseX, state.mouseY, state.hoveredEl) : null;
     updateHighlight(el);
-    updateBox(selectA, !collapsed && !isRecordMode() && measurementModeActive ? state.measureA : null);
-    updateBox(selectB, !collapsed && !isRecordMode() ? (measurementModeActive ? state.measureB : getPrimaryHoverMeasureTarget()) : null);
+    updateBox(selectA, !collapsed && !isRecordMode() && measurementModeActive ? state.measureA : null, measureTopbarActive && state.measurePhase !== "idle" ? "A" : "");
+    updateBox(selectB, !collapsed && !isRecordMode() ? (measurementModeActive ? state.measureB : getPrimaryHoverMeasureTarget()) : null, lockedMeasurePair ? "B" : "");
     renderSharedElementHighlights();
     if (!collapsed && !isRecordMode()) {
-      applyOverlayStyle(selectB, measurementModeActive && measurePairState ? OVERLAY_STYLE.selectPair : OVERLAY_STYLE.selectB);
+      applyOverlayStyle(selectB, lockedMeasurePair ? OVERLAY_STYLE.selectPair : (measurementModeActive && measurePairState ? OVERLAY_STYLE.plainPair : OVERLAY_STYLE.selectB));
     }
     if (!isEditingPanel()) renderTooltip(el);
     if (shouldShowSelectedPanel()) {
@@ -18978,6 +19283,11 @@
     } else {
       addPrimaryMeasureGuides(state.primaryMeasure);
     }
+    if (!collapsed && !isRecordMode()) {
+      renderMeasureToolbar(measurePairState);
+    } else {
+      measureToolbar.style.display = "none";
+    }
     btnMeasure.textContent = "辅助测距";
     btnMeasure.style.background = isMeasureTopbarMode() ? "#FF8A00" : "#1F6BFF";
   }
@@ -18994,7 +19304,7 @@
   function fromPoint(x, y) {
     if (shouldBlockPageSelectionDuringScrub()) return null;
     var el = deepElementFromPoint(document, x, y);
-    if (!el || tooltip.contains(el) || isNodeInsideAiChangePanel(el) || isOverlayElement(el) || isFeedbackUiElement(el)) return null;
+    if (!el || tooltip.contains(el) || isNodeInsideAiChangePanel(el) || isPluginDomElement(el) || isFeedbackUiElement(el)) return null;
     return el;
   }
   function onMouseMove(e) {
@@ -19041,13 +19351,19 @@
 
     var el = fromPoint(e.clientX, e.clientY);
     setPageHover(el);
-    if (isMeasureTopbarMode() || isPlainSelectMode()) {
+    if (isMeasureTopbarMode() && state.measurePhase === "anchorSelected") {
       if (state.measureA && el && !isHitWithinMeasureA(state.measureA, el)) {
         state.measureB = el;
       } else {
         state.measureB = null;
       }
-    } else if (state.measureB) {
+    } else if (isPlainSelectMode()) {
+      if (state.measureA && el && !isHitWithinMeasureA(state.measureA, el)) {
+        state.measureB = el;
+      } else {
+        state.measureB = null;
+      }
+    } else if (!isMeasureTopbarMode() && state.measureB) {
       state.measureB = null;
     }
     var panelTargetEl = getSelectedPanelTarget();
@@ -19192,6 +19508,7 @@
   function onClick(e) {
     if (state.panelCollapsed) return;
     if (isNumericScrubbingActive() || consumeSuppressedSelectionEvent(e)) return;
+    if (measureToolbar.contains(e.target)) return;
     if (state.v12.feedbackPopoverOpen) {
       var popoverAction = e.target && e.target.closest ? e.target.closest("[data-v12-feedback-action]") : null;
       var feedbackTarget = e.target && e.target.closest ? e.target.closest("[data-v12-feedback-popover]") : null;
@@ -19271,7 +19588,11 @@
         if (activeInput) commitFieldDraft(activeInput, { silent: true });
         clearEditingState();
       }
-      handleMeasureModeClick(el);
+      if (isMeasureTopbarMode()) {
+        handleMeasureTopbarClick(el, !!e.altKey);
+      } else {
+        handleMeasureModeClick(el);
+      }
       if (isPlainSelectMode()) {
         state.modifiedProps = {};
         state.editedProps = state.modifiedProps;
@@ -19311,6 +19632,21 @@
       setV12Mode("select");
     }
     setMeasureTopbarMode(!isMeasureTopbarMode());
+  }
+
+  function onMeasureToolbarClick(e) {
+    var target = e.target && e.target.closest ? e.target.closest("[data-vqa-measure-action]") : null;
+    if (!target || !measureToolbar.contains(target)) return;
+    var action = target.getAttribute("data-vqa-measure-action") || "";
+    if (action === "record") {
+      recordMeasureResult();
+    } else if (action === "close") {
+      clearMeasureSelection({ keepTopbarMode: true });
+      schedule();
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    if (typeof e.stopImmediatePropagation === "function") e.stopImmediatePropagation();
   }
 
   function toggleFreeze() {
@@ -19415,6 +19751,9 @@
     } else if (state.v12.recordPopoverOpen) {
       closePendingRecord();
       clearSelectedPanelHoverFreeze();
+    } else if (isMeasureTopbarMode() && !isTypingContext(e.target) && !isTypingContext(document.activeElement) && (state.measurePhase === "pairLocked" || state.measurePhase === "anchorSelected")) {
+      clearMeasureSelection({ keepTopbarMode: true });
+      schedule();
     } else if ((isMeasureTopbarMode() || isPlainSelectMode()) && (state.measureA || state.measureB || state.primaryMeasure)) {
       clearMeasureSelection({ keepTopbarMode: isMeasureTopbarMode() });
       if (isPlainSelectMode()) {
@@ -19621,7 +19960,8 @@
     floating.removeEventListener("mouseenter", onFloatEnter, true);
     floating.removeEventListener("mouseleave", onFloatLeave, true);
     btnMeasure.removeEventListener("click", onMeasureClick, true);
-    [highlight, selectA, selectB, sharedHighlightLayer, tooltip, topbarTooltip, sharedElementsTooltip, aiChangePopover, customSelectPopover, colorPickerPopover, feedbackPopover, spacingLayer, measureLayer, floating, topbar, recordMenu, regionCaptureOverlay, drawerStub, regionSelectBox, recordComposer, recordPreview, v12Notice].forEach(function (el) {
+    measureToolbar.removeEventListener("click", onMeasureToolbarClick, true);
+    [highlight, selectA, selectB, sharedHighlightLayer, tooltip, topbarTooltip, sharedElementsTooltip, aiChangePopover, customSelectPopover, colorPickerPopover, feedbackPopover, spacingLayer, measureLayer, measureToolbar, floating, topbar, recordMenu, regionCaptureOverlay, drawerStub, regionSelectBox, recordComposer, recordPreview, v12Notice].forEach(function (el) {
       if (el && el.parentNode) el.parentNode.removeChild(el);
     });
     Object.keys(bridgePending).forEach(function (requestId) {
@@ -19647,7 +19987,8 @@
       "v12-ai-change-panel-styles",
       "v12-floating-control-styles",
       "v12-feedback-popover-styles",
-      "v12-record-drawer-styles"
+      "v12-record-drawer-styles",
+      "vqa-measure-toolbar-styles"
     ].forEach(function (id) {
       var styleEl = document.getElementById(id);
       if (styleEl && styleEl.parentNode) styleEl.parentNode.removeChild(styleEl);
@@ -19729,6 +20070,7 @@
   }
 
   btnMeasure.addEventListener("click", onMeasureClick, true);
+  measureToolbar.addEventListener("click", onMeasureToolbarClick, true);
   head.addEventListener("mousedown", startDrag, true);
   topbar.addEventListener("pointerdown", onV12TopbarPointerDown, true);
   topbar.addEventListener("pointerup", onV12TopbarPointerUp, true);
