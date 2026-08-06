@@ -3195,6 +3195,9 @@
               (item.recordType === "measure"
                 ? '<span class="issue-measure-type">测量</span>'
                 : "") +
+              '<label class="issue-complete"><input type="checkbox" class="issue-complete-input" aria-label="标记第 ' +
+              esc(String(item.index)) +
+              ' 条为已完成" /><span>已完成</span></label>' +
               "</div>" +
               '<div class="issue-grid">' +
               (item.recordType === "measure" && item.measure
@@ -3263,8 +3266,9 @@
       ".section{margin-top:20px;padding:22px;}" +
       ".section h2{margin:0 0 16px;font-size:22px;line-height:1.3;}" +
       ".issue-list{display:flex;flex-direction:column;gap:18px;}" +
-      ".issue-card{display:grid;grid-template-columns:minmax(0,500px) minmax(0,1fr);gap:22px;padding:22px;border:1px solid var(--line);border-radius:26px;background:var(--panel);}" +
-      ".issue-media{width:100%;max-width:500px;min-height:320px;border-radius:22px;border:1px solid var(--line);background:#f8fafc;overflow:hidden;display:flex;align-items:center;justify-content:center;padding:18px;}" +
+      ".issue-card{display:grid;grid-template-columns:minmax(0,500px) minmax(0,1fr);gap:22px;padding:22px;border:1px solid var(--line);border-radius:26px;background:var(--panel);transition:background-color 160ms ease,border-color 160ms ease,box-shadow 160ms ease;}" +
+      ".issue-card:has(.issue-complete-input:checked){border-color:#22c55e;}" +
+      ".issue-media{width:100%;max-width:500px;min-height:320px;border-radius:22px;border:1px solid var(--line);background:#f8fafc;overflow:hidden;display:flex;align-items:center;justify-content:center;padding:18px;transition:opacity 160ms ease,filter 160ms ease;}" +
       ".shot-image{display:block;width:100%;height:auto;border-radius:16px;object-fit:contain;background:#fff;box-shadow:0 10px 24px rgba(15,23,42,.08);}" +
       ".shot-empty{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:8px;width:100%;height:100%;padding:22px;background:linear-gradient(180deg,#e2e8f0 0%,#f8fafc 100%);color:#475569;}" +
       ".shot-empty strong{font-size:16px;color:#0f172a;}" +
@@ -3273,7 +3277,14 @@
       ".issue-index{display:inline-flex;align-items:center;justify-content:center;min-width:42px;height:34px;padding:0 12px;border-radius:999px;background:var(--chip-bg);color:var(--chip-text);font-size:18px;font-weight:800;}" +
       ".issue-category{display:inline-flex;align-items:center;height:34px;padding:0 14px;border-radius:999px;background:color-mix(in srgb,var(--issue-category) 16%,white);color:var(--issue-category);font-size:15px;font-weight:700;}" +
       ".issue-measure-type{display:inline-flex;align-items:center;height:30px;padding:0 12px;border-radius:999px;background:#dcfce7;color:#15803d;font-size:13px;font-weight:800;}" +
-      ".issue-grid{display:flex;flex-direction:column;gap:10px;padding-top:6px;border-top:1px solid var(--line-soft);}" +
+      ".issue-complete{display:inline-flex;align-items:center;gap:8px;height:34px;margin-left:auto;padding:0 12px;border:1px solid var(--line);border-radius:999px;background:#f8fafc;color:#475569;font-size:13px;font-weight:700;cursor:pointer;user-select:none;transition:background-color 160ms ease,border-color 160ms ease,color 160ms ease;}" +
+      ".issue-complete:hover{background:#eef2f7;border-color:#cbd5e1;}" +
+      ".issue-complete-input{width:17px;height:17px;margin:0;accent-color:#16a34a;cursor:pointer;}" +
+      ".issue-complete-input:focus-visible{outline:2px solid #22c55e;outline-offset:3px;}" +
+      ".issue-grid{display:flex;flex-direction:column;gap:10px;padding-top:6px;border-top:1px solid var(--line-soft);transition:opacity 160ms ease;}" +
+      ".issue-card:has(.issue-complete-input:checked) .issue-complete{background:#16a34a;border-color:#16a34a;color:#fff;}" +
+      ".issue-card:has(.issue-complete-input:checked) .issue-media{opacity:.58;filter:saturate(.55);}" +
+      ".issue-card:has(.issue-complete-input:checked) .issue-grid{opacity:.58;}" +
       ".issue-field{min-width:0;padding:0;border:0;background:transparent;}" +
       ".issue-field h3{margin:0 0 6px;font-size:12px;color:var(--muted);font-weight:700;letter-spacing:.04em;text-transform:uppercase;}" +
       ".issue-field p{margin:0;color:var(--text);word-break:break-word;white-space:pre-wrap;}" +
