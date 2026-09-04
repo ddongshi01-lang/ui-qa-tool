@@ -335,6 +335,8 @@
       draft: null,
       changeDraft: null,
       changeRecordSkipDepth: 0,
+      draftErrorMessage: "",
+      draftStorageUsage: null,
       aiChangePanelOpen: false,
       aiChangeRenderSignature: "",
       aiChangePanelScrollTop: 0,
@@ -358,6 +360,17 @@
       topbarPressedPointerId: -1,
       topbarActivationAction: "",
       topbarActivationAt: 0,
+      topbarX: null,
+      topbarY: null,
+      topbarDragPending: false,
+      topbarDragging: false,
+      topbarDragMoved: false,
+      topbarDragPointerId: -1,
+      topbarDragAction: "",
+      topbarDragStartX: 0,
+      topbarDragStartY: 0,
+      topbarDragOriginX: 0,
+      topbarDragOriginY: 0,
       collapsedDrawerHovered: false,
       topbarTooltip: {
         visible: false,
@@ -411,7 +424,8 @@
   var recordComposerRenderKey = "";
   var drawerRenderKey = "";
   var draftPersistTimer = 0;
-  var draftPersistSeq = 0;
+  var draftPersistPromise = null;
+  var draftPersistRequested = false;
   var aiChangeDraftPersistTimer = 0;
   var aiChangeReplayTimerIds = [];
   var drawerClearConfirmTimerId = 0;
@@ -420,6 +434,7 @@
   var recordPopupPerfById = {};
   var recordComposerPlacementById = {};
   var recordSourceCanvasById = {};
+  var recordNoteImageProcessingById = {};
   var captureHideStyleEl = null;
   var captureRestoreTimerId = 0;
   var captureRestoreSeq = 0;
@@ -427,9 +442,14 @@
   var AI_CHANGE_DRAFT_STORAGE_KEY_PREFIX = "visual-qa:ai-change-draft:";
   var AI_CHANGE_DRAFT_PERSIST_DELAY = 320;
   var CAPTURE_RESTORE_DURATION_MS = 150;
-  var RECORD_SOURCE_LONG_EDGE = 900;
+  var RECORD_SOURCE_LONG_EDGE = 1024;
   var RECORD_THUMB_LONG_EDGE = 320;
-  var RECORD_EXPORT_LONG_EDGE = 900;
+  var RECORD_EXPORT_LONG_EDGE = 1024;
+  var RECORD_THUMB_QUALITY = 0.8;
+  var RECORD_EXPORT_QUALITY = 0.86;
+  var RECORD_IMAGE_MIME_TYPE = "image/webp";
+  var RECORD_NOTE_IMAGE_LIMIT = 3;
+  var RECORD_NOTE_IMAGE_MAX_BYTES = 1024 * 1024;
   var TOPBAR_TOOLTIP_META = {
     "mode-select": { label: "选择", shortcut: "V" },
     "mode-measure": { label: "测量", shortcut: "C" },
@@ -2734,6 +2754,7 @@
       if (!record || typeof record !== "object") return null;
       var nextRecord = cloneDraft(record);
       nextRecord.version = DRAFT_SCHEMA_VERSION;
+      nextRecord.noteImages = sanitizeFeedbackImages(nextRecord.noteImages);
       return nextRecord;
     }).filter(Boolean);
     return nextDraft;
@@ -2780,17 +2801,30 @@
   }
 
   async function loadDraftFromBridge(pageKey) {
-    var response = await bridgeRequest("load-draft", { pageKey: pageKey });
+    var response = await bridgeRequest("load-draft", { pageKey: pageKey }, 15000);
     return normalizeLoadedDraft(response.draft || null, pageKey);
   }
 
   async function saveDraftToBridge(pageKey, draft) {
-    var response = await bridgeRequest("save-draft", { pageKey: pageKey, draft: draft });
+    var response = await bridgeRequest("save-draft", { pageKey: pageKey, draft: draft }, 20000);
     return response.draft || null;
   }
 
   async function clearDraftFromBridge(pageKey) {
     await bridgeRequest("clear-draft", { pageKey: pageKey });
+  }
+
+  async function loadStorageUsageFromBridge() {
+    var response = await bridgeRequest("get-storage-usage", {}, 8000);
+    return response && response.usage ? response.usage : null;
+  }
+
+  async function refreshDraftStorageUsage() {
+    try {
+      state.v12.draftStorageUsage = await loadStorageUsageFromBridge();
+      drawerRenderKey = "";
+      schedule();
+    } catch (err) {}
   }
 
   async function requestHtmlExportDownloadFromBridge(html, filename) {
@@ -2808,26 +2842,68 @@
 
   function isBridgeUnavailableError(err) {
     var message = err && err.message ? err.message : String(err || "");
-    return /Bridge runtime unavailable|Bridge timeout|Extension context invalidated/i.test(message);
+    return /Bridge runtime unavailable|Bridge timeout|Extension context invalidated|Visual QA destroyed/i.test(message);
+  }
+
+  function waitForDraftRetry(delayMs) {
+    return new Promise(function (resolve) {
+      window.setTimeout(resolve, delayMs);
+    });
+  }
+
+  async function loadDraftWithRetry(pageKey) {
+    var retryDelays = [0, 250, 750];
+    var lastError = null;
+    for (var i = 0; i < retryDelays.length; i++) {
+      if (retryDelays[i]) await waitForDraftRetry(retryDelays[i]);
+      try {
+        return await loadDraftFromBridge(pageKey);
+      } catch (err) {
+        lastError = err;
+      }
+    }
+    throw lastError || new Error("Draft load failed");
   }
 
   async function initializeV12DraftState() {
     var pageKey = normalizePageKey(location.href);
-    if (!pageKey) return;
+    if (!pageKey) return false;
     state.v12.draftStatus = "loading";
+    state.v12.draftErrorMessage = "";
+    drawerRenderKey = "";
+    schedule();
     try {
-      var storedDraft = await loadDraftFromBridge(pageKey);
+      var storedDraft = await loadDraftWithRetry(pageKey);
       state.v12.draft = storedDraft || buildEmptyDraft(pageKey);
       state.v12.bridgeReady = true;
       state.v12.draftStatus = "ready";
+      state.v12.draftErrorMessage = "";
+      drawerRenderKey = "";
+      schedule();
+      void refreshDraftStorageUsage();
+      return true;
     } catch (err) {
-      state.v12.draft = buildEmptyDraft(pageKey);
+      state.v12.draft = null;
       state.v12.bridgeReady = false;
-      state.v12.draftStatus = "ready";
+      state.v12.draftStatus = "load-error";
+      state.v12.draftErrorMessage = err && err.message ? err.message : "草稿读取失败";
+      drawerRenderKey = "";
+      showV12Notice("记录恢复失败，请重试或刷新页面；当前不会创建空草稿", 10000);
+      schedule();
       if (!isBridgeUnavailableError(err)) {
         console.warn("[visual-qa][v1.2] draft bridge unavailable:", err);
       }
+      return false;
     }
+  }
+
+  async function retryCurrentDraftPersistence() {
+    if (state.v12.draftStatus === "load-error") {
+      await initializeV12DraftState();
+      return;
+    }
+    showV12Notice("正在重试保存");
+    await safePersistCurrentDraft();
   }
 
   function initializeAiChangeDraftState() {
@@ -2944,6 +3020,26 @@
     return truncateText(title || host || "当前页面", 46);
   }
 
+  function getDraftStorageUsageRatio() {
+    var usage = state.v12.draftStorageUsage;
+    if (!usage) return 0;
+    if (usage.estimatedQuota > 0) return usage.estimatedUsage / usage.estimatedQuota;
+    if (usage.localQuota > 0) return usage.localBytes / usage.localQuota;
+    return 0;
+  }
+
+  function getDraftStatusMeta() {
+    var status = state.v12.draftStatus;
+    if (status === "load-error") return { label: "恢复失败", color: "#fca5a5", retry: true };
+    if (status === "error") return { label: "保存失败", color: "#fca5a5", retry: true };
+    if (status === "loading") return { label: "正在恢复…", color: "#fbbf24", retry: false };
+    if (status === "saving") return { label: "正在保存…", color: "#fbbf24", retry: false };
+    var usageRatio = getDraftStorageUsageRatio();
+    if (usageRatio >= 0.95) return { label: "存储空间接近用尽", color: "#fca5a5", retry: false };
+    if (usageRatio >= 0.8) return { label: "存储空间不足", color: "#fbbf24", retry: false };
+    return { label: "已安全保存", color: "#86efac", retry: false };
+  }
+
   function getDrawerRenderKey() {
     var records = getDrawerVisibleRecords();
     var ids = [];
@@ -2960,6 +3056,9 @@
       state.v12.drawerOpen ? "open" : "closed",
       getDrawerCategoryFilter(),
       getV12RecordCount(),
+      state.v12.draftStatus || "",
+      state.v12.draftErrorMessage || "",
+      Math.round(getDraftStorageUsageRatio() * 1000),
       state.v12.drawerMenuRecordId || "",
       state.v12.drawerClearConfirmArmed ? "clear-confirm" : "clear-default",
       ids.join("|")
@@ -3135,6 +3234,11 @@
     return "";
   }
 
+  function isRecordExportLowQuality(record) {
+    if (!record || !record.shot || !record.shot.thumb) return false;
+    return !record.shot.export || record.shot.export === record.shot.thumb;
+  }
+
   function buildRecordExportPageInfo(record) {
     return {
       pageTitle: record && record.pageTitle ? String(record.pageTitle).trim() : "",
@@ -3142,18 +3246,76 @@
     };
   }
 
+  function buildRecordDeveloperLocator(record) {
+    if (!record || record.type !== "element") return null;
+    var targetHint = record.targetHint && typeof record.targetHint === "object" ? record.targetHint : {};
+    var storedLocator = targetHint.codeLocator && typeof targetHint.codeLocator === "object"
+      ? targetHint.codeLocator
+      : null;
+    if (storedLocator && storedLocator.value) {
+      return {
+        label: storedLocator.kind === "path" ? "页面路径" : "建议搜索",
+        value: String(storedLocator.value).trim()
+      };
+    }
+
+    var legacyClassName = normalizeCodeLocatorClassName(String(targetHint.className || "").split(".")[0]);
+    if (legacyClassName) return { label: "建议搜索", value: legacyClassName };
+    var legacyText = truncateText(targetHint.text || "", 40);
+    if (legacyText) return { label: "建议搜索", value: '"' + legacyText + '"' };
+    return null;
+  }
+
+  function sanitizeFeedbackImages(images) {
+    return (Array.isArray(images) ? images : []).map(function (item, index) {
+      if (!item || typeof item !== "object") return null;
+      var src = String(item.src || "").trim();
+      if (!/^data:image\//i.test(src)) return null;
+      return {
+        id: String(item.id || "feedback-image-" + String(index + 1)).slice(0, 160),
+        src: src
+      };
+    }).filter(Boolean).slice(0, 3);
+  }
+
+  function buildRecordNoteImagesHtml(images) {
+    var safeImages = sanitizeFeedbackImages(images);
+    if (!safeImages.length) return "";
+    return (
+      '<div class="issue-note-images"><h4>设计参考截图</h4><div class="issue-note-images-grid">' +
+      safeImages.map(function (item, index) {
+        return (
+          '<button type="button" class="issue-note-image-open" data-shot-open data-record-note-image-id="' +
+          esc(item.id) +
+          '" aria-label="查看设计参考截图 ' +
+          esc(String(index + 1)) +
+          '"><img class="issue-note-image" src="' +
+          esc(item.src) +
+          '" alt="设计参考截图 ' +
+          esc(String(index + 1)) +
+          '" /></button>'
+        );
+      }).join("") +
+      "</div></div>"
+    );
+  }
+
   function buildHtmlExportRecordViewModels(records) {
     return sortRecordsByCreatedAt(records).map(function (record, index) {
-      var category = getRecordCategory(record && record.category ? record.category : "layout");
+      var category = getRecordCategory(record && record.category ? record.category : "default");
       var pageInfo = buildRecordExportPageInfo(record);
       var changeSummaryLines = getRecordChangeSummaryLines(record);
       return {
         index: index + 1,
+        recordKey: record && record.id ? String(record.id) : "issue-" + String(index + 1),
         imageSrc: getRecordExportImageSrc(record),
-        categoryLabel: category && category.label ? category.label : "布局",
+        imageIsLowQuality: isRecordExportLowQuality(record),
+        categoryLabel: category && category.label ? category.label : "默认",
         categoryColor: category && category.color ? category.color : "#94a3b8",
         note: record && record.note ? String(record.note).trim() : "",
+        noteImages: sanitizeFeedbackImages(record && record.noteImages),
         changeSummaryLines: changeSummaryLines,
+        developerLocator: buildRecordDeveloperLocator(record),
         pageTitle: pageInfo.pageTitle,
         pageUrl: pageInfo.pageUrl,
         recordType: isMeasureRecord(record) ? "measure" : "plain",
@@ -3173,12 +3335,21 @@
       ? items
           .map(function (item) {
             var imageHtml = item.imageSrc
-              ? '<img src="' +
+              ? '<button type="button" class="shot-open" data-shot-open aria-label="查看第 ' +
+                esc(String(item.index)) +
+                ' 条截图原尺寸"><img src="' +
                 esc(item.imageSrc) +
-                '" alt="记录导出图" class="shot-image" />'
+                '" alt="记录导出图" class="shot-image' +
+                (item.imageIsLowQuality ? " shot-image-low-quality" : "") +
+                '" /><span class="shot-zoom-hint">点击查看原图</span></button>' +
+                (item.imageIsLowQuality
+                  ? '<div class="shot-quality-note">仅有低清缩略图，请重新截图后导出高清版本</div>'
+                  : "")
               : '<div class="shot-empty"><strong>暂无导出图</strong><span>该记录未生成 export 图，导出未中断，可稍后回到记录页重新截图后再导出。</span></div>';
             return (
-              '<article class="issue-card">' +
+              '<article class="issue-card" data-issue-card data-record-key="' +
+              esc(item.recordKey) +
+              '">' +
               '<div class="issue-media">' +
               imageHtml +
               "</div>" +
@@ -3210,10 +3381,11 @@
                   "</section>"
                 : "") +
               '<section class="issue-field issue-note">' +
-              "<h3>备注</h3>" +
+              "<h3>问题说明</h3>" +
               "<p>" +
               esc(item.note || "未填写备注") +
               "</p>" +
+              buildRecordNoteImagesHtml(item.noteImages) +
               "</section>" +
               (item.changeSummaryLines && item.changeSummaryLines.length
                 ? '<section class="issue-field issue-change-summary">' +
@@ -3231,6 +3403,30 @@
                   "</div>" +
                   "</section>"
                 : "") +
+              (item.developerLocator
+                ? '<section class="issue-field issue-developer-locator">' +
+                  "<h3>研发定位</h3>" +
+                  '<div class="issue-locator-row"><span class="issue-locator-label">' +
+                  esc(item.developerLocator.label) +
+                  "</span><code>" +
+                  esc(item.developerLocator.value) +
+                  '</code><button type="button" class="issue-locator-copy" data-locator-copy data-copy-value="' +
+                  esc(item.developerLocator.value) +
+                  '">复制</button></div>' +
+                  "</section>"
+                : "") +
+              '<section class="issue-field issue-feedback">' +
+              '<div class="issue-feedback-head"><h3>问题备注</h3><span>开发反馈</span></div>' +
+              '<textarea data-issue-feedback data-record-key="' +
+              esc(item.recordKey) +
+              '" aria-label="填写第 ' +
+              esc(String(item.index)) +
+              ' 条问题备注" placeholder="填写处理情况、待确认事项或回复；也可以直接粘贴截图…"></textarea>' +
+              '<div class="issue-feedback-images" data-feedback-images data-record-key="' +
+              esc(item.recordKey) +
+              '"></div>' +
+              '<div class="issue-feedback-paste-hint">可直接粘贴截图，最多 3 张；图片会压缩并写入反馈版 HTML</div>' +
+              "</section>" +
               "</div>" +
               "</div>" +
               "</article>"
@@ -3264,12 +3460,23 @@
       ".label{font-size:12px;color:var(--muted);margin-bottom:6px;font-weight:600;}" +
       ".value{font-size:16px;font-weight:700;line-height:1.45;word-break:break-word;}" +
       ".section{margin-top:20px;padding:22px;}" +
-      ".section h2{margin:0 0 16px;font-size:22px;line-height:1.3;}" +
+      ".section-head{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:0 0 8px;}" +
+      ".section h2{margin:0;font-size:22px;line-height:1.3;}" +
+      ".feedback-save{flex:0 0 auto;padding:9px 14px;border:1px solid #bfdbfe;border-radius:10px;background:#eff6ff;color:#1d4ed8;font:700 13px/1.2 -apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;cursor:pointer;}" +
+      ".feedback-save:hover{border-color:#93c5fd;background:#dbeafe;}" +
+      ".feedback-save:focus-visible{outline:3px solid #93c5fd;outline-offset:2px;}" +
+      ".feedback-tip{margin:0 0 16px;color:var(--muted);font-size:12px;}" +
+      ".feedback-status{color:#15803d;font-weight:700;}" +
       ".issue-list{display:flex;flex-direction:column;gap:18px;}" +
-      ".issue-card{display:grid;grid-template-columns:minmax(0,500px) minmax(0,1fr);gap:22px;padding:22px;border:1px solid var(--line);border-radius:26px;background:var(--panel);transition:background-color 160ms ease,border-color 160ms ease,box-shadow 160ms ease;}" +
+      ".issue-card{display:grid;grid-template-columns:minmax(0,720px) minmax(280px,1fr);gap:22px;padding:22px;border:1px solid var(--line);border-radius:26px;background:var(--panel);transition:background-color 160ms ease,border-color 160ms ease,box-shadow 160ms ease;}" +
       ".issue-card:has(.issue-complete-input:checked){border-color:#22c55e;}" +
-      ".issue-media{width:100%;max-width:500px;min-height:320px;border-radius:22px;border:1px solid var(--line);background:#f8fafc;overflow:hidden;display:flex;align-items:center;justify-content:center;padding:18px;transition:opacity 160ms ease,filter 160ms ease;}" +
+      ".issue-media{width:100%;max-width:720px;min-height:320px;border-radius:22px;border:1px solid var(--line);background:#f8fafc;overflow:hidden;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:18px;transition:opacity 160ms ease,filter 160ms ease;}" +
+      ".shot-open{position:relative;display:block;width:100%;padding:0;border:0;border-radius:16px;background:transparent;cursor:zoom-in;}" +
+      ".shot-open:focus-visible{outline:3px solid var(--accent);outline-offset:4px;}" +
       ".shot-image{display:block;width:100%;height:auto;border-radius:16px;object-fit:contain;background:#fff;box-shadow:0 10px 24px rgba(15,23,42,.08);}" +
+      ".shot-image-low-quality{width:auto;max-width:min(100%,320px);margin:0 auto;}" +
+      ".shot-zoom-hint{position:absolute;right:10px;bottom:10px;padding:5px 9px;border-radius:999px;background:rgba(15,23,42,.78);color:#fff;font-size:11px;font-weight:700;line-height:1.2;pointer-events:none;}" +
+      ".shot-quality-note{color:#b45309;font-size:12px;line-height:1.5;text-align:center;}" +
       ".shot-empty{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:8px;width:100%;height:100%;padding:22px;background:linear-gradient(180deg,#e2e8f0 0%,#f8fafc 100%);color:#475569;}" +
       ".shot-empty strong{font-size:16px;color:#0f172a;}" +
       ".issue-body{min-width:0;display:flex;flex-direction:column;gap:14px;}" +
@@ -3289,17 +3496,62 @@
       ".issue-field h3{margin:0 0 6px;font-size:12px;color:var(--muted);font-weight:700;letter-spacing:.04em;text-transform:uppercase;}" +
       ".issue-field p{margin:0;color:var(--text);word-break:break-word;white-space:pre-wrap;}" +
       ".issue-note p{font-size:16px;line-height:1.75;color:#0f172a;}" +
+      ".issue-note-images{margin-top:12px;}" +
+      ".issue-note-images h4{margin:0 0 7px;color:#64748b;font-size:11px;font-weight:700;}" +
+      ".issue-note-images-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;}" +
+      ".issue-note-image-open{display:block;width:100%;height:92px;padding:0;border:1px solid var(--line);border-radius:10px;background:#f1f5f9;overflow:hidden;cursor:zoom-in;}" +
+      ".issue-note-image{display:block;width:100%;height:100%;object-fit:cover;}" +
+      ".issue-feedback{margin-top:4px;padding-top:12px;border-top:1px solid var(--line-soft);}" +
+      ".issue-feedback-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:7px;}" +
+      ".issue-feedback-head h3{margin:0;}" +
+      ".issue-feedback-head span{color:#94a3b8;font-size:11px;font-weight:600;}" +
+      ".issue-feedback textarea{display:block;width:100%;min-height:92px;padding:11px 12px;border:1px solid var(--line);border-radius:12px;background:#f8fafc;color:var(--text);font:14px/1.65 -apple-system,BlinkMacSystemFont,\"Segoe UI\",Roboto,\"PingFang SC\",\"Microsoft YaHei\",sans-serif;resize:vertical;}" +
+      ".issue-feedback textarea::placeholder{color:#94a3b8;}" +
+      ".issue-feedback textarea:hover{border-color:#cbd5e1;}" +
+      ".issue-feedback textarea:focus{border-color:#60a5fa;outline:3px solid #dbeafe;background:#fff;}" +
+      ".issue-feedback-images{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:9px;}" +
+      ".issue-feedback-images:empty{display:none;}" +
+      ".issue-feedback-image-item{position:relative;min-width:0;border:1px solid var(--line);border-radius:10px;background:#fff;overflow:hidden;}" +
+      ".issue-feedback-image-open{display:block;width:100%;height:86px;padding:0;border:0;background:#f1f5f9;cursor:zoom-in;}" +
+      ".issue-feedback-image{display:block;width:100%;height:100%;object-fit:cover;}" +
+      ".issue-feedback-image-remove{position:absolute;top:5px;right:5px;padding:5px 7px;border:0;border-radius:7px;background:rgba(15,23,42,.76);color:#fff;font:700 11px/1 -apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;cursor:pointer;}" +
+      ".issue-feedback-image-remove:hover{background:#dc2626;}" +
+      ".issue-feedback-paste-hint{margin-top:7px;color:#94a3b8;font-size:11px;line-height:1.5;}" +
       ".issue-measure-summary p{font-size:15px;line-height:1.65;color:#0f172a;font-weight:700;}" +
       ".issue-measure-meta{margin-top:6px;color:#64748b;font-size:12px;line-height:1.55;word-break:break-word;}" +
       ".issue-change-summary-list{display:flex;flex-direction:column;gap:4px;}" +
       ".issue-change-summary-item{color:#334155;font-size:13px;line-height:1.55;word-break:break-word;}" +
+      ".issue-locator-row{display:flex;align-items:center;gap:8px;min-width:0;}" +
+      ".issue-locator-label{flex:0 0 auto;color:var(--muted);font-size:12px;}" +
+      ".issue-locator-row code{min-width:0;overflow:hidden;color:#334155;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;text-overflow:ellipsis;white-space:nowrap;}" +
+      ".issue-locator-copy{flex:0 0 auto;margin-left:auto;padding:5px 9px;border:1px solid var(--line);border-radius:8px;background:#f8fafc;color:#475569;font:600 11px/1 -apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;cursor:pointer;}" +
+      ".issue-locator-copy:hover{background:#eef2f7;border-color:#cbd5e1;}" +
       ".empty-state{padding:28px;border-radius:18px;border:1px dashed var(--line-strong);background:var(--panel-soft);color:var(--muted);text-align:center;}" +
-      "@media (max-width:960px){.hero-main{flex-direction:column;}.hero-meta{min-width:0;width:100%;}.issue-card{grid-template-columns:1fr;}.issue-media{min-height:200px;}.report{width:calc(100vw - 24px);}}" +
-      "@media (max-width:640px){body{padding:18px 12px 32px;}.hero,.section{padding:18px;border-radius:24px;}.hero h1{font-size:24px;}.issue-card{padding:16px;border-radius:24px;}.issue-media{padding:14px;}.issue-index{font-size:16px;height:32px;}.issue-category{font-size:13px;height:32px;}.issue-note p{font-size:15px;}}" +
+      ".shot-dialog{width:calc(100vw - 32px);max-width:none;height:calc(100vh - 32px);max-height:none;margin:auto;padding:0;border:1px solid rgba(255,255,255,.18);border-radius:22px;background:#0f172a;color:#fff;box-shadow:0 28px 80px rgba(15,23,42,.5);overflow:hidden;}" +
+      ".shot-dialog::backdrop{background:rgba(15,23,42,.72);backdrop-filter:blur(4px);}" +
+      ".shot-dialog-shell{display:flex;flex-direction:column;width:100%;height:100%;}" +
+      ".shot-dialog-head{display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid rgba(255,255,255,.12);}" +
+      ".shot-dialog-title{font-size:14px;font-weight:700;}" +
+      ".shot-dialog-actions{display:flex;align-items:center;gap:6px;margin-left:auto;}" +
+      ".shot-dialog-control{display:inline-flex;align-items:center;justify-content:center;min-width:34px;height:32px;padding:0 10px;border:1px solid rgba(255,255,255,.16);border-radius:9px;background:rgba(255,255,255,.08);color:#fff;font:600 12px/1 -apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;cursor:pointer;}" +
+      ".shot-dialog-control:hover{background:rgba(255,255,255,.14);}" +
+      ".shot-dialog-control[aria-pressed=\"true\"]{border-color:#60a5fa;background:#2563eb;}" +
+      ".shot-dialog-control:disabled{opacity:.38;cursor:not-allowed;}" +
+      ".shot-dialog-zoom{min-width:48px;color:rgba(255,255,255,.78);font-size:12px;font-weight:700;text-align:center;}" +
+      ".shot-dialog-close{padding:8px 12px;border:1px solid rgba(255,255,255,.16);border-radius:10px;background:rgba(255,255,255,.1);color:#fff;font:600 13px/1 -apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;cursor:pointer;}" +
+      ".shot-dialog-stage{flex:1 1 auto;min-width:0;min-height:0;padding:18px;}" +
+      ".shot-dialog-stage.is-fit{display:flex;align-items:center;justify-content:center;overflow:hidden;}" +
+      ".shot-dialog-stage.is-zoomed{display:block;overflow:auto;}" +
+      ".shot-dialog-image{display:block;width:auto;height:auto;max-width:100%;max-height:100%;margin:0 auto;background:#fff;object-fit:contain;}" +
+      "@media (max-width:720px){.shot-dialog-head{flex-wrap:wrap;}.shot-dialog-actions{order:3;width:100%;justify-content:center;}.shot-dialog-close{margin-left:auto;}}" +
+      "@media (max-width:1120px){.hero-main{flex-direction:column;}.hero-meta{min-width:0;width:100%;}.issue-card{grid-template-columns:1fr;}.issue-media{min-height:200px;}.report{width:calc(100vw - 24px);}}" +
+      "@media (max-width:640px){body{padding:18px 12px 32px;}.hero,.section{padding:18px;border-radius:24px;}.hero h1{font-size:24px;}.section-head{align-items:flex-start;flex-direction:column;}.feedback-save{width:100%;}.issue-card{padding:16px;border-radius:24px;}.issue-media{padding:14px;}.issue-index{font-size:16px;height:32px;}.issue-category{font-size:13px;height:32px;}.issue-note p{font-size:15px;}}" +
       "</style>" +
       "</head>" +
       "<body>" +
-      '<main class="report">' +
+      '<main class="report" data-report-id="' +
+      esc(String(pageUrl || "") + "::" + String(effectiveExportedAt || "")) +
+      '">' +
       '<section class="hero">' +
       '<p class="eyebrow">Visual QA HTML Report</p>' +
       '<div class="hero-main">' +
@@ -3322,12 +3574,49 @@
       "</div>" +
       "</section>" +
       '<section class="section">' +
-      "<h2>问题列表</h2>" +
+      '<div class="section-head"><h2>问题列表</h2><button type="button" class="feedback-save" data-feedback-download>导出反馈版 HTML</button></div>' +
+      '<p class="feedback-tip">反馈仅暂存到当前浏览器；发送给他人前，请导出反馈版。<span class="feedback-status" data-feedback-status aria-live="polite"></span></p>' +
       '<div class="issue-list">' +
       listHtml +
       "</div>" +
       "</section>" +
       "</main>" +
+      '<dialog class="shot-dialog" data-shot-dialog aria-label="截图预览"><div class="shot-dialog-shell"><div class="shot-dialog-head"><span class="shot-dialog-title">截图预览</span><div class="shot-dialog-actions" role="toolbar" aria-label="截图缩放"><button type="button" class="shot-dialog-control" data-shot-action="zoom-out" aria-label="缩小">−</button><span class="shot-dialog-zoom" data-shot-zoom aria-live="polite">适应</span><button type="button" class="shot-dialog-control" data-shot-action="zoom-in" aria-label="放大">+</button><button type="button" class="shot-dialog-control" data-shot-action="fit" aria-pressed="true">适应窗口</button><button type="button" class="shot-dialog-control" data-shot-action="actual" aria-pressed="false">100%</button></div><button type="button" class="shot-dialog-close" data-shot-close>关闭</button></div><div class="shot-dialog-stage is-fit" data-shot-stage><img class="shot-dialog-image" data-shot-dialog-image alt="截图预览" /></div></div></dialog>' +
+      '<script>(function(){' +
+      'var dialog=document.querySelector("[data-shot-dialog]");var preview=document.querySelector("[data-shot-dialog-image]");var stage=document.querySelector("[data-shot-stage]");var zoomText=document.querySelector("[data-shot-zoom]");var fitButton=document.querySelector("[data-shot-action=fit]");var actualButton=document.querySelector("[data-shot-action=actual]");var zoomOutButton=document.querySelector("[data-shot-action=zoom-out]");var zoomInButton=document.querySelector("[data-shot-action=zoom-in]");var previewMode="fit";var zoom=1;' +
+      'var report=document.querySelector("[data-report-id]");var feedbackFields=document.querySelectorAll("[data-issue-feedback]");var completeFields=document.querySelectorAll(".issue-complete-input");var feedbackStatus=document.querySelector("[data-feedback-status]");var feedbackDownload=document.querySelector("[data-feedback-download]");var feedbackStorageKey="pixel-audit-report-feedback::"+(report?report.getAttribute("data-report-id"):document.title);var storageAvailable=true;var saveStatusTimer=0;' +
+      'var feedbackImages={};var feedbackImageDbName="pixel-audit-report-images";var feedbackImageStoreName="reports";var feedbackImageLimit=3;var feedbackImageDbPromise=null;' +
+      'function clampZoom(value){return Math.max(.5,Math.min(2,value));}' +
+      'function renderedScale(){if(!preview||!preview.naturalWidth)return 1;return preview.getBoundingClientRect().width/preview.naturalWidth;}' +
+      'function syncControls(scale){var value=Math.max(0,scale||1);if(zoomText)zoomText.textContent=Math.round(value*100)+"%";if(fitButton)fitButton.setAttribute("aria-pressed",previewMode==="fit"?"true":"false");if(actualButton)actualButton.setAttribute("aria-pressed",previewMode!=="fit"&&Math.abs(zoom-1)<.001?"true":"false");if(zoomOutButton)zoomOutButton.disabled=value<=.5;if(zoomInButton)zoomInButton.disabled=value>=2;}' +
+      'function fitPreview(){if(!preview||!stage)return;previewMode="fit";stage.classList.add("is-fit");stage.classList.remove("is-zoomed");preview.style.width="auto";preview.style.height="auto";preview.style.maxWidth="100%";preview.style.maxHeight="100%";window.requestAnimationFrame(function(){syncControls(renderedScale());});}' +
+      'function zoomPreview(value){if(!preview||!stage||!preview.naturalWidth||!preview.naturalHeight)return;previewMode="zoom";zoom=clampZoom(value);stage.classList.remove("is-fit");stage.classList.add("is-zoomed");preview.style.width=Math.round(preview.naturalWidth*zoom)+"px";preview.style.height=Math.round(preview.naturalHeight*zoom)+"px";preview.style.maxWidth="none";preview.style.maxHeight="none";syncControls(zoom);window.requestAnimationFrame(function(){stage.scrollLeft=Math.max(0,(preview.offsetWidth-stage.clientWidth)/2);stage.scrollTop=Math.max(0,(preview.offsetHeight-stage.clientHeight)/2);});}' +
+      'function stepZoom(direction){var current=previewMode==="fit"?renderedScale():zoom;if(direction<0&&current<=.5)return;var next=direction>0?Math.ceil((current+.001)*4)/4:Math.floor((current-.001)*4)/4;zoomPreview(next);}' +
+      'function resetPreview(){if(!preview)return;preview.onload=null;preview.removeAttribute("src");previewMode="fit";zoom=1;}' +
+      'function closePreview(){if(!dialog||!preview)return;if(typeof dialog.close==="function"&&dialog.open)dialog.close();else dialog.removeAttribute("open");resetPreview();}' +
+      'function fallbackCopy(value){var field=document.createElement("textarea");field.value=value;field.setAttribute("readonly","");field.style.position="fixed";field.style.opacity="0";document.body.appendChild(field);field.select();var copied=false;try{copied=document.execCommand("copy");}catch(error){}field.remove();return copied;}' +
+      'function copyLocator(button){var value=button.getAttribute("data-copy-value")||"";if(!value)return;var done=function(copied){if(!copied)return;var original=button.textContent;button.textContent="已复制";window.setTimeout(function(){button.textContent=original;},1200);};if(navigator.clipboard&&window.isSecureContext){navigator.clipboard.writeText(value).then(function(){done(true);}).catch(function(){done(fallbackCopy(value));});}else{done(fallbackCopy(value));}}' +
+      'function setFeedbackStatus(text){if(!feedbackStatus)return;feedbackStatus.textContent=text?" · "+text:"";if(saveStatusTimer)window.clearTimeout(saveStatusTimer);if(text){saveStatusTimer=window.setTimeout(function(){feedbackStatus.textContent="";},1800);}}' +
+      'function collectFeedbackState(){var state={notes:{},completed:{}};feedbackFields.forEach(function(field){var key=field.getAttribute("data-record-key")||"";if(key)state.notes[key]=field.value||"";});document.querySelectorAll("[data-issue-card]").forEach(function(card){var key=card.getAttribute("data-record-key")||"";var checkbox=card.querySelector(".issue-complete-input");if(key&&checkbox)state.completed[key]=!!checkbox.checked;});return state;}' +
+      'function saveFeedbackState(){if(!storageAvailable){setFeedbackStatus("暂存失败，请立即导出反馈版");return;}try{window.localStorage.setItem(feedbackStorageKey,JSON.stringify(collectFeedbackState()));setFeedbackStatus("已暂存到本机，发送前请导出反馈版");}catch(error){storageAvailable=false;setFeedbackStatus("暂存失败，请立即导出反馈版");}}' +
+      'function restoreFeedbackState(){try{var raw=window.localStorage.getItem(feedbackStorageKey);if(!raw)return;var state=JSON.parse(raw);feedbackFields.forEach(function(field){var key=field.getAttribute("data-record-key")||"";if(state.notes&&typeof state.notes[key]==="string")field.value=state.notes[key];});document.querySelectorAll("[data-issue-card]").forEach(function(card){var key=card.getAttribute("data-record-key")||"";var checkbox=card.querySelector(".issue-complete-input");if(checkbox&&state.completed&&typeof state.completed[key]==="boolean")checkbox.checked=state.completed[key];});}catch(error){storageAvailable=false;}}' +
+      'function collectEmbeddedFeedbackImages(){document.querySelectorAll("[data-feedback-images]").forEach(function(container){var key=container.getAttribute("data-record-key")||"";if(!key)return;var images=[];container.querySelectorAll("[data-feedback-image-id]").forEach(function(item){var image=item.querySelector("img");if(image&&image.src)images.push({id:item.getAttribute("data-feedback-image-id")||String(Date.now()),src:image.src});});if(images.length)feedbackImages[key]=images.slice(0,feedbackImageLimit);});}' +
+      'function renderFeedbackImages(key){var container=null;document.querySelectorAll("[data-feedback-images]").forEach(function(candidate){if(candidate.getAttribute("data-record-key")===key)container=candidate;});if(!container)return;container.textContent="";(feedbackImages[key]||[]).forEach(function(item,index){var wrapper=document.createElement("div");wrapper.className="issue-feedback-image-item";wrapper.setAttribute("data-feedback-image-id",item.id);var opener=document.createElement("button");opener.type="button";opener.className="issue-feedback-image-open";opener.setAttribute("data-shot-open","");opener.setAttribute("aria-label","查看问题备注截图 "+String(index+1));var image=document.createElement("img");image.className="issue-feedback-image";image.src=item.src;image.alt="问题备注截图 "+String(index+1);var remove=document.createElement("button");remove.type="button";remove.className="issue-feedback-image-remove";remove.setAttribute("data-feedback-image-remove","");remove.setAttribute("data-record-key",key);remove.setAttribute("data-feedback-image-id",item.id);remove.textContent="删除";opener.appendChild(image);wrapper.appendChild(opener);wrapper.appendChild(remove);container.appendChild(wrapper);});}' +
+      'function renderAllFeedbackImages(){document.querySelectorAll("[data-feedback-images]").forEach(function(container){var key=container.getAttribute("data-record-key")||"";if(key)renderFeedbackImages(key);});}' +
+      'function openFeedbackImageDb(){if(feedbackImageDbPromise)return feedbackImageDbPromise;feedbackImageDbPromise=new Promise(function(resolve,reject){if(!window.indexedDB){reject(new Error("IndexedDB unavailable"));return;}var request=window.indexedDB.open(feedbackImageDbName,1);request.onupgradeneeded=function(){var db=request.result;if(!db.objectStoreNames.contains(feedbackImageStoreName))db.createObjectStore(feedbackImageStoreName,{keyPath:"id"});};request.onsuccess=function(){resolve(request.result);};request.onerror=function(){reject(request.error||new Error("Open IndexedDB failed"));};});return feedbackImageDbPromise;}' +
+      'function saveFeedbackImages(){return openFeedbackImageDb().then(function(db){return new Promise(function(resolve,reject){var transaction=db.transaction(feedbackImageStoreName,"readwrite");transaction.objectStore(feedbackImageStoreName).put({id:feedbackStorageKey,images:feedbackImages,updatedAt:Date.now()});transaction.oncomplete=function(){resolve();};transaction.onerror=function(){reject(transaction.error||new Error("Save images failed"));};});});}' +
+      'function restoreFeedbackImages(){return openFeedbackImageDb().then(function(db){return new Promise(function(resolve,reject){var request=db.transaction(feedbackImageStoreName,"readonly").objectStore(feedbackImageStoreName).get(feedbackStorageKey);request.onsuccess=function(){if(request.result&&request.result.images){feedbackImages=request.result.images;renderAllFeedbackImages();}resolve();};request.onerror=function(){reject(request.error||new Error("Read images failed"));};});}).catch(function(){});}' +
+      'function feedbackImageBytes(dataUrl){var comma=dataUrl.indexOf(",");return comma<0?dataUrl.length:Math.ceil((dataUrl.length-comma-1)*3/4);}' +
+      'function compressFeedbackImage(file){return new Promise(function(resolve,reject){var objectUrl=URL.createObjectURL(file);var image=new Image();image.onload=function(){try{var attempts=[{edge:1600,quality:.86},{edge:1360,quality:.8},{edge:1120,quality:.76}];var result="";for(var i=0;i<attempts.length;i++){var scale=Math.min(1,attempts[i].edge/Math.max(image.naturalWidth,image.naturalHeight));var width=Math.max(1,Math.round(image.naturalWidth*scale));var height=Math.max(1,Math.round(image.naturalHeight*scale));var canvas=document.createElement("canvas");canvas.width=width;canvas.height=height;var context=canvas.getContext("2d");context.imageSmoothingEnabled=true;context.imageSmoothingQuality="high";context.drawImage(image,0,0,width,height);result=canvas.toDataURL("image/webp",attempts[i].quality);if(feedbackImageBytes(result)<=1048576)break;}URL.revokeObjectURL(objectUrl);resolve({id:String(Date.now())+"-"+Math.random().toString(36).slice(2,8),src:result});}catch(error){URL.revokeObjectURL(objectUrl);reject(error);}};image.onerror=function(){URL.revokeObjectURL(objectUrl);reject(new Error("Read pasted image failed"));};image.src=objectUrl;});}' +
+      'function insertPastedText(field,text){if(!text)return;var start=typeof field.selectionStart==="number"?field.selectionStart:field.value.length;var end=typeof field.selectionEnd==="number"?field.selectionEnd:start;field.setRangeText(text,start,end,"end");field.dispatchEvent(new Event("input",{bubbles:true}));}' +
+      'function handleFeedbackImagePaste(event,field){var clipboard=event.clipboardData;if(!clipboard||!clipboard.items)return;var files=[];for(var i=0;i<clipboard.items.length;i++){var item=clipboard.items[i];if(item&&item.kind==="file"&&String(item.type||"").indexOf("image/")===0){var file=item.getAsFile();if(file)files.push(file);}}if(!files.length)return;event.preventDefault();insertPastedText(field,clipboard.getData("text/plain")||"");var key=field.getAttribute("data-record-key")||"";var current=feedbackImages[key]||[];var available=Math.max(0,feedbackImageLimit-current.length);if(!available){setFeedbackStatus("每条问题最多粘贴 3 张图片");return;}setFeedbackStatus("正在处理图片…");Promise.all(files.slice(0,available).map(compressFeedbackImage)).then(function(images){feedbackImages[key]=(feedbackImages[key]||[]).concat(images).slice(0,feedbackImageLimit);renderFeedbackImages(key);return saveFeedbackImages();}).then(function(){setFeedbackStatus(files.length>available?"图片已暂存，多余图片未加入":"图片已暂存到本机，发送前请导出反馈版");}).catch(function(){renderFeedbackImages(key);setFeedbackStatus("图片暂存失败，请立即导出反馈版");});}' +
+      'function removeFeedbackImage(button){var key=button.getAttribute("data-record-key")||"";var id=button.getAttribute("data-feedback-image-id")||"";feedbackImages[key]=(feedbackImages[key]||[]).filter(function(item){return item.id!==id;});renderFeedbackImages(key);saveFeedbackImages().then(function(){setFeedbackStatus("修改已暂存到本机，发送前请导出反馈版");}).catch(function(){setFeedbackStatus("暂存失败，请立即导出反馈版");});}' +
+      'function feedbackFileName(){var name="visual-qa-report.html";try{name=decodeURIComponent(location.pathname.split("/").pop()||name);}catch(error){}return /-反馈版\\.html?$/i.test(name)?name:name.replace(/\\.html?$/i,"")+"-反馈版.html";}' +
+      'function downloadFeedbackReport(){var clone=document.documentElement.cloneNode(true);var sourceNotes=document.querySelectorAll("[data-issue-feedback]");var clonedNotes=clone.querySelectorAll("[data-issue-feedback]");sourceNotes.forEach(function(field,index){if(clonedNotes[index])clonedNotes[index].textContent=field.value||"";});var sourceChecks=document.querySelectorAll(".issue-complete-input");var clonedChecks=clone.querySelectorAll(".issue-complete-input");sourceChecks.forEach(function(field,index){if(!clonedChecks[index])return;if(field.checked)clonedChecks[index].setAttribute("checked","");else clonedChecks[index].removeAttribute("checked");});var clonedDialog=clone.querySelector("[data-shot-dialog]");var clonedPreview=clone.querySelector("[data-shot-dialog-image]");if(clonedDialog)clonedDialog.removeAttribute("open");if(clonedPreview)clonedPreview.removeAttribute("src");var blob=new Blob(["<!doctype html>"+clone.outerHTML],{type:"text/html;charset=utf-8"});var url=URL.createObjectURL(blob);var link=document.createElement("a");link.href=url;link.download=feedbackFileName();document.body.appendChild(link);link.click();link.remove();window.setTimeout(function(){URL.revokeObjectURL(url);},1000);setFeedbackStatus("反馈版已导出，可以发送给他人");}' +
+      'document.addEventListener("click",function(event){var removeImageButton=event.target.closest("[data-feedback-image-remove]");if(removeImageButton){removeFeedbackImage(removeImageButton);return;}var copyButton=event.target.closest("[data-locator-copy]");if(copyButton){copyLocator(copyButton);return;}var opener=event.target.closest("[data-shot-open]");if(opener&&preview&&dialog){var image=opener.querySelector("img");if(!image)return;preview.onload=fitPreview;preview.src=image.currentSrc||image.src;preview.alt=image.alt||"截图预览";if(typeof dialog.showModal==="function")dialog.showModal();else dialog.setAttribute("open","");if(preview.complete)window.requestAnimationFrame(fitPreview);return;}var actionButton=event.target.closest("[data-shot-action]");if(actionButton){var action=actionButton.getAttribute("data-shot-action");if(action==="fit")fitPreview();else if(action==="actual")zoomPreview(1);else if(action==="zoom-out")stepZoom(-1);else if(action==="zoom-in")stepZoom(1);return;}if(dialog&&(event.target.closest("[data-shot-close]")||event.target===dialog))closePreview();});' +
+      'if(dialog&&preview){preview.addEventListener("dblclick",function(){if(previewMode==="fit")zoomPreview(1);else fitPreview();});dialog.addEventListener("close",resetPreview);window.addEventListener("resize",function(){if(dialog.open&&previewMode==="fit")fitPreview();});}' +
+      'collectEmbeddedFeedbackImages();restoreFeedbackState();restoreFeedbackImages();feedbackFields.forEach(function(field){field.addEventListener("input",saveFeedbackState);field.addEventListener("paste",function(event){handleFeedbackImagePaste(event,field);});});completeFields.forEach(function(field){field.addEventListener("change",saveFeedbackState);});if(feedbackDownload)feedbackDownload.addEventListener("click",downloadFeedbackReport);' +
+      '})();<\/script>' +
       "</body>" +
       "</html>"
     );
@@ -3338,20 +3627,6 @@
     var exportedAt = new Date().toISOString();
     draft.exportedAt = exportedAt;
     await warmAllRecordExports("html-export-preflight");
-    if (draft && Array.isArray(draft.records)) {
-      for (var i = 0; i < draft.records.length; i++) {
-        var record = draft.records[i];
-        if (!record || !record.id || !record.shot) continue;
-        if (record.shot.export) continue;
-        if (!record.shot.thumb) continue;
-        setRecordShotById(record.id, {
-          thumb: record.shot.thumb,
-          export: record.shot.thumb,
-          source: record.shot.source || null,
-          marked: !!record.shot.marked
-        });
-      }
-    }
     var html = buildHtmlExportDocument(draft, exportedAt);
     var fileName = buildExportFileName(getReportPageTitle(draft), exportedAt);
     var downloadId = await requestHtmlExportDownloadFromBridge(html, fileName);
@@ -3528,8 +3803,8 @@
   function getDrawerRecordThumbHtml(record) {
     var thumb = record && record.shot && record.shot.thumb ? String(record.shot.thumb) : "";
     var shotMarked = isRecordShotMarked(record);
-    var category = getRecordCategory(record && record.category ? record.category : "layout");
-    var badge = esc(category.label || "布局");
+    var category = getRecordCategory(record && record.category ? record.category : "default");
+    var badge = esc(category.label || "默认");
     if (thumb) {
       var shotContent = shotMarked
         ? '<img alt="" src="' +
@@ -3593,8 +3868,34 @@
     );
   }
 
+  function getDrawerRecordNoteImagesHtml(record) {
+    var images = sanitizeFeedbackImages(record && record.noteImages);
+    if (!images.length) return "";
+    return (
+      '<div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,.08);">' +
+      '<div style="margin-bottom:7px;color:rgba(255,255,255,.44);font-size:11px;font-weight:700;line-height:1.2;">设计参考</div>' +
+      '<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;">' +
+      images.map(function (item, index) {
+        return (
+          '<div data-v12-drawer-note-image="1" data-record-note-image-id="' +
+          esc(item.id) +
+          '" title="设计参考截图 ' +
+          esc(String(index + 1)) +
+          '" style="height:64px;border-radius:9px;border:1px solid rgba(255,255,255,.1);background:#fff;overflow:hidden;">' +
+          '<img alt="设计参考截图 ' +
+          esc(String(index + 1)) +
+          '" src="' +
+          esc(item.src) +
+          '" style="display:block;width:100%;height:100%;object-fit:cover;" />' +
+          "</div>"
+        );
+      }).join("") +
+      "</div></div>"
+    );
+  }
+
   function getDrawerRecordCardHtml(record, index) {
-    var category = getRecordCategory(record && record.category ? record.category : "layout");
+    var category = getRecordCategory(record && record.category ? record.category : "default");
     var note = record && record.note ? String(record.note).trim() : "";
     var timeText = formatRecordTime(record && record.createdAt ? record.createdAt : "");
     var thumbHtml = getDrawerRecordThumbHtml(record);
@@ -3605,6 +3906,7 @@
     var hasNote = !!note;
     var categoryColor = category && category.color ? category.color : "#94a3b8";
     var changeSummaryHtml = getDrawerRecordChangeSummaryHtml(record);
+    var noteImagesHtml = getDrawerRecordNoteImagesHtml(record);
     var measureRecord = isMeasureRecord(record);
     var measureDescription = getMeasureRecordDescription(record);
     var measureDescriptionHtml = measureRecord
@@ -3679,6 +3981,7 @@
       "</div>" +
       measureDescriptionHtml +
       noteHtml +
+      noteImagesHtml +
       changeSummaryHtml +
       "</div>" +
       "</article>"
@@ -3779,6 +4082,10 @@
     drawerRenderKey = "";
     if (!cleared) {
       await safePersistCurrentDraft();
+    } else {
+      state.v12.draftStatus = "ready";
+      state.v12.draftErrorMessage = "";
+      void refreshDraftStorageUsage();
     }
     schedule();
   }
@@ -5148,6 +5455,7 @@
   }
 
   var RECORD_CATEGORIES = [
+    { id: "default", label: "默认", color: "#94a3b8" },
     { id: "layout", label: "布局", color: "#22c55e" },
     { id: "font", label: "字体", color: "#3b82f6" },
     { id: "interaction", label: "交互", color: "#ec4899" },
@@ -5216,7 +5524,7 @@
 
   function placeholderShotDataSized(targetName, categoryLabel, typeLabel, width, height) {
     var title = esc(targetName || "记录");
-    var badge = esc(categoryLabel || "布局");
+    var badge = esc(categoryLabel || "默认");
     var meta = esc(typeLabel || "记录");
     return dataUrlFromSvg(
       '<svg xmlns="http://www.w3.org/2000/svg" width="' +
@@ -5549,7 +5857,7 @@
   }
 
   function getRecordPlaceholderShot(record, kind) {
-    var category = getRecordCategory(record && record.category ? record.category : "layout");
+    var category = getRecordCategory(record && record.category ? record.category : "default");
     var labelText = getRecordShotKindLabel(record && record.type ? record.type : "element");
     if (kind === "export") {
       return placeholderExportShotData(record && record.targetName ? record.targetName : "记录", category.label, labelText);
@@ -6062,11 +6370,13 @@
     var height = Math.max(1, Math.round(sourceHeight * scale));
     var canvas = createCanvas(width, height);
     var ctx = canvas.getContext("2d");
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(sourceCanvas, 0, 0, canvas.width, canvas.height);
     return {
-      dataUrl: canvasToDataUrl(canvas, "image/jpeg", quality),
+      dataUrl: canvasToDataUrl(canvas, RECORD_IMAGE_MIME_TYPE, quality),
       size: { width: width, height: height }
     };
   }
@@ -6149,6 +6459,8 @@
 
     var sourceCanvas = createCanvas(recordSourceSize.width, recordSourceSize.height);
     var sourceCtx = sourceCanvas.getContext("2d");
+    sourceCtx.imageSmoothingEnabled = true;
+    sourceCtx.imageSmoothingQuality = "high";
     sourceCtx.fillStyle = "#ffffff";
     sourceCtx.fillRect(0, 0, sourceCanvas.width, sourceCanvas.height);
     sourceCtx.drawImage(
@@ -6207,25 +6519,16 @@
 
   async function generateRecordExportFromSource(record, reason) {
     if (!record || !record.id || !record.shot) return null;
-    if (record.shot.export && record.shot.marked) return record.shot.export;
+    if (record.shot.export && record.shot.marked && !isRecordExportLowQuality(record)) return record.shot.export;
     var sourceCanvas = getRecordSourceCanvas(record.id);
     if (!sourceCanvas) {
       if (record.shot.export) return record.shot.export;
-      if (record.shot.thumb) {
-        setRecordShotById(record.id, {
-          thumb: record.shot.thumb || null,
-          export: record.shot.thumb || null,
-          source: record.shot.source || null,
-          marked: !!record.shot.marked
-        });
-        return record.shot.thumb;
-      }
       return null;
     }
     var startedAt = nowMs();
     var markedSourceCanvas = composeMarkedRecordCanvas(record, sourceCanvas) || sourceCanvas;
-    var thumbVariant = buildShotVariantFromSourceCanvas(markedSourceCanvas, RECORD_THUMB_LONG_EDGE, 0.9);
-    var exportVariant = buildShotVariantFromSourceCanvas(markedSourceCanvas, RECORD_EXPORT_LONG_EDGE, 0.92);
+    var thumbVariant = buildShotVariantFromSourceCanvas(markedSourceCanvas, RECORD_THUMB_LONG_EDGE, RECORD_THUMB_QUALITY);
+    var exportVariant = buildShotVariantFromSourceCanvas(markedSourceCanvas, RECORD_EXPORT_LONG_EDGE, RECORD_EXPORT_QUALITY);
     setRecordShotById(record.id, {
       thumb: thumbVariant.dataUrl,
       export: exportVariant.dataUrl,
@@ -6275,7 +6578,7 @@
       captureSource = await loadCaptureSourceFromDataUrl(dataUrl);
       var source = captureSource && captureSource.source;
       if (!source) throw new Error("Failed to decode measure capture");
-      var thumbVariant = buildShotVariantFromSourceCanvas(source, RECORD_THUMB_LONG_EDGE, 0.9);
+      var thumbVariant = buildShotVariantFromSourceCanvas(source, RECORD_THUMB_LONG_EDGE, RECORD_THUMB_QUALITY);
       if (!thumbVariant || !thumbVariant.dataUrl) throw new Error("Failed to create measure thumbnail");
       if (recordShotCaptureTokens[record.id] !== token || !isInspectorAlive()) return;
 
@@ -6389,7 +6692,7 @@
       var markedSourceCanvas = composeMarkedRecordCanvas(record, sourceBundle.recordSourceCanvas) || sourceBundle.recordSourceCanvas;
       recordSourceCanvasById[record.id] = sourceBundle.recordSourceCanvas;
 
-      var thumbVariant = buildShotVariantFromSourceCanvas(markedSourceCanvas, RECORD_THUMB_LONG_EDGE, 0.9);
+      var thumbVariant = buildShotVariantFromSourceCanvas(markedSourceCanvas, RECORD_THUMB_LONG_EDGE, RECORD_THUMB_QUALITY);
       perf.mark("thumbDone");
       perf.log("thumb-done", {
         screenshotSize: perf.screenshotSize,
@@ -6459,45 +6762,88 @@
     });
   } catch (err) {}
 
-  async function persistCurrentDraft() {
+  async function persistDraftSnapshot() {
     var draft = state.v12.draft;
-    if (!draft || !draft.pageKey) return;
+    if (!draft || !draft.pageKey) return false;
     var nextDraft = cloneDraft(draft);
-    var persistSeq = ++draftPersistSeq;
     state.v12.draftPersisting = true;
     state.v12.draftStatus = "saving";
+    state.v12.draftErrorMessage = "";
+    drawerRenderKey = "";
+    schedule();
     try {
-      var savedDraft = await saveDraftToBridge(nextDraft.pageKey, nextDraft);
-      if (persistSeq === draftPersistSeq) {
-        state.v12.draft = savedDraft || nextDraft;
-        state.v12.bridgeReady = true;
-        state.v12.draftStatus = "ready";
-      }
+      await saveDraftToBridge(nextDraft.pageKey, nextDraft);
+      state.v12.bridgeReady = true;
+      state.v12.draftStatus = "ready";
+      state.v12.draftErrorMessage = "";
+      return true;
     } catch (err) {
-      if (persistSeq === draftPersistSeq) {
-        state.v12.draft = nextDraft;
-        state.v12.draftStatus = isBridgeUnavailableError(err) ? "ready" : "error";
-      }
-      if (!isBridgeUnavailableError(err) && persistSeq === draftPersistSeq) {
+      state.v12.draftStatus = "error";
+      state.v12.draftErrorMessage = err && err.message ? err.message : "草稿保存失败";
+      showV12Notice("记录保存失败，请勿关闭工具；可在记录抽屉中重试或先导出 HTML", 10000);
+      if (!isBridgeUnavailableError(err)) {
         console.warn("[visual-qa][v1.2] draft save failed:", err);
       }
+      return false;
     } finally {
-      if (persistSeq === draftPersistSeq) {
-        state.v12.draftPersisting = false;
-      }
+      state.v12.draftPersisting = false;
+      drawerRenderKey = "";
       schedule();
     }
   }
 
+  async function runDraftPersistLoop() {
+    var latestSaved = true;
+    while (draftPersistRequested && isInspectorAlive()) {
+      draftPersistRequested = false;
+      latestSaved = await persistDraftSnapshot();
+    }
+    if (latestSaved) void refreshDraftStorageUsage();
+    return latestSaved;
+  }
+
+  function persistCurrentDraft() {
+    draftPersistRequested = true;
+    if (!draftPersistPromise) {
+      draftPersistPromise = runDraftPersistLoop().finally(function () {
+        draftPersistPromise = null;
+        if (draftPersistRequested && isInspectorAlive()) persistCurrentDraft();
+      });
+    }
+    return draftPersistPromise;
+  }
+
   async function safePersistCurrentDraft() {
-    if (!isInspectorAlive()) return;
+    if (!isInspectorAlive()) return false;
     try {
-      await persistCurrentDraft();
+      return await persistCurrentDraft();
     } catch (err) {
       if (isInspectorAlive()) {
         console.warn("[visual-qa][v1.2] draft persist aborted:", err);
       }
+      return false;
     }
+  }
+
+  function flushDraftBeforeDestroy() {
+    window.clearTimeout(draftPersistTimer);
+    draftPersistTimer = 0;
+    var draft = state.v12.draft;
+    if (!draft || !draft.pageKey) return;
+    var snapshot = cloneDraft(draft);
+    window.postMessage(
+      {
+        source: BRIDGE_REQUEST_SOURCE,
+        requestId: "vqa-final-" + Date.now() + "-" + bridgeRequestSeq++,
+        action: "save-draft",
+        active: false,
+        pageKey: snapshot.pageKey,
+        draft: snapshot,
+        html: "",
+        filename: ""
+      },
+      "*"
+    );
   }
 
   function updateDraftMeta() {
@@ -6510,7 +6856,7 @@
   }
 
   function createPendingRecord(type, targetName, focusRect, targetHint) {
-    var category = getRecordCategory("layout");
+    var category = getRecordCategory("default");
     var now = new Date().toISOString();
     var normalizedFocusRect = normalizeRect(focusRect);
     var captureScroll = getCurrentScrollOffset();
@@ -6522,6 +6868,7 @@
       version: DRAFT_SCHEMA_VERSION,
       category: category.id,
       note: "",
+      noteImages: [],
       changeSummary: null,
       targetName: targetName,
       pageUrl: location.href,
@@ -6966,6 +7313,7 @@
 
   function closePendingRecord() {
     if (state.v12.pendingRecord && state.v12.pendingRecord.id) {
+      delete recordNoteImageProcessingById[state.v12.pendingRecord.id];
       delete recordPopupPerfById[state.v12.pendingRecord.id];
       delete recordComposerPlacementById[state.v12.pendingRecord.id];
     }
@@ -6979,6 +7327,7 @@
 
   function restartRegionRecordSelection() {
     if (state.v12.pendingRecord && state.v12.pendingRecord.id) {
+      delete recordNoteImageProcessingById[state.v12.pendingRecord.id];
       delete recordPopupPerfById[state.v12.pendingRecord.id];
       delete recordComposerPlacementById[state.v12.pendingRecord.id];
     }
@@ -6990,15 +7339,16 @@
     schedule();
   }
 
-  function showV12Notice(text) {
+  function showV12Notice(text, durationMs) {
     state.v12.noticeText = text || "";
     schedule();
     window.clearTimeout(showV12Notice._timerId || 0);
+    if (!text || durationMs === 0) return;
     showV12Notice._timerId = window.setTimeout(function () {
       if (state.v12.noticeText !== text) return;
       state.v12.noticeText = "";
       schedule();
-    }, 2200);
+    }, typeof durationMs === "number" ? durationMs : 2200);
   }
 
   function getChangeDraftItems() {
@@ -8162,11 +8512,20 @@
   }
 
   async function savePendingRecord() {
-    if (!state.v12.pendingRecord || !state.v12.draft) return;
+    if (!state.v12.pendingRecord) return;
+    if (!state.v12.draft) {
+      showV12Notice("记录尚未恢复，暂时不能保存；请在记录抽屉中重试", 8000);
+      return;
+    }
+    if (recordNoteImageProcessingById[state.v12.pendingRecord.id]) {
+      showV12Notice("图片处理中，请稍候");
+      return;
+    }
     if (!isRecordShotReady(state.v12.pendingRecord)) {
       showV12Notice("截图处理中，请稍候");
       return;
     }
+    await generateRecordExportFromSource(state.v12.pendingRecord, "record-save");
     updateDraftMeta();
     state.v12.pendingRecord.updatedAt = new Date().toISOString();
     if (!Array.isArray(state.v12.draft.records)) state.v12.draft.records = [];
@@ -15352,7 +15711,7 @@
     "div",
     "position:fixed;left:50%;bottom:30px;transform:translateX(-50%);z-index:" +
       (CONFIG.zIndexTooltip + 2) +
-      ";color:#fff;user-select:none;pointer-events:auto;"
+      ";color:#fff;user-select:none;pointer-events:auto;touch-action:none;"
   );
 
   var recordMenu = make(
@@ -15588,7 +15947,8 @@
       ".v12-topbar-shell{display:inline-flex;align-items:center;justify-content:flex-start;box-sizing:border-box;overflow:hidden;width:" + TOPBAR_EXPANDED_WIDTH + "px;max-width:" + TOPBAR_EXPANDED_WIDTH + "px;transition:width 180ms cubic-bezier(0.2,0,0,1),max-width 180ms cubic-bezier(0.2,0,0,1);}" +
       ".v12-topbar-shell.is-expanded{width:" + TOPBAR_EXPANDED_WIDTH + "px;max-width:" + TOPBAR_EXPANDED_WIDTH + "px;}" +
       ".v12-topbar-shell.is-collapsed{width:" + TOPBAR_COLLAPSED_WIDTH + "px;max-width:" + TOPBAR_COLLAPSED_WIDTH + "px;}" +
-      ".v12-topbar-toolbar{display:inline-flex;align-items:center;gap:0;width:100%;height:50px;box-sizing:border-box;background:#343434;border:0;box-shadow:0 1px 0 rgba(255,255,255,.03) inset,0 8px 20px rgba(0,0,0,.18);backdrop-filter:none;overflow:hidden;transition:padding 180ms cubic-bezier(0.2,0,0,1),border-radius 180ms cubic-bezier(0.2,0,0,1),box-shadow 180ms cubic-bezier(0.2,0,0,1);}" +
+      ".v12-topbar-toolbar{display:inline-flex;align-items:center;gap:0;width:100%;height:50px;box-sizing:border-box;background:#343434;border:0;box-shadow:0 1px 0 rgba(255,255,255,.03) inset,0 8px 20px rgba(0,0,0,.18);backdrop-filter:none;overflow:hidden;cursor:grab;touch-action:none;transition:padding 180ms cubic-bezier(0.2,0,0,1),border-radius 180ms cubic-bezier(0.2,0,0,1),box-shadow 180ms cubic-bezier(0.2,0,0,1);}" +
+      ".v12-topbar-shell.is-dragging .v12-topbar-toolbar,.v12-topbar-shell.is-dragging .v12-topbar-btn{cursor:grabbing;}" +
       ".v12-topbar-shell.is-expanded .v12-topbar-toolbar{padding:6.9px 8.6px 6.9px 6.9px;border-radius:12px;}" +
       ".v12-topbar-shell.is-collapsed .v12-topbar-toolbar{padding:6.9px;border-radius:7px;}" +
       ".v12-topbar-group{display:flex;align-items:center;gap:13.793px;min-width:0;overflow:hidden;flex:0 0 auto;max-width:227.906px;opacity:1;transform:translateX(0) scale(1);visibility:visible;transition:max-width 180ms cubic-bezier(0.2,0,0,1),gap 180ms cubic-bezier(0.2,0,0,1),opacity 160ms ease,transform 180ms cubic-bezier(0.2,0,0,1),visibility 0s linear 0s;will-change:max-width,gap,opacity,transform;}" +
@@ -15816,6 +16176,13 @@
       ".v12-record-composer-category-btn > span{pointer-events:none;}" +
       ".v12-record-composer-note{display:block;flex:1 1 auto;min-height:108px;}" +
       ".v12-record-composer-note textarea{width:100%;min-height:108px;padding:14px;border-radius:18px;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.05);color:rgba(255,255,255,.95);font:14px/1.8 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;resize:none;box-sizing:border-box;outline:none;display:block;}" +
+      ".v12-record-composer-note-images{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:8px;}" +
+      ".v12-record-composer-note-images:empty{display:none;}" +
+      ".v12-record-composer-note-image{position:relative;height:72px;border:1px solid rgba(255,255,255,.1);border-radius:12px;background:rgba(255,255,255,.05);overflow:hidden;}" +
+      ".v12-record-composer-note-image img{display:block;width:100%;height:100%;object-fit:cover;}" +
+      ".v12-record-composer-note-image button{position:absolute;top:4px;right:4px;padding:4px 6px;border:0;border-radius:7px;background:rgba(15,23,42,.78);color:#fff;font:600 10px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;}" +
+      ".v12-record-composer-note-image button:hover{background:#dc2626;}" +
+      ".v12-record-composer-note-hint{margin-top:7px;color:rgba(255,255,255,.38);font:11px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;}" +
       ".v12-record-composer-footer{display:flex;gap:10px;padding-top:14px;border-top:1px solid rgba(255,255,255,.08);min-width:0;}" +
       ".v12-record-category-menu{position:absolute;left:0;top:calc(100% + 8px);min-width:188px;padding:8px;border-radius:18px;background:#101216;border:1px solid rgba(255,255,255,.08);box-shadow:0 18px 32px rgba(15,23,42,.32);z-index:20;font:600 14px/1.25 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;letter-spacing:.01em;}" +
       ".v12-record-category-menu[data-placement=\"up\"]{top:auto;bottom:calc(100% + 8px);}" +
@@ -15864,6 +16231,7 @@
       ".v12-record-composer [data-v12-action=\"pick-category\"]," +
       ".v12-record-composer [data-v12-action=\"save-record\"]," +
       ".v12-record-composer [data-v12-action=\"reselect-region\"]," +
+      ".v12-record-composer [data-v12-action=\"remove-record-note-image\"]," +
       ".v12-record-composer [data-v12-action=\"cancel-record\"]{transition:background-color 90ms ease,color 90ms ease,box-shadow 90ms ease,border-color 90ms ease;}" +
       ".v12-record-composer [data-v12-action=\"toggle-category-menu\"]:hover{background:rgba(255,255,255,.12)!important;border-color:rgba(255,255,255,.14)!important;}" +
       ".v12-record-composer [data-v12-action=\"toggle-category-menu\"]:active{background:rgba(255,255,255,.16)!important;border-color:rgba(255,255,255,.18)!important;}" +
@@ -16341,6 +16709,24 @@
     syncTopbarCollapseMotion();
   }
 
+  function setTopbarPosition(x, y) {
+    var rect = topbar.getBoundingClientRect();
+    var width = rect.width || topbar.offsetWidth || TOPBAR_EXPANDED_WIDTH;
+    var height = rect.height || topbar.offsetHeight || 50;
+    var padding = 8;
+    state.v12.topbarX = clamp(x, padding, Math.max(padding, window.innerWidth - width - padding));
+    state.v12.topbarY = clamp(y, padding, Math.max(padding, window.innerHeight - height - padding));
+    topbar.style.left = state.v12.topbarX + "px";
+    topbar.style.top = state.v12.topbarY + "px";
+    topbar.style.bottom = "auto";
+    topbar.style.transform = "none";
+  }
+
+  function syncTopbarPosition() {
+    if (state.v12.topbarX == null || state.v12.topbarY == null) return;
+    setTopbarPosition(state.v12.topbarX, state.v12.topbarY);
+  }
+
   function ensureRecordMenuDom() {
     ensureFloatingControlStyles();
     if (recordMenuDom.ready) return;
@@ -16400,6 +16786,7 @@
     var records = getDrawerVisibleRecords();
     var totalCount = getV12RecordCount();
     var clearConfirmArmed = !!state.v12.drawerClearConfirmArmed;
+    var draftStatusMeta = getDraftStatusMeta();
     var filterButtons =
       '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;">' +
       '<button type="button" data-v12-action="drawer-filter" data-filter-id="all" data-active="' +
@@ -16442,6 +16829,13 @@
       '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">' +
       '<h3 style="margin:0;font-size:22px;line-height:1.2;">本次记录 ' + esc(String(totalCount)) + "</h3>" +
       '<button type="button" data-v12-action="toggle-drawer" style="border:1px solid rgba(255,255,255,.1);background:transparent;color:#fff;border-radius:12px;padding:8px 10px;font:12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;">收起</button>' +
+      "</div>" +
+      '<div title="' + esc(state.v12.draftErrorMessage || "") + '" style="display:flex;align-items:center;gap:7px;margin-top:9px;color:' + draftStatusMeta.color + ';font:12px/1.3 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;">' +
+      '<span aria-hidden="true" style="width:7px;height:7px;border-radius:50%;background:currentColor;box-shadow:0 0 0 3px rgba(255,255,255,.04);"></span>' +
+      '<span>' + esc(draftStatusMeta.label) + '</span>' +
+      (draftStatusMeta.retry
+        ? '<button type="button" data-v12-action="drawer-retry-draft" style="margin-left:auto;padding:5px 8px;border:1px solid currentColor;border-radius:8px;background:transparent;color:inherit;font:600 11px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;">重试</button>'
+        : "") +
       "</div>" +
       '<div style="margin-top:14px;display:flex;flex-wrap:wrap;gap:8px;">' +
       '<button type="button" data-v12-action="drawer-export-html" style="padding:10px 12px;border-radius:12px;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.08);color:#fff;font:12px/1 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;">导出 HTML</button>' +
@@ -16535,9 +16929,167 @@
       targetName: record.targetName,
       category: record.category,
       note: record.note || "",
+      noteImageIds: sanitizeFeedbackImages(record.noteImages).map(function (item) {
+        return item.id;
+      }),
       changeSummary: record.changeSummary || null,
       categoryMenuOpen: !!state.v12.categoryMenuOpen
     });
+  }
+
+  function renderRecordComposerNoteImages(record) {
+    var images = sanitizeFeedbackImages(record && record.noteImages);
+    return (
+      '<div class="v12-record-composer-note-images" data-v12-role="record-note-images">' +
+      images.map(function (item, index) {
+        return (
+          '<div class="v12-record-composer-note-image" data-record-note-image-id="' +
+          esc(item.id) +
+          '"><img src="' +
+          esc(item.src) +
+          '" alt="说明截图 ' +
+          esc(String(index + 1)) +
+          '" /><button type="button" data-v12-action="remove-record-note-image" data-image-id="' +
+          esc(item.id) +
+          '" aria-label="删除说明截图 ' +
+          esc(String(index + 1)) +
+          '">删除</button></div>'
+        );
+      }).join("") +
+      "</div>" +
+      '<div class="v12-record-composer-note-hint">可直接粘贴截图，最多 3 张</div>'
+    );
+  }
+
+  function getDataUrlByteLength(dataUrl) {
+    var value = String(dataUrl || "");
+    var commaIndex = value.indexOf(",");
+    return commaIndex < 0 ? value.length : Math.ceil((value.length - commaIndex - 1) * 3 / 4);
+  }
+
+  function compressRecordNoteImage(file) {
+    return new Promise(function (resolve, reject) {
+      var objectUrl = URL.createObjectURL(file);
+      var image = new Image();
+      image.onload = function () {
+        try {
+          var attempts = [
+            { edge: 1600, quality: 0.86 },
+            { edge: 1360, quality: 0.8 },
+            { edge: 1120, quality: 0.76 }
+          ];
+          var result = "";
+          for (var i = 0; i < attempts.length; i++) {
+            var scale = Math.min(1, attempts[i].edge / Math.max(image.naturalWidth, image.naturalHeight));
+            var width = Math.max(1, Math.round(image.naturalWidth * scale));
+            var height = Math.max(1, Math.round(image.naturalHeight * scale));
+            var canvas = createCanvas(width, height);
+            var context = canvas.getContext("2d");
+            context.imageSmoothingEnabled = true;
+            context.imageSmoothingQuality = "high";
+            context.fillStyle = "#ffffff";
+            context.fillRect(0, 0, width, height);
+            context.drawImage(image, 0, 0, width, height);
+            result = canvasToDataUrl(canvas, RECORD_IMAGE_MIME_TYPE, attempts[i].quality);
+            if (getDataUrlByteLength(result) <= RECORD_NOTE_IMAGE_MAX_BYTES) break;
+          }
+          URL.revokeObjectURL(objectUrl);
+          resolve({
+            id: "record-note-image:" + Date.now() + ":" + Math.random().toString(36).slice(2, 8),
+            src: result
+          });
+        } catch (err) {
+          URL.revokeObjectURL(objectUrl);
+          reject(err);
+        }
+      };
+      image.onerror = function () {
+        URL.revokeObjectURL(objectUrl);
+        reject(new Error("无法读取粘贴图片"));
+      };
+      image.src = objectUrl;
+    });
+  }
+
+  function insertRecordNotePastedText(textarea, text) {
+    if (!text) return;
+    var start = typeof textarea.selectionStart === "number" ? textarea.selectionStart : textarea.value.length;
+    var end = typeof textarea.selectionEnd === "number" ? textarea.selectionEnd : start;
+    textarea.setRangeText(text, start, end, "end");
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+
+  function finishRecordNoteImageProcessing(recordId) {
+    var nextCount = Math.max(0, (recordNoteImageProcessingById[recordId] || 0) - 1);
+    if (nextCount) recordNoteImageProcessingById[recordId] = nextCount;
+    else delete recordNoteImageProcessingById[recordId];
+    if (state.v12.pendingRecord && state.v12.pendingRecord.id === recordId) {
+      syncRecordComposerShotState(state.v12.pendingRecord);
+    }
+  }
+
+  function onRecordComposerPaste(e) {
+    var textarea = e.target;
+    if (!textarea || textarea.getAttribute("data-v12-action") !== "record-note") return;
+    var clipboard = e.clipboardData;
+    if (!clipboard || !clipboard.items || !state.v12.pendingRecord) return;
+    var files = [];
+    for (var i = 0; i < clipboard.items.length; i++) {
+      var item = clipboard.items[i];
+      if (item && item.kind === "file" && String(item.type || "").indexOf("image/") === 0) {
+        var file = item.getAsFile();
+        if (file) files.push(file);
+      }
+    }
+    if (!files.length) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+    insertRecordNotePastedText(textarea, clipboard.getData("text/plain") || "");
+    var record = state.v12.pendingRecord;
+    var recordId = record.id;
+    if (recordNoteImageProcessingById[recordId]) {
+      showV12Notice("图片正在处理中，请稍候");
+      return;
+    }
+    var currentImages = sanitizeFeedbackImages(record.noteImages);
+    var available = Math.max(0, RECORD_NOTE_IMAGE_LIMIT - currentImages.length);
+    if (!available) {
+      showV12Notice("每条问题最多粘贴 3 张图片");
+      return;
+    }
+
+    recordNoteImageProcessingById[recordId] = (recordNoteImageProcessingById[recordId] || 0) + 1;
+    syncRecordComposerShotState(record);
+    Promise.all(files.slice(0, available).map(compressRecordNoteImage)).then(function (images) {
+      if (!state.v12.pendingRecord || state.v12.pendingRecord.id !== recordId) return;
+      var latestImages = sanitizeFeedbackImages(state.v12.pendingRecord.noteImages);
+      state.v12.pendingRecord.noteImages = sanitizeFeedbackImages(latestImages.concat(images));
+      state.v12.pendingRecord.updatedAt = new Date().toISOString();
+      state.v12.noteSelectionStart = textarea.value.length;
+      state.v12.noteSelectionEnd = state.v12.noteSelectionStart;
+      state.v12.composerFocusPending = true;
+      recordComposerRenderKey = "";
+      schedule();
+      showV12Notice(files.length > available ? "已添加图片，多余图片未加入" : "图片已添加");
+    }).catch(function (err) {
+      console.warn("[visual-qa][record-note] pasted image failed:", err);
+      showV12Notice("图片粘贴失败，请重试");
+    }).then(function () {
+      finishRecordNoteImageProcessing(recordId);
+    });
+  }
+
+  function removePendingRecordNoteImage(imageId) {
+    var record = state.v12.pendingRecord;
+    if (!record || !imageId) return;
+    record.noteImages = sanitizeFeedbackImages(record.noteImages).filter(function (item) {
+      return item.id !== imageId;
+    });
+    record.updatedAt = new Date().toISOString();
+    state.v12.composerFocusPending = true;
+    recordComposerRenderKey = "";
+    schedule();
   }
 
   function renderRecordComposerChangeSummary(record) {
@@ -16809,19 +17361,20 @@
   function syncRecordComposerShotState(record) {
     if (!record) return;
     var shotReady = isRecordShotReady(record);
+    var noteImageProcessing = !!recordNoteImageProcessingById[record.id];
     var statusEl = recordComposer.querySelector('[data-v12-role="record-processing-state"]');
     var saveButton = recordComposer.querySelector('[data-v12-action="save-record"]');
     if (statusEl) {
-      statusEl.textContent = shotReady ? "" : "截图处理中... 可先输入备注";
-      statusEl.style.visibility = shotReady ? "hidden" : "visible";
-      statusEl.style.opacity = shotReady ? "0" : "1";
+      statusEl.textContent = noteImageProcessing ? "正在处理粘贴图片..." : shotReady ? "" : "截图处理中... 可先输入备注";
+      statusEl.style.visibility = shotReady && !noteImageProcessing ? "hidden" : "visible";
+      statusEl.style.opacity = shotReady && !noteImageProcessing ? "0" : "1";
     }
     if (saveButton) {
-      saveButton.disabled = !shotReady;
-      saveButton.setAttribute("aria-disabled", shotReady ? "false" : "true");
+      saveButton.disabled = !shotReady || noteImageProcessing;
+      saveButton.setAttribute("aria-disabled", shotReady && !noteImageProcessing ? "false" : "true");
       saveButton.textContent = "保存进抽屉";
       saveButton.style.background = "#fff";
-      saveButton.style.cursor = shotReady ? "pointer" : "not-allowed";
+      saveButton.style.cursor = shotReady && !noteImageProcessing ? "pointer" : "not-allowed";
       saveButton.style.opacity = "1";
     }
   }
@@ -16917,9 +17470,10 @@
         "</div>" +
         renderRecordComposerChangeSummary(record) +
         '<div class="v12-record-composer-note">' +
-        '<textarea data-v12-action="record-note" data-editable="1" data-note-input="1" placeholder="写下问题说明">' +
+        '<textarea data-v12-action="record-note" data-editable="1" data-note-input="1" placeholder="写下问题说明，也可以直接粘贴截图">' +
         esc(record.note || "") +
         "</textarea>" +
+        renderRecordComposerNoteImages(record) +
         "</div>" +
         '<div class="v12-record-composer-footer">' +
         '<button type="button" data-v12-action="save-record" style="flex:1;padding:12px 14px;border-radius:16px;font:14px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;border:0;background:#fff;color:#111827;font-weight:700;cursor:pointer;">保存进抽屉</button>' +
@@ -16963,12 +17517,70 @@
     return title ? title : "页面元素";
   }
 
+  function normalizeCodeLocatorClassName(value) {
+    var raw = String(value || "").trim();
+    if (!raw || raw.length > 80 || !/^[A-Za-z][A-Za-z0-9_-]*$/.test(raw)) return "";
+    var cssModuleMatch = raw.match(/^([A-Za-z0-9-]+)_([A-Za-z0-9-]+)__([A-Za-z0-9-]+)$/);
+    if (cssModuleMatch) return cssModuleMatch[2];
+    var normalized = cleanClassToken(raw);
+    if (!normalized) return "";
+    if (/^(is|has|js|qa|u|c|el|style|active|selected|disabled|open|closed|show|hide|current|primary|secondary|flex|inline-flex|grid|block|inline|hidden|relative|absolute|fixed|sticky)$/i.test(normalized)) return "";
+    if (/^(w|h|min-w|min-h|max-w|max-h|m|mt|mr|mb|ml|mx|my|p|pt|pr|pb|pl|px|py|gap|text|bg|border|rounded|shadow|items|justify|self|font|leading|tracking|opacity|overflow|z|top|right|bottom|left|inset)-/i.test(normalized)) return "";
+    return raw;
+  }
+
+  function getCodeLocatorClassName(el) {
+    if (!el || !el.classList || !el.classList.length) return "";
+    var classes = Array.prototype.slice.call(el.classList);
+    for (var i = 0; i < classes.length; i++) {
+      var className = normalizeCodeLocatorClassName(classes[i]);
+      if (className) return className;
+    }
+    return "";
+  }
+
+  function buildElementCodeLocator(el) {
+    if (!el || !el.getAttribute) return null;
+    var stableAttributes = ["data-testid", "data-test", "data-qa", "data-cy"];
+    for (var i = 0; i < stableAttributes.length; i++) {
+      var attributeName = stableAttributes[i];
+      var attributeValue = String(el.getAttribute(attributeName) || "").trim();
+      if (attributeValue) {
+        return { kind: "search", value: attributeName + '="' + attributeValue + '"' };
+      }
+    }
+
+    var id = String(el.id || "").trim();
+    if (id) return { kind: "search", value: 'id="' + id + '"' };
+
+    var semanticAttributes = ["aria-label", "name"];
+    for (var j = 0; j < semanticAttributes.length; j++) {
+      var semanticName = semanticAttributes[j];
+      var semanticValue = String(el.getAttribute(semanticName) || "").trim();
+      if (semanticValue) {
+        return { kind: "search", value: semanticName + '="' + semanticValue + '"' };
+      }
+    }
+
+    var className = getCodeLocatorClassName(el);
+    if (className) return { kind: "search", value: className };
+
+    var text = truncateText(getDirectTextContent(el) || el.innerText || "", 40);
+    if (text) return { kind: "search", value: '"' + text + '"' };
+
+    var selectorPath = buildLightSelectorPath(el);
+    var tagName = el.tagName ? el.tagName.toLowerCase() : "";
+    if (selectorPath && selectorPath !== tagName) return { kind: "path", value: selectorPath };
+    return null;
+  }
+
   function buildElementTargetHint(el) {
     return {
       label: label(el),
       className: classSummary(el),
       tagName: el && el.tagName ? el.tagName.toLowerCase() : "",
-      text: truncateText((el && el.innerText) || "", 80)
+      text: truncateText((el && el.innerText) || "", 80),
+      codeLocator: buildElementCodeLocator(el)
     };
   }
 
@@ -17110,9 +17722,8 @@
 
   function onV12TopbarPointerDown(e) {
     var target = e.target && e.target.closest ? e.target.closest("[data-v12-action]") : null;
-    if (!target) return;
-    var action = target.getAttribute("data-v12-action");
-    if (!isTopbarAction(action)) return;
+    var action = target ? target.getAttribute("data-v12-action") : "";
+    if (action && !isTopbarAction(action)) return;
     if (action === "topbar-more") {
       feedbackDebugLog("topbar pointerdown", {
         type: e.type,
@@ -17123,17 +17734,78 @@
       });
     }
     if (e.button != null && e.button !== 0) return;
-    state.v12.topbarPressedAction = action;
-    state.v12.topbarPressedPointerId = e.pointerId != null ? e.pointerId : -1;
-    if (typeof target.setPointerCapture === "function" && e.pointerId != null) {
+    var rect = topbar.getBoundingClientRect();
+    state.v12.topbarDragPending = true;
+    state.v12.topbarDragging = false;
+    state.v12.topbarDragMoved = false;
+    state.v12.topbarDragPointerId = e.pointerId != null ? e.pointerId : -1;
+    state.v12.topbarDragAction = action || "";
+    state.v12.topbarDragStartX = e.clientX;
+    state.v12.topbarDragStartY = e.clientY;
+    state.v12.topbarDragOriginX = rect.left;
+    state.v12.topbarDragOriginY = rect.top;
+    state.v12.topbarPressedAction = action || "";
+    state.v12.topbarPressedPointerId = state.v12.topbarDragPointerId;
+    var captureTarget = target || topbar;
+    if (typeof captureTarget.setPointerCapture === "function" && e.pointerId != null) {
       try {
-        target.setPointerCapture(e.pointerId);
+        captureTarget.setPointerCapture(e.pointerId);
       } catch (err) {}
     }
     schedule();
   }
 
+  function onV12TopbarPointerMove(e) {
+    if (!state.v12.topbarDragPending) return;
+    var pointerId = e.pointerId != null ? e.pointerId : -1;
+    if (state.v12.topbarDragPointerId !== pointerId) return;
+    var dx = e.clientX - state.v12.topbarDragStartX;
+    var dy = e.clientY - state.v12.topbarDragStartY;
+    if (!state.v12.topbarDragging && Math.sqrt(dx * dx + dy * dy) < 4) return;
+    if (!state.v12.topbarDragging) {
+      state.v12.topbarDragging = true;
+      state.v12.topbarDragMoved = true;
+      state.v12.topbarPressedAction = "";
+      state.v12.topbarPressedPointerId = -1;
+      if (topbarDom.shell) topbarDom.shell.classList.add("is-dragging");
+      hideTopbarTooltip(true);
+    }
+    setTopbarPosition(state.v12.topbarDragOriginX + dx, state.v12.topbarDragOriginY + dy);
+    schedule();
+    e.preventDefault();
+    e.stopPropagation();
+  }
+
+  function finishTopbarDrag(e, canceled) {
+    if (!state.v12.topbarDragPending) return false;
+    var pointerId = e && e.pointerId != null ? e.pointerId : -1;
+    if (state.v12.topbarDragPointerId !== pointerId) return false;
+    var moved = state.v12.topbarDragMoved;
+    var action = state.v12.topbarDragAction;
+    state.v12.topbarDragPending = false;
+    state.v12.topbarDragging = false;
+    state.v12.topbarDragMoved = false;
+    state.v12.topbarDragPointerId = -1;
+    state.v12.topbarDragAction = "";
+    if (topbarDom.shell) topbarDom.shell.classList.remove("is-dragging");
+    if (moved && action) {
+      state.v12.topbarActivationAction = action;
+      state.v12.topbarActivationAt = Date.now();
+    }
+    if (moved || canceled) {
+      state.v12.topbarPressedAction = "";
+      state.v12.topbarPressedPointerId = -1;
+      schedule();
+    }
+    return moved;
+  }
+
   function onV12TopbarPointerUp(e) {
+    if (finishTopbarDrag(e, false)) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     var target = e.target && e.target.closest ? e.target.closest("[data-v12-action]") : null;
     if (!target) return;
     var action = target.getAttribute("data-v12-action");
@@ -17154,7 +17826,8 @@
   }
 
   function onV12TopbarPointerCancel(e) {
-    if (!state.v12.topbarPressedAction) return;
+    if (!state.v12.topbarDragPending && !state.v12.topbarPressedAction) return;
+    finishTopbarDrag(e, true);
     state.v12.topbarPressedAction = "";
     state.v12.topbarPressedPointerId = -1;
     schedule();
@@ -17298,7 +17971,7 @@
       schedule();
     } else if (action === "pick-category") {
       if (state.v12.pendingRecord) {
-        state.v12.pendingRecord.category = target.getAttribute("data-category-id") || "layout";
+        state.v12.pendingRecord.category = target.getAttribute("data-category-id") || "default";
         state.v12.categoryMenuOpen = false;
         state.v12.composerFocusPending = true;
         schedule();
@@ -17324,6 +17997,8 @@
       state.v12.drawerMenuRecordId = "";
       clearSelectedPanelHoverFreeze();
       deleteDraftRecord(target.getAttribute("data-record-id") || "");
+    } else if (action === "drawer-retry-draft") {
+      void retryCurrentDraftPersistence();
     } else if (action === "drawer-clear") {
       if (state.v12.drawerClearConfirmArmed) {
         void clearCurrentPageDraft();
@@ -17336,6 +18011,8 @@
         console.warn("[visual-qa][v1.2] html export failed:", err);
         showV12Notice("HTML 导出失败，请稍后重试");
       });
+    } else if (action === "remove-record-note-image") {
+      removePendingRecordNoteImage(target.getAttribute("data-image-id") || "");
     } else if (action === "record-note" || action === "drawer-note") {
       return;
     } else if (action === "cancel-record") {
@@ -17589,6 +18266,7 @@
     window.clearTimeout(state.v12.topbarCollapseAnimTimerId);
     state.v12.topbarCollapseAnimTimerId = window.setTimeout(function () {
       state.v12.topbarCollapseAnimTimerId = 0;
+      syncTopbarPosition();
     }, TOPBAR_COLLAPSE_ANIM_MS + 120);
     if (floating) {
       floating.style.display = "none";
@@ -19197,6 +19875,7 @@
     syncPageScrollLock();
     updatePanelChrome();
     syncTopbar();
+    syncTopbarPosition();
     if (isColorPickerOpen() && !shouldKeepColorPickerOpen()) {
       closeColorPicker({ keepFrozen: true });
     }
@@ -19321,6 +20000,7 @@
   function onMouseMove(e) {
     if (shouldBlockPageSelectionDuringScrub()) return;
     if (state.floatDragging) return;
+    if (state.v12.topbarDragPending) return;
     if (state.v12.pendingRecord) return;
     if (isEventInsideAiChangePanel(e)) return;
     if (isColorPickerUiTarget(e.target)) {
@@ -19721,6 +20401,9 @@
 
   function shouldBlockTopbarShortcuts(e, key) {
     if (!state.v12.recordPopoverOpen) return false;
+    if (e && (e.isComposing || e.metaKey || e.ctrlKey || e.altKey)) return false;
+    if (isTypingContext(e && e.target)) return false;
+    if (isTypingContext(document.activeElement)) return false;
     return key === "v" || key === "c" || key === "o" || key === "m";
   }
 
@@ -19878,6 +20561,7 @@
   function destroy(reason) {
     if (reason !== "action-click") return false;
     if (state.destroyed) return true;
+    flushDraftBeforeDestroy();
     state.destroyed = true;
     notifyPluginActionState(false);
     Object.keys(recordPopupPerfById).forEach(function (recordId) {
@@ -19888,6 +20572,9 @@
     });
     Object.keys(recordSourceCanvasById).forEach(function (recordId) {
       delete recordSourceCanvasById[recordId];
+    });
+    Object.keys(recordNoteImageProcessingById).forEach(function (recordId) {
+      delete recordNoteImageProcessingById[recordId];
     });
     window.clearTimeout(drawerClearConfirmTimerId);
     drawerClearConfirmTimerId = 0;
@@ -19942,6 +20629,7 @@
     colorPickerPopover.removeEventListener("focusin", handleColorPickerPopoverFocusIn, true);
     colorPickerPopover.removeEventListener("mousedown", handleColorPickerPopoverMouseDown, true);
     topbar.removeEventListener("pointerdown", onV12TopbarPointerDown, true);
+    topbar.removeEventListener("pointermove", onV12TopbarPointerMove, true);
     topbar.removeEventListener("pointerup", onV12TopbarPointerUp, true);
     topbar.removeEventListener("pointercancel", onV12TopbarPointerCancel, true);
     topbar.removeEventListener("pointerover", onV12TopbarPointerOver, true);
@@ -19954,6 +20642,7 @@
     drawerStub.removeEventListener("input", onV12Input, true);
     recordComposer.removeEventListener("click", onV12Click, true);
     recordComposer.removeEventListener("input", onV12Input, true);
+    recordComposer.removeEventListener("paste", onRecordComposerPaste, true);
     recordComposer.removeEventListener("focusin", onRecordComposerFocusIn, true);
     recordComposer.removeEventListener("keyup", onRecordComposerKeyUp, true);
     recordComposer.removeEventListener("mouseup", onRecordComposerMouseUp, true);
@@ -20084,6 +20773,7 @@
   measureToolbar.addEventListener("click", onMeasureToolbarClick, true);
   head.addEventListener("mousedown", startDrag, true);
   topbar.addEventListener("pointerdown", onV12TopbarPointerDown, true);
+  topbar.addEventListener("pointermove", onV12TopbarPointerMove, true);
   topbar.addEventListener("pointerup", onV12TopbarPointerUp, true);
   topbar.addEventListener("pointercancel", onV12TopbarPointerCancel, true);
   topbar.addEventListener("pointerover", onV12TopbarPointerOver, true);
@@ -20096,6 +20786,7 @@
   drawerStub.addEventListener("input", onV12Input, true);
   recordComposer.addEventListener("click", onV12Click, true);
   recordComposer.addEventListener("input", onV12Input, true);
+  recordComposer.addEventListener("paste", onRecordComposerPaste, true);
   recordComposer.addEventListener("focusin", onRecordComposerFocusIn, true);
   recordComposer.addEventListener("keyup", onRecordComposerKeyUp, true);
   recordComposer.addEventListener("mouseup", onRecordComposerMouseUp, true);

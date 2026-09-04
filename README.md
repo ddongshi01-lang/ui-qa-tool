@@ -5,7 +5,7 @@
 ## 当前版本
 
 - 扩展名称：`PixelAudit 视觉走查助手`
-- 版本号：`1.1.0`
+- 版本号：`1.1.5`
 - 发布目录：`dist/visual-qa-release/`
 
 ## 快速使用
@@ -26,9 +26,11 @@
 
 - 选择模式：查看当前元素信息，编辑已开放的样式字段。
 - 测量模式：查看单元素尺寸、结构间距和双元素测量关系。
-- 记录能力：支持元素记录、区域记录、备注维护、记录抽屉查看。
+- 记录能力：支持元素记录、区域记录、备注及说明截图、记录抽屉查看。
 - 草稿恢复：页面刷新或重新打开后恢复记录与 AI 修改列表。
-- HTML 导出：导出当前记录为可打开的 HTML 报告，并可在报告内逐条勾选完成状态。
+- HTML 导出：导出当前记录为可打开的 HTML 报告，可逐条勾选完成状态、填写问题备注、粘贴说明截图并下载反馈版文件。
+
+所有记录、截图和反馈均在用户本地处理与保存，不会上传到开发者服务器。由于截图和说明图可能超过浏览器默认存储额度，扩展使用 `unlimitedStorage` 权限保障草稿恢复与报告导出。
 
 ## 主要文件
 
@@ -55,4 +57,6 @@ node --check dist/visual-qa-release/visual-qa.js
 - [稳定版回归清单.md](./稳定版回归清单.md)：手工回归清单。
 - [稳定版基线说明.md](./稳定版基线说明.md)：当前稳定版边界。
 - [CHANGELOG.md](./CHANGELOG.md)：对外变更摘要。
-- `交接文档.md`：历史交接沉淀，信息完整但较长，优先把新增共识补进上面的精简文档。
+- [docs/plugin-functional-spec-for-agent.md](./docs/plugin-functional-spec-for-agent.md)：运行结构、状态和存储模型。
+- [store-listing/listing-zh.md](./store-listing/listing-zh.md)：Chrome 应用商店文案与权限理由。
+- [store-listing/privacy-policy.md](./store-listing/privacy-policy.md)：隐私政策文本。

@@ -12,7 +12,7 @@
 - 它会保存什么数据
 - 它有哪些稳定能力和明确限制
 
-本文基于当前仓库实现整理，版本以 [`manifest.json`](/Users/dongshide/Documents/ui-qa-tool/manifest.json:1) 为准，当前为 `1.1.0`。
+本文基于当前仓库实现整理，版本以 [`manifest.json`](/Users/dongshide/Documents/ui-qa-tool/manifest.json:1) 为准，当前为 `1.1.5`。
 
 ## 2. 插件定位
 
@@ -59,6 +59,7 @@
 - `load-draft`：加载当前页面草稿
 - `save-draft`：保存当前页面草稿
 - `clear-draft`：清空当前页面草稿
+- `get-storage-usage`：查询本地存储用量与可用额度
 - `capture-visible-tab`：截取当前可见页面
 - `export-html`：把 HTML 内容下载为文件
 - `get-topbar-icon-urls`：返回顶部工具栏图标 URL
@@ -148,10 +149,10 @@ selected panel 的标题会根据能力判断区分为：
 2. 选中元素，或者拖拽一个区域
 3. 生成 pending record
 4. 自动截图
-5. 用户补充分类和备注
+5. 用户补充分类、问题说明和最多 3 张设计参考图
 6. 保存进当前页面 draft
 
-记录可以在抽屉中查看、编辑备注、删除、预览。
+记录可以在抽屉中查看、编辑备注、删除、预览；已保存的设计参考图会显示在对应记录卡片中。
 
 ### 5.5 草稿恢复
 
@@ -160,9 +161,9 @@ selected panel 的标题会根据能力判断区分为：
 页面刷新或重新进入后，可以恢复：
 
 - 当前页面的记录列表
-- 记录相关元数据
+- 记录相关元数据、截图和设计参考图
 
-这是通过 `service_worker.js + chrome.storage.local` 完成的。
+这是通过 `service_worker.js` 中的 IndexedDB 草稿库完成的；旧版 `chrome.storage.local` 草稿会在首次读取时迁移。
 
 ### 5.6 HTML 导出
 
@@ -175,9 +176,10 @@ selected panel 的标题会根据能力判断区分为：
 - 导出时间
 - 记录总数
 - 每条问题记录的截图
-- 每条问题记录的备注
+- 每条问题记录的只读“问题说明”和设计参考图
 - 每条问题记录的修改摘要（如存在）
 - 每条问题记录的“已完成”复选框
+- 每条问题独立的可编辑“问题备注”和反馈截图
 
 在导出的报告中勾选“已完成”后：
 
@@ -185,7 +187,7 @@ selected panel 的标题会根据能力判断区分为：
 - “已完成”按钮变为绿色实心状态
 - 截图与详情降低视觉权重
 
-完成态只存在于当前打开的 HTML 页面，不写回插件草稿，也不会在重新打开文件后保留。
+问题备注、完成状态和反馈截图不会写回插件草稿。它们会暂存在打开报告的当前浏览器中；用户点击“导出反馈版 HTML”后，反馈文字、完成状态和图片会固化进新文件，重新打开仍可继续查看和编辑。
 
 导出是直接在后台构造 HTML 字符串并通过下载能力落盘，不依赖构建流程或服务端。
 
@@ -216,6 +218,8 @@ selected panel 的标题会根据能力判断区分为：
 - `更多`
 - `记录抽屉`
 - `收起/展开`
+
+“更多”中的“问题反馈”和“小红书”仅在用户点击后打开外部页面，不会自动提交当前走查数据。
 
 快捷键包括：
 
@@ -272,7 +276,19 @@ selected panel 的标题会根据能力判断区分为：
   createdAt,
   updatedAt,
   version,
-  records: []
+  records: [
+    {
+      id,
+      type,
+      category,
+      note,
+      noteImages: [{ id, src }],
+      shot: { thumb, export, source },
+      capture,
+      createdAt,
+      updatedAt
+    }
+  ]
 }
 ```
 
@@ -280,6 +296,8 @@ selected panel 的标题会根据能力判断区分为：
 
 - `pageKey` 基本等于当前 URL 去掉 hash
 - `records` 是当前页面的问题记录列表
+- `noteImages` 是用户在问题说明中粘贴的设计参考图，每条记录最多 3 张
+- 图片在运行时以 data URL 表示，持久化时会拆成 Blob 写入 IndexedDB
 
 ### 8.2 AI 修改草稿 changeDraft
 
@@ -359,7 +377,7 @@ AI 修改列表的草稿大致结构如下：
 2. 请求后台 `capture-visible-tab`
 3. 根据元素或区域计算 focus rect / shot rect
 4. 生成缩略图或导出图
-5. 保存到 draft record
+5. 将记录元数据和图片拆分保存到 IndexedDB
 
 因此记录能力同时依赖：
 
@@ -369,26 +387,37 @@ AI 修改列表的草稿大致结构如下：
 
 ## 11. 存储方式
 
-插件当前至少使用两种本地存储：
+插件使用三组彼此独立的本地存储：
 
-### 11.1 `chrome.storage.local`
+### 11.1 扩展侧 IndexedDB
 
-用于保存页面记录草稿：
+`service_worker.js` 使用数据库 `pixel-audit-records` 保存正式记录：
 
-- key 前缀：`vqa:draft:`
+- `drafts`：页面草稿元数据
+- `records`：逐条记录数据
+- `images`：记录截图、设计参考图及兼容图片 Blob
 
-### 11.2 `window.localStorage`
+`chrome.storage.local` 中旧的 `vqa:draft:` 数据只用于兼容迁移；`storage` 权限同时用于存储用量查询。`unlimitedStorage` 用于降低多张截图触发默认本地额度限制的风险。
+
+### 11.2 页面侧 `window.localStorage`
 
 用于保存 AI 修改列表草稿：
 
 - key 前缀：`visual-qa:ai-change-draft:`
 
+导出的 HTML 也使用自身所在浏览器的 `localStorage` 暂存问题备注和完成状态，不与插件草稿互通。
+
+### 11.3 导出报告侧 IndexedDB
+
+导出的 HTML 使用数据库 `pixel-audit-report-images` 暂存问题备注中粘贴的反馈截图；下载反馈版 HTML 时，图片会直接嵌入文件。
+
 因此外部程序应该区分：
 
 - 正式记录草稿
 - AI 修改列表草稿
+- 导出报告反馈
 
-它们不是同一个存储系统。
+它们不是同一个存储系统，且所有数据都只在用户本地处理。
 
 ## 12. 明确边界与限制
 
